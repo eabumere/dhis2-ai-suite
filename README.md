@@ -43,3 +43,19 @@ You can learn more about the platform in the [DHIS2 Application Platform Documen
 You can learn more about the runtime in the [DHIS2 Application Runtime Documentation](https://runtime.dhis2.nu/).
 
 To learn React, check out the [React documentation](https://reactjs.org/).
+
+## LangChain/LangGraph Usage
+
+This application uses LangChain and LangGraph for AI agent functionality. **Important note for browser applications:**
+
+For pure browser applications (like DHIS2 apps), import LangGraph from `@langchain/langgraph/web` instead of `@langchain/langgraph`, which is meant for Node.js applications:
+
+```typescript
+// Correct for browser/DHIS2 apps
+import { createReactAgent } from "@langchain/langgraph/web";
+
+// Incorrect for browser apps (Node.js only)
+import { createReactAgent } from "@langchain/langgraph";
+```
+
+This ensures compatibility with browser environments and proper bundling.

@@ -1,0 +1,8 @@
+{
+    "ERROR": "ERROR",
+    "Loading...": "Loading...",
+    "Hello {{name}}": "Hello {{name}}",
+    "Welcome to DHIS2 with TypeScript!": "Welcome to DHIS2 with TypeScript!",
+    "Getting Date...": "Getting Date...",
+    "Get Today's Date": "Get Today's Date"
+}

@@ -2,7 +2,12 @@
     "ERROR": "ERROR",
     "Loading...": "Loading...",
     "Hello {{name}}": "Hello {{name}}",
-    "Welcome to DHIS2 with TypeScript!": "Welcome to DHIS2 with TypeScript!",
-    "Getting Date...": "Getting Date...",
-    "Get Today's Date": "Get Today's Date"
+    "DHIS2 Metadata Search": "DHIS2 Metadata Search",
+    "Enter metadata search query...": "Enter metadata search query...",
+    "Searching...": "Searching...",
+    "Search": "Search",
+    "Type": "Type",
+    "ID": "ID",
+    "Content": "Content",
+    "No results found for \"{{query}}\"": "No results found for \"{{query}}\""
 }

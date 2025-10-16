@@ -5,8 +5,8 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
-"POT-Creation-Date: 2025-10-16T09:26:18.828Z\n"
-"PO-Revision-Date: 2025-10-16T09:26:18.829Z\n"
+"POT-Creation-Date: 2025-10-16T10:55:22.448Z\n"
+"PO-Revision-Date: 2025-10-16T10:55:22.449Z\n"
 
 msgid "ERROR"
 msgstr "ERROR"
@@ -28,15 +28,6 @@ msgstr "Searching..."
 
 msgid "Search"
 msgstr "Search"
-
-msgid "Type"
-msgstr "Type"
-
-msgid "ID"
-msgstr "ID"
-
-msgid "Content"
-msgstr "Content"
 
 msgid "No results found for \"{{query}}\""
 msgstr "No results found for \"{{query}}\""

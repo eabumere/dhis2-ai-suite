@@ -1,11 +1,13 @@
 import { tool } from "@langchain/core/tools";
 
 // DHIS2 environment variables
-const dhis2BaseUrl = import.meta.env.DHIS2_BASE_URL;
+const dhis2BaseUrl = import.meta.env.DHIS2_API_BASE_URL;
 const username = import.meta.env.DHIS2_USERNAME;
 const password = import.meta.env.DHIS2_PASSWORD;
 
 const auth = `${username}:${password}`;
+
+console.log('Env', dhis2BaseUrl, auth)
 
 function authHeaders(): HeadersInit {
     return {
@@ -19,7 +21,6 @@ function authHeaders(): HeadersInit {
  */
 export const searchDhis2Metadata = tool(
   async ({ query, limit }: { query: string; limit: number }) => {
-    console.log('searchDhis2Metadata: Query:', query, 'Limit:', limit);
 
     try {
       const response = await fetch(`${dhis2BaseUrl}/metadata.json?filter=name:ilike:${encodeURIComponent(query)}`, {
@@ -43,7 +44,6 @@ export const searchDhis2Metadata = tool(
         )
         .slice(0, limit);
 
-      console.log('searchDhis2Metadata: Results:', results);
       return JSON.stringify(results);
     } catch (error) {
       console.error('Error searching DHIS2 metadata:', error);

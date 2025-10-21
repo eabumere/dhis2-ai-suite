@@ -21,7 +21,7 @@ interface MetadataResult {
 }
 
 const MyApp: FC = () => {
-    const { error, loading, data } = useDataQuery<QueryResults>(query)
+    const {error, loading, data} = useDataQuery<QueryResults>(query)
     const [searchQuery, setSearchQuery] = useState<string>('')
     const [searchResults, setSearchResults] = useState<MetadataResult | null>(null)
     const [isLoading, setIsLoading] = useState<boolean>(false)
@@ -99,7 +99,7 @@ const MyApp: FC = () => {
 
         try {
             const result = await metadataAgent.invoke({
-                messages: [{ role: 'user', content: `Search for metadata containing: ${searchQuery}` }]
+                messages: [{role: 'user', content: `Search for metadata containing: ${searchQuery}`}]
             })
             const lastMessage = result.messages[result.messages.length - 1]
 
@@ -121,7 +121,7 @@ const MyApp: FC = () => {
                                 setSearchResults(parsedResults)
                             } else {
                                 // If it's an array or other format, wrap it in a generic structure
-                                setSearchResults({ results: Array.isArray(parsedResults) ? parsedResults : [] })
+                                setSearchResults({results: Array.isArray(parsedResults) ? parsedResults : []})
                             }
                         } catch (jsonError) {
                             // If JSON parsing fails, display the raw content in a simple format
@@ -167,13 +167,13 @@ const MyApp: FC = () => {
 
         try {
             const result = await metadataAgent.invoke({
-                messages: [{ role: 'user', content: `Create data element: ${createQuery}` }]
+                messages: [{role: 'user', content: `Create data element: ${createQuery}`}]
             })
             const lastMessage = result.messages[result.messages.length - 1]
 
             if (lastMessage.content) {
+                const content = lastMessage.content as string
                 try {
-                    const content = lastMessage.content as string
                     const parsedResults = JSON.parse(content)
                     setCreateResults(parsedResults)
                 } catch (parseError) {
@@ -209,15 +209,15 @@ const MyApp: FC = () => {
 
     return (
         <div className={classes.container}>
-            <h1>{i18n.t('Hello {{name}}', { name: data?.me?.name })}</h1>
+            <h1>{i18n.t('Hello {{name}}', {name: data?.me?.name})}</h1>
             <h3>{i18n.t('DHIS2 Metadata Search')}</h3>
 
             {/* Creation Section */}
-            <div style={{ marginTop: '40px', maxWidth: '600px', width: '100%' }}>
-                <h3 style={{ color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px' }}>
+            <div style={{marginTop: '40px', maxWidth: '600px', width: '100%'}}>
+                <h3 style={{color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px'}}>
                     {i18n.t('Create Data Element')}
                 </h3>
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', marginTop: '15px' }}>
+                <div style={{display: 'flex', gap: '10px', marginBottom: '10px', marginTop: '15px'}}>
                     <input
                         type="text"
                         value={createQuery}
@@ -266,7 +266,7 @@ const MyApp: FC = () => {
                 )}
 
                 {createResults && (
-                    <div style={{ marginTop: '20px' }}>
+                    <div style={{marginTop: '20px'}}>
                         <h4 style={{
                             color: createResults.success ? '#4CAF50' : '#c62828',
                             borderBottom: '1px solid #e0e0e0',
@@ -275,7 +275,7 @@ const MyApp: FC = () => {
                             {createResults.success ? 'Data Element Created Successfully' : 'Creation Failed'}
                         </h4>
 
-                                {createResults.success ? (
+                        {createResults.success ? (
                             <div style={{
                                 backgroundColor: '#e8f5e8',
                                 border: '1px solid #4CAF50',
@@ -283,10 +283,18 @@ const MyApp: FC = () => {
                                 padding: '15px',
                                 marginTop: '10px'
                             }}>
-                                <div style={{ marginBottom: '15px' }}>
-                                    <strong>Data Element{createResults.count > 1 ? 's' : ''} Created ({createResults.count} total):</strong>
+                                <div style={{marginBottom: '15px'}}>
+                                    <strong>Data Element{createResults.count > 1 ? 's' : ''} Created
+                                        ({createResults.count} total):</strong>
                                     {createResults.dataElements?.map((element: any, index: number) => (
-                                        <div key={index} style={{ marginTop: '10px', fontFamily: 'monospace', fontSize: '14px', backgroundColor: '#f5f5f5', padding: '10px', borderRadius: '4px' }}>
+                                        <div key={index} style={{
+                                            marginTop: '10px',
+                                            fontFamily: 'monospace',
+                                            fontSize: '14px',
+                                            backgroundColor: '#f5f5f5',
+                                            padding: '10px',
+                                            borderRadius: '4px'
+                                        }}>
                                             <div><strong>Data Element {index + 1}:</strong></div>
                                             <div>ID: {element.id}</div>
                                             <div>Name: {element.name}</div>
@@ -307,11 +315,11 @@ const MyApp: FC = () => {
                                 padding: '15px',
                                 marginTop: '10px'
                             }}>
-                                <div style={{ marginBottom: '10px' }}>
+                                <div style={{marginBottom: '10px'}}>
                                     <strong>Error:</strong> {createResults.error}
                                 </div>
                                 {createResults.rawResponse && (
-                                    <div style={{ marginTop: '10px' }}>
+                                    <div style={{marginTop: '10px'}}>
                                         <strong>Raw Response:</strong>
                                         <div style={{
                                             fontSize: '12px',
@@ -335,87 +343,87 @@ const MyApp: FC = () => {
             </div>
 
             {/* Search Section */}
-            <div style={{ marginTop: '40px', maxWidth: '600px', width: '100%' }}>
-                <h3 style={{ color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px' }}>
+            <div style={{marginTop: '40px', maxWidth: '600px', width: '100%'}}>
+                <h3 style={{color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px'}}>
                     {i18n.t('Search Metadata')}
                 </h3>
 
-                <div style={{ marginTop: '20px', maxWidth: '600px', width: '100%' }}>
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyPress={handleKeyPress}
-                        placeholder={i18n.t('Enter metadata search query...')}
-                        disabled={isLoading}
-                        style={{
-                            flex: 1,
-                            padding: '10px',
-                            fontSize: '16px',
-                            border: '1px solid #ccc',
-                            borderRadius: '4px',
-                            outline: 'none'
-                        }}
-                    />
-                    <button
-                        onClick={handleSearch}
-                        disabled={isLoading}
-                        style={{
-                            padding: '10px 20px',
-                            fontSize: '16px',
-                            backgroundColor: '#2c6693',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: isLoading ? 'not-allowed' : 'pointer',
-                            whiteSpace: 'nowrap'
-                        }}
-                    >
-                        {isLoading ? i18n.t('Searching...') : i18n.t('Search')}
-                    </button>
-                </div>
-
-                {errorMessage && (
-                    <div style={{
-                        padding: '10px',
-                        backgroundColor: '#ffebee',
-                        color: '#c62828',
-                        borderRadius: '4px',
-                        border: '1px solid #ef5350',
-                        marginBottom: '10px'
-                    }}>
-                        {errorMessage}
+                <div style={{marginTop: '20px', maxWidth: '600px', width: '100%'}}>
+                    <div style={{display: 'flex', gap: '10px', marginBottom: '10px'}}>
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            placeholder={i18n.t('Enter metadata search query...')}
+                            disabled={isLoading}
+                            style={{
+                                flex: 1,
+                                padding: '10px',
+                                fontSize: '16px',
+                                border: '1px solid #ccc',
+                                borderRadius: '4px',
+                                outline: 'none'
+                            }}
+                        />
+                        <button
+                            onClick={handleSearch}
+                            disabled={isLoading}
+                            style={{
+                                padding: '10px 20px',
+                                fontSize: '16px',
+                                backgroundColor: '#2c6693',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: isLoading ? 'not-allowed' : 'pointer',
+                                whiteSpace: 'nowrap'
+                            }}
+                        >
+                            {isLoading ? i18n.t('Searching...') : i18n.t('Search')}
+                        </button>
                     </div>
-                )}
 
-                {searchResults && (
-                    <div style={{ marginTop: '20px' }}>
-                        {Object.entries(searchResults).map(([type, items]) => {
-                            if (!Array.isArray(items) || items.length === 0) return null;
+                    {errorMessage && (
+                        <div style={{
+                            padding: '10px',
+                            backgroundColor: '#ffebee',
+                            color: '#c62828',
+                            borderRadius: '4px',
+                            border: '1px solid #ef5350',
+                            marginBottom: '10px'
+                        }}>
+                            {errorMessage}
+                        </div>
+                    )}
 
-                            return (
-                                <div key={type} style={{ marginBottom: '30px' }}>
-                                    <h4 style={{
-                                        marginBottom: '10px',
-                                        color: '#2c6693',
-                                        textTransform: 'capitalize',
-                                        borderBottom: '2px solid #e0e0e0',
-                                        paddingBottom: '5px'
-                                    }}>
-                                        {type.replace(/([A-Z])/g, ' $1').trim()}
-                                    </h4>
-                                    <div style={{
-                                        border: '1px solid #ddd',
-                                        borderRadius: '4px',
-                                        overflow: 'hidden'
-                                    }}>
-                                        <table style={{
-                                            width: '100%',
-                                            borderCollapse: 'collapse'
+                    {searchResults && (
+                        <div style={{marginTop: '20px'}}>
+                            {Object.entries(searchResults).map(([type, items]) => {
+                                if (!Array.isArray(items) || items.length === 0) return null;
+
+                                return (
+                                    <div key={type} style={{marginBottom: '30px'}}>
+                                        <h4 style={{
+                                            marginBottom: '10px',
+                                            color: '#2c6693',
+                                            textTransform: 'capitalize',
+                                            borderBottom: '2px solid #e0e0e0',
+                                            paddingBottom: '5px'
                                         }}>
-                                            <thead>
-                                                <tr style={{ backgroundColor: '#f5f5f5' }}>
+                                            {type.replace(/([A-Z])/g, ' $1').trim()}
+                                        </h4>
+                                        <div style={{
+                                            border: '1px solid #ddd',
+                                            borderRadius: '4px',
+                                            overflow: 'hidden'
+                                        }}>
+                                            <table style={{
+                                                width: '100%',
+                                                borderCollapse: 'collapse'
+                                            }}>
+                                                <thead>
+                                                <tr style={{backgroundColor: '#f5f5f5'}}>
                                                     <th style={{
                                                         padding: '12px',
                                                         textAlign: 'left',
@@ -433,8 +441,8 @@ const MyApp: FC = () => {
                                                         Code
                                                     </th>
                                                 </tr>
-                                            </thead>
-                                            <tbody>
+                                                </thead>
+                                                <tbody>
                                                 {items.map((item, index) => (
                                                     <tr key={item.id || index} style={{
                                                         backgroundColor: index % 2 === 0 ? 'white' : '#f9f9f9'
@@ -446,7 +454,10 @@ const MyApp: FC = () => {
                                                         }}>
                                                             {item.rawContent ? (
                                                                 <div>
-                                                                    <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>
+                                                                    <div style={{
+                                                                        fontWeight: 'bold',
+                                                                        marginBottom: '5px'
+                                                                    }}>
                                                                         {item.name || 'Search Results'}
                                                                     </div>
                                                                     <div style={{
@@ -476,25 +487,26 @@ const MyApp: FC = () => {
                                                         </td>
                                                     </tr>
                                                 ))}
-                                            </tbody>
-                                        </table>
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
+                                );
+                            })}
+                        </div>
+                    )}
 
-                {searchResults && Object.keys(searchResults).length === 0 && !isLoading && !errorMessage && searchQuery && (
-                    <div style={{
-                        padding: '20px',
-                        textAlign: 'center',
-                        color: '#666',
-                        fontStyle: 'italic'
-                    }}>
-                        {i18n.t('No results found for "{{query}}"', { query: searchQuery })}
-                    </div>
-                )}
+                    {searchResults && Object.keys(searchResults).length === 0 && !isLoading && !errorMessage && searchQuery && (
+                        <div style={{
+                            padding: '20px',
+                            textAlign: 'center',
+                            color: '#666',
+                            fontStyle: 'italic'
+                        }}>
+                            {i18n.t('No results found for "{{query}}"', {query: searchQuery})}
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     )

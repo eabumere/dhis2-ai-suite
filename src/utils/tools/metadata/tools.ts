@@ -221,7 +221,6 @@ async function generateDataElementFromDescription(description: string, customId?
   }
 
   const dataElement: any = {
-    id: id,
     name: name,
     displayName: name,
     shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,

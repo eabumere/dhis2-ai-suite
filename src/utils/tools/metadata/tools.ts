@@ -187,39 +187,9 @@ export async function createDhis2Metadata({ metadataType, params }: { metadataTy
   return JSON.stringify({ response: data });
 }
 
-// Export all structured tools
-export const {
-    // Creation tools
-    createDhis2DataElement: structuredCreateDhis2DataElement,
-    createDhis2OrganisationUnit,
-    createDhis2Category,
-    createDhis2CategoryCombo,
-    createDhis2DataSet,
-    createDhis2Program,
-    createDhis2Indicator,
-    createDhis2ValidationRule,
-    createDhis2OptionSet,
-
-    // Search tools
-    searchDhis2DataElements,
-    searchDhis2OrganisationUnits,
-    searchDhis2Categories,
-    searchDhis2CategoryCombos,
-    searchDhis2DataSets,
-    searchDhis2Programs,
-    searchDhis2Indicators,
-
-    // Get by ID tools
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-} = Dhis2StructuredTools;
-
-// Re-export with original names for backward compatibility
+// Re-export structured tools for backward compatibility
 export {
-    structuredCreateDhis2DataElement as createDhis2DataElement,
+    createDhis2DataElement,
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
@@ -240,4 +210,4 @@ export {
     getDhis2CategoryById,
     getDhis2DataSetById,
     getDhis2ProgramById,
-};
+} from './structured-tools';

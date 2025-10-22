@@ -8,7 +8,8 @@ This module provides a comprehensive set of Langchain tools for creating, search
 - **Natural Language Processing**: Parse natural language descriptions to extract resource properties
 - **Dependency Management**: Automatic resolution of resource dependencies with search and creation
 - **ID Generation**: Automatic ID generation from DHIS2 API
-- **Batch Operations**: Support for creating multiple resources at once
+- **Unified Batch API**: Create multiple different resource types in a single API call for maximum efficiency
+- **Atomic Operations**: Transaction-like behavior with rollback capabilities
 - **Error Handling**: Comprehensive error handling and validation
 - **Backward Compatibility**: Legacy tools still available for existing code
 
@@ -95,7 +96,7 @@ const result = await createDhis2Program.call({
 ```typescript
 import { createDhis2Indicator } from './metadata';
 
-const result = await createDhis2Indicator.call({
+const indicatorResult = await createDhis2Indicator.call({
     description: "Create an indicator called Coverage Rate that calculates percentage"
 });
 ```
@@ -224,12 +225,12 @@ The legacy `createDhis2DataElement` tool is still available but deprecated. To m
 
 ```typescript
 // Old way
-const result = await createDhis2DataElement.call({
+const legacyResult = await createDhis2DataElement.call({
     description: "Create a data element called Test"
 });
 
 // New way (recommended)
-const result = await createDhis2DataElement.call({
+const newResult = await createDhis2DataElement.call({
     description: "Create a data element called Test"
 });
 ```
@@ -255,6 +256,136 @@ Make sure these environment variables are set:
 - `DHIS2_API_BASE_URL`: Your DHIS2 instance URL
 - `DHIS2_USERNAME`: DHIS2 username
 - `DHIS2_PASSWORD`: DHIS2 password
+
+## Unified Batch API
+
+The unified batch API allows you to create multiple different resource types in a single API call, dramatically reducing network overhead and improving performance.
+
+### Batch Creation Example
+
+```typescript
+import { batchCreateMetadata } from './metadata';
+
+// Create multiple different resource types in one API call
+const batchResult = await batchCreateMetadata([
+    {
+        type: 'dataElements',
+        data: {
+            name: 'Patient Age',
+            displayName: 'Patient Age',
+            valueType: 'NUMBER',
+            aggregationType: 'AVERAGE',
+            domainType: 'AGGREGATE'
+        },
+        schema: Dhis2Schemas.DataElement
+    },
+    {
+        type: 'organisationUnits',
+        data: {
+            name: 'Central Hospital',
+            displayName: 'Central Hospital',
+            level: 2,
+            path: '/2'
+        },
+        schema: Dhis2Schemas.OrganisationUnit
+    },
+    {
+        type: 'indicators',
+        data: {
+            name: 'Coverage Rate',
+            displayName: 'Coverage Rate',
+            numerator: '1',
+            denominator: '1',
+            annualized: false
+        },
+        dependencies: [
+            {
+                type: 'indicatorTypes',
+                name: 'default',
+                createIfNotFound: true,
+                createParams: {
+                    name: 'Default',
+                    displayName: 'Default',
+                    factor: 1,
+                    number: false
+                }
+            }
+        ],
+        schema: Dhis2Schemas.Indicator
+    }
+], {
+    importStrategy: 'CREATE_UPDATE',
+    atomic: true, // All operations succeed or all fail
+    dryRun: false
+});
+
+console.log('Batch result:', batchResult);
+// Output:
+// {
+//   success: true,
+//   total: 3,
+//   successful: 3,
+//   failed: 0,
+//   results: [...],
+//   apiResponse: {...}
+// }
+```
+
+### Batch Manager for Complex Operations
+
+For more complex scenarios, use the UnifiedMetadataManager directly:
+
+```typescript
+import { getUnifiedMetadataManager } from './metadata';
+
+const manager = getUnifiedMetadataManager();
+
+// Add operations to the batch
+await manager.addOperation('dataElements', 'CREATE', {
+    name: 'Systolic Blood Pressure',
+    valueType: 'NUMBER',
+    aggregationType: 'AVERAGE'
+}, {
+    schema: Dhis2Schemas.DataElement
+});
+
+await manager.addOperation('dataElements', 'CREATE', {
+    name: 'Diastolic Blood Pressure',
+    valueType: 'NUMBER',
+    aggregationType: 'AVERAGE'
+}, {
+    schema: Dhis2Schemas.DataElement
+});
+
+// Execute all operations in a single API call
+const result = await manager.executeBatch({
+    importStrategy: 'CREATE_UPDATE',
+    atomic: true
+});
+
+console.log(`Created ${result.successful} resources, ${result.failed} failed`);
+```
+
+### Atomic Operations with Rollback
+
+```typescript
+const result = await manager.executeBatch({
+    importStrategy: 'CREATE_UPDATE',
+    atomic: true // If any operation fails, all are rolled back
+});
+
+// If operations failed, rollback any that were created
+if (!result.success && result.failed > 0) {
+    await manager.rollback(result.results.filter(r => !r.success));
+}
+```
+
+### Performance Benefits
+
+- **Single API Call**: Instead of 3 separate calls for data elements, org units, and indicators
+- **Reduced Latency**: One network round-trip instead of multiple
+- **Better Throughput**: DHIS2 processes batch operations more efficiently
+- **Atomic Transactions**: All operations succeed together or fail together
 
 ## Examples
 

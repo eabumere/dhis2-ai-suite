@@ -89,61 +89,55 @@ export async function getDhis2MetadataById(metadataType: string, id: string): Pr
 }
 
 /**
- * Create DHIS2 metadata
+ * Create DHIS2 metadata using unified batch API
  */
 export async function createDhis2Metadata(
     metadataType: string,
     payload: Record<string, any> | Record<string, any>[]
 ): Promise<any> {
-    const body: any = {};
-    body[metadataType] = Array.isArray(payload) ? payload : [payload];
+    const { batchCreateMetadata } = await import('./batch-manager');
 
-    console.log('Creating DHIS2 metadata:', JSON.stringify(body, null, 2));
+    const items = Array.isArray(payload)
+        ? payload.map(data => ({ type: metadataType, data }))
+        : [{ type: metadataType, data: payload }];
 
-    const response = await fetch(`${dhis2BaseUrl}/metadata?importStrategy=CREATE_UPDATE`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify(body)
+    const result = await batchCreateMetadata(items, {
+        importStrategy: 'CREATE_UPDATE',
+        atomic: false // Allow partial success for backward compatibility
     });
 
-    if (!response.ok) {
-        const responseText = await response.text();
-        console.error('DHIS2 API Error:', response.status, responseText);
-        throw new Error(`HTTP error! status: ${response.status}, response: ${responseText}`);
+    if (!result.success) {
+        throw new Error(`Failed to create metadata: ${result.errors?.join(', ')}`);
     }
 
-    const data = await response.json();
-    console.log('DHIS2 metadata created:', data);
-    return data;
+    return result.apiResponse;
 }
 
 /**
- * Update DHIS2 metadata
+ * Update DHIS2 metadata using unified batch API
  */
 export async function updateDhis2Metadata(
     metadataType: string,
     payload: Record<string, any>[]
 ): Promise<any> {
-    const body: any = {};
-    body[metadataType] = payload;
+    const { batchUpdateMetadata } = await import('./batch-manager');
 
-    console.log('Updating DHIS2 metadata:', JSON.stringify(body, null, 2));
+    const items = payload.map(data => ({
+        type: metadataType,
+        id: data.id,
+        data
+    }));
 
-    const response = await fetch(`${dhis2BaseUrl}/metadata?importStrategy=CREATE_UPDATE`, {
-        method: "PUT",
-        headers: authHeaders(),
-        body: JSON.stringify(body)
+    const result = await batchUpdateMetadata(items, {
+        importStrategy: 'CREATE_UPDATE',
+        atomic: false // Allow partial success for backward compatibility
     });
 
-    if (!response.ok) {
-        const responseText = await response.text();
-        console.error('DHIS2 API Error:', response.status, responseText);
-        throw new Error(`HTTP error! status: ${response.status}, response: ${responseText}`);
+    if (!result.success) {
+        throw new Error(`Failed to update metadata: ${result.errors?.join(', ')}`);
     }
 
-    const data = await response.json();
-    console.log('DHIS2 metadata updated:', data);
-    return data;
+    return result.apiResponse;
 }
 
 /**

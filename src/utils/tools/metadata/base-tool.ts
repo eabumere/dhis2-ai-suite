@@ -3,13 +3,12 @@ import { z } from "zod";
 import {
     generateDhis2Id,
     searchDhis2Metadata,
-    createDhis2Metadata,
     validateResourceData,
     parseNaturalLanguageDescription,
     generateShortName,
     resolveDependencies,
-    batchProcessResources
 } from "./helpers";
+import { getUnifiedMetadataManager, batchCreateMetadata } from "./batch-manager";
 
 /**
  * Configuration for creating a DHIS2 resource tool
@@ -103,7 +102,7 @@ export function createDhis2ResourceTool<T extends z.ZodSchema>(
                         if (!validation.success) {
                             results.push({
                                 success: false,
-                                error: `Validation failed for "${desc}": ${validation.errors.join(', ')}`,
+                                error: `Validation failed for "${desc}": ${validation.errors?.join(', ') || 'Unknown validation error'}`,
                                 description: desc
                             });
                             continue;

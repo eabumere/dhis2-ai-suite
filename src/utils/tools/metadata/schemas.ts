@@ -38,7 +38,7 @@ export const DataElementSchema = z.object({
   ]),
   categoryCombo: z.object({ id: z.string() }).optional(),
   zeroIsSignificant: z.boolean().optional(),
-  url: z.string().url().optional(),
+  url: z.url().optional(),
   description: z.string().optional(),
 });
 

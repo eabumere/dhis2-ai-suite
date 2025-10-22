@@ -1,4 +1,6 @@
 import { tool } from "@langchain/core/tools";
+import { Dhis2StructuredTools } from "./structured-tools";
+import { generateDhis2Id, searchDhis2Metadata, createDhis2Metadata } from "./helpers";
 
 // DHIS2 environment variables
 const dhis2BaseUrl = import.meta.env.DHIS2_API_BASE_URL;
@@ -17,7 +19,8 @@ function authHeaders(): HeadersInit {
 }
 
 /**
- * Tool that searches DHIS2 metadata based on a query string
+ * Legacy tool that searches DHIS2 metadata based on a query string
+ * @deprecated Use the structured search tools instead
  */
 export const searchDhis2Metadata = tool(
   async ({ query, limit }: { query: string; limit: number }) => {
@@ -72,8 +75,8 @@ export const searchDhis2Metadata = tool(
 );
 
 /**
- * Tool that creates DHIS2 data elements from natural language descriptions
- * Supports both single and batch creation
+ * Legacy tool that creates DHIS2 data elements from natural language descriptions
+ * @deprecated Use Dhis2StructuredTools.createDhis2DataElement instead
  */
 export const createDhis2DataElement = tool(
   async ({ description, descriptions, customIds }: {
@@ -96,26 +99,25 @@ export const createDhis2DataElement = tool(
         throw new Error('Must provide either description or descriptions parameter');
       }
 
-      // Generate data elements for each description
-      const dataElementsPromises = descriptionsToProcess.map((desc, index) =>
-        generateDataElementFromDescription(desc, customIdsArray[index])
-      );
+      // Use the new structured tool for each description
+      const results = [];
+      for (let i = 0; i < descriptionsToProcess.length; i++) {
+        const desc = descriptionsToProcess[i];
+        const customId = customIdsArray[i];
 
-      const dataElements = await Promise.all(dataElementsPromises);
+        // Call the structured tool
+        const result = await Dhis2StructuredTools.createDhis2DataElement.call({
+          description: desc,
+          customId: customId
+        });
 
-      // Create metadata payload
-      const metadataPayload = {
-        dataElements: dataElements
-      };
-
-      // Use the existing createDhis2Metadata function
-      const result = await createDhis2Metadata({ metadataType: 'dataElements', params: dataElements });
+        results.push(JSON.parse(result));
+      }
 
       return JSON.stringify({
         success: true,
-        dataElements: dataElements,
-        count: dataElements.length,
-        apiResponse: JSON.parse(result)
+        count: results.length,
+        results: results
       });
 
     } catch (error) {
@@ -153,95 +155,10 @@ export const createDhis2DataElement = tool(
   }
 );
 
-// Helper function to generate data element JSON from natural language
-async function generateDataElementFromDescription(description: string, customId?: string): Promise<any> {
-  // In the real implementation, this function would be called by the LLM agent
-  // The agent would use the system prompt to generate the proper JSON structure
-  // For now, we'll retain the basic implementation as a fallback
-
-  // Generate ID if not provided
-  const id = customId || `de_${description.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')}`;
-
-  // Simple keyword-based parsing for demonstration
-  // The agent will eventually override this with proper LLM parsing
-  const descLower = description.toLowerCase();
-
-  let valueType = 'NUMBER';
-  let aggregationType = 'SUM';
-  let domainType = 'AGGREGATE';
-  let zeroIsSignificant = false;
-
-  // Parse value type
-  if (descLower.includes('text') || descLower.includes('string')) {
-    valueType = 'TEXT';
-    aggregationType = 'NONE';
-  } else if (descLower.includes('boolean') || descLower.includes('true') || descLower.includes('false')) {
-    valueType = 'BOOLEAN';
-    aggregationType = 'COUNT';
-  } else if (descLower.includes('integer') || descLower.includes('int')) {
-    valueType = 'INTEGER';
-  } else if (descLower.includes('positive')) {
-    valueType = 'POSITIVE_INT';
-  } else if (descLower.includes('date')) {
-    valueType = 'DATE';
-    aggregationType = 'COUNT';
-  } else if (descLower.includes('email')) {
-    valueType = 'EMAIL';
-    aggregationType = 'NONE';
-  } else if (descLower.includes('phone')) {
-    valueType = 'PHONE_NUMBER';
-    aggregationType = 'NONE';
-  }
-
-  // Parse aggregation type
-  if (descLower.includes('average') || descLower.includes('mean')) {
-    aggregationType = 'AVERAGE';
-  } else if (descLower.includes('count')) {
-    aggregationType = 'COUNT';
-  } else if (descLower.includes('min')) {
-    aggregationType = 'MIN';
-  } else if (descLower.includes('max')) {
-    aggregationType = 'MAX';
-  }
-
-  // Parse domain type
-  if (descLower.includes('tracker') || descLower.includes('event')) {
-    domainType = 'TRACKER';
-  }
-
-  // Extract meaningful name from description
-  const nameMatch = descLower.match(/(?:create|make).*?(?:data element|de).*?(?:called|named|for)\s+(.+?)(?:\s+that\s+|\s+with\s+|$)/i);
-  let name = description;
-  if (nameMatch && nameMatch[1]) {
-    name = nameMatch[1].trim();
-    // Capitalize first letter of each word
-    name = name.split(' ')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
-
-  const dataElement: any = {
-    name: name,
-    displayName: name,
-    shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
-    valueType: valueType,
-    domainType: domainType,
-    aggregationType: aggregationType,
-    categoryCombo: { id: 'bjDvmb4bfuf' },
-    zeroIsSignificant: zeroIsSignificant
-  };
-
-  // Add code if present in description
-  const codeMatch = descLower.match(/code[=:]\s*([^\s,]+)/i);
-  if (codeMatch && codeMatch[1]) {
-    dataElement.code = codeMatch[1].toUpperCase();
-  }
-
-  return dataElement;
-}
-
-// Note: This function is referenced in the tool but not defined in this file
-// It should be imported or moved here
+/**
+ * Legacy createDhis2Metadata function
+ * @deprecated Use the structured tools instead
+ */
 export async function createDhis2Metadata({ metadataType, params }: { metadataType: string; params: Record<string, any> }): Promise<string> {
   const body: any = {};
   if (metadataType === "metadata") {
@@ -269,3 +186,58 @@ export async function createDhis2Metadata({ metadataType, params }: { metadataTy
   console.log('createDhis2Metadata: Response:', data);
   return JSON.stringify({ response: data });
 }
+
+// Export all structured tools
+export const {
+    // Creation tools
+    createDhis2DataElement: structuredCreateDhis2DataElement,
+    createDhis2OrganisationUnit,
+    createDhis2Category,
+    createDhis2CategoryCombo,
+    createDhis2DataSet,
+    createDhis2Program,
+    createDhis2Indicator,
+    createDhis2ValidationRule,
+    createDhis2OptionSet,
+
+    // Search tools
+    searchDhis2DataElements,
+    searchDhis2OrganisationUnits,
+    searchDhis2Categories,
+    searchDhis2CategoryCombos,
+    searchDhis2DataSets,
+    searchDhis2Programs,
+    searchDhis2Indicators,
+
+    // Get by ID tools
+    getDhis2DataElementById,
+    getDhis2OrganisationUnitById,
+    getDhis2CategoryById,
+    getDhis2DataSetById,
+    getDhis2ProgramById,
+} = Dhis2StructuredTools;
+
+// Re-export with original names for backward compatibility
+export {
+    structuredCreateDhis2DataElement as createDhis2DataElement,
+    createDhis2OrganisationUnit,
+    createDhis2Category,
+    createDhis2CategoryCombo,
+    createDhis2DataSet,
+    createDhis2Program,
+    createDhis2Indicator,
+    createDhis2ValidationRule,
+    createDhis2OptionSet,
+    searchDhis2DataElements,
+    searchDhis2OrganisationUnits,
+    searchDhis2Categories,
+    searchDhis2CategoryCombos,
+    searchDhis2DataSets,
+    searchDhis2Programs,
+    searchDhis2Indicators,
+    getDhis2DataElementById,
+    getDhis2OrganisationUnitById,
+    getDhis2CategoryById,
+    getDhis2DataSetById,
+    getDhis2ProgramById,
+};

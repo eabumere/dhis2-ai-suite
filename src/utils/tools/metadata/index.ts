@@ -16,3 +16,6 @@ export { Dhis2StructuredTools } from './structured-tools';
 
 // Export unified metadata manager
 export { getUnifiedMetadataManager, batchCreateMetadata, batchUpdateMetadata } from './batch-manager';
+
+// Export test functions for development and testing
+export * from './test-batch';

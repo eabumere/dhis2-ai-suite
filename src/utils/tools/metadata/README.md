@@ -21,7 +21,8 @@ The module consists of several key components:
 - **Helpers** (`helpers.ts`): Utility functions for API calls, ID generation, and dependency resolution
 - **Base Tool** (`base-tool.ts`): Factory function for creating structured tools
 - **Structured Tools** (`structured-tools.ts`): Specific tool implementations for each resource type
-- **Legacy Tools** (`tools.ts`): Backward compatibility with existing tools
+- **Batch Manager** (`batch-manager.ts`): Unified API for batch operations across resource types
+- **Test Suite** (`test-batch.ts`): Comprehensive testing examples and utilities
 
 ## Available Tools
 
@@ -213,29 +214,24 @@ const results = await createDhis2DataElement.call({
 
 ## Best Practices
 
-1. **Use Structured Tools**: Prefer the new structured tools over legacy tools
-2. **Handle Dependencies**: Explicitly specify dependencies when needed
+1. **Use Structured Tools**: All tools are now structured with comprehensive validation and error handling
+2. **Handle Dependencies**: Explicitly specify dependencies when needed - the system will auto-resolve them
 3. **Validate Results**: Always check the success property in results
 4. **Error Handling**: Implement proper error handling for production use
-5. **Batch Size**: Keep batch operations to reasonable sizes (10-20 items)
+5. **Batch Operations**: Use the unified batch API for maximum efficiency when creating multiple resources
+6. **Atomic Transactions**: Use atomic=true for critical operations that must succeed or fail together
 
 ## Migration from Legacy Tools
 
-The legacy `createDhis2DataElement` tool is still available but deprecated. To migrate:
+**Note:** All legacy tools have been removed in favor of the comprehensive structured tools system. The current implementation provides:
 
-```typescript
-// Old way
-const legacyResult = await createDhis2DataElement.call({
-    description: "Create a data element called Test"
-});
+- Better validation and error handling
+- Automatic dependency management
+- Batch operations for maximum efficiency
+- Complete coverage of all DHIS2 resource types
+- Natural language processing for complex requests
 
-// New way (recommended)
-const newResult = await createDhis2DataElement.call({
-    description: "Create a data element called Test"
-});
-```
-
-The new tools provide better validation, error handling, and dependency management.
+If you were using legacy tools, simply update your imports to use the structured tools from this module.
 
 ## Supported Resource Types
 

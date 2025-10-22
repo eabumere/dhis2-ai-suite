@@ -31,22 +31,18 @@ import {
     // Batch operations
     batchCreateMetadata,
     getUnifiedMetadataManager,
-
-    // Legacy tools for backward compatibility
-    searchDhis2Metadata,
-    createDhis2Metadata,
 } from "./utils/tools/metadata";
 import { StateAnnotation } from "./utils/state";
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = new AzureChatOpenAI({
-    model: import.meta.env.DHIS2_OPENAI_MODEL,
+    model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
     temperature: 0,
     maxTokens: undefined,
-    azureOpenAIApiKey: import.meta.env.DHIS2_AZURE_KEY,
-    azureOpenAIEndpoint: import.meta.env.DHIS2_AZURE_ENDPOINT,
-    azureOpenAIApiDeploymentName: import.meta.env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-    azureOpenAIApiVersion: import.meta.env.DHIS2_AZURE_API_VERSION,
+    azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
+    azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
+    azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+    azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
 });
 
 // Create the agent with all DHIS2 metadata tools
@@ -82,9 +78,6 @@ export const metadataAgent = createReactAgent({
 
     // Batch operations
     batchCreateMetadata,
-
-    // Legacy tools for backward compatibility
-    searchDhis2Metadata,
   ],
   stateModifier: `
     You are an expert DHIS2 metadata management assistant with comprehensive capabilities for creating, searching, and managing all types of DHIS2 metadata resources.

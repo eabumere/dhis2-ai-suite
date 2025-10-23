@@ -109,6 +109,19 @@ export const createDhis2Category = createDhis2ResourceTool({
     description: "Create DHIS2 categories from natural language descriptions.",
     schema: Dhis2Schemas.Category,
     metadataType: "categories",
+    defaultDependencies: [
+        {
+            type: "categoryOptions",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default",
+                displayName: "Default",
+                shortName: "Default",
+                code: "DEFAULT"
+            }
+        }
+    ],
     parseDescription: (description: string) => {
         const { name, properties } = parseNaturalLanguageDescription(description);
 
@@ -126,6 +139,21 @@ export const createDhis2CategoryCombo = createDhis2ResourceTool({
     description: "Create DHIS2 category combinations from natural language descriptions.",
     schema: Dhis2Schemas.CategoryCombo,
     metadataType: "categoryCombos",
+    defaultDependencies: [
+        {
+            type: "categories",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default Category",
+                displayName: "Default Category",
+                shortName: "Default Cat",
+                dataDimension: true,
+                dataDimensionType: 'DISAGGREGATION',
+                categoryOptions: []
+            }
+        }
+    ],
     parseDescription: (description: string) => {
         const { name, properties } = parseNaturalLanguageDescription(description);
 

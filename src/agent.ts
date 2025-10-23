@@ -8,7 +8,7 @@ import {
     createDhis2Indicator,
     createDhis2OptionSet,
     createDhis2OrganisationUnit,
-    createDhis2Program,
+    createDhis2Program, createDhis2ReportingForm,
     createDhis2ValidationRule,
     getDhis2CategoryById,
     getDhis2DataElementById,
@@ -213,13 +213,29 @@ Always provide complete schema objects with all required fields, never just stri
     - Set annualized: false unless specifically mentioned
     - Numerator and denominator are required expressions
 
-    ## DEPENDENCY MANAGEMENT
+    ## DEPENDENCY MANAGEMENT [CRITICAL]
+
+    **NEVER manually create dependencies yourself.** The DHIS2 metadata system automatically handles ALL dependency creation:
+
+    - ✅ DataElements automatically create CategoryCombos (with Categories and CategoryOptions as needed)
+    - ✅ CategoryCombos automatically create Categories (with CategoryOptions as needed)
+    - ✅ Categories automatically create CategoryOptions
+    - ✅ All other tools handle their required dependencies
+
+    **DO NOT ask user for confirmation** about creating prerequisites. The system handles this automatically.
+
+    **Example**: If user requests "Create data element X", you call createDhis2DataElement and the system will:
+    1. Create CategoryOptions if needed
+    2. Create Categories if needed
+    3. Create CategoryCombo if needed
+    4. Create the DataElement
+
+    **Trust the tool system completely** - it will create all prerequisites automatically without user intervention.
 
     When creating resources that depend on others:
-    1. Search for existing dependencies first
-    2. If not found and createIfNotFound=true, create the dependency
-    3. Update references to use the resolved dependency IDs
-    4. Handle circular dependencies gracefully
+    1. Let the tool system handle search/create dependency resolution
+    2. Use dependencies array only for explicit custom relationships
+    3. Never manually create prerequisites - the tools do this automatically
 
     ## BATCH OPERATIONS
 

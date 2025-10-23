@@ -433,7 +433,7 @@ export function getContextReferenceExamples(): string[] {
     ];
 }
 // DHIS2 environment variables</content>
-<content>/**
+/**
  * Simulate conversation context for reference resolution
  * In a real implementation, this would be stored in session state
  */
@@ -719,10 +719,134 @@ export async function deleteDhis2Metadata(
 }
 
 /**
- * Resolve dependencies for a resource
- * Searches for existing resources or creates them if they don't exist
+ * Schema mapping for dependency validation
  */
-export async function resolveDependencies<T extends z.ZodSchema>(
+export const METADATA_TYPE_SCHEMAS: Record<string, z.ZodSchema> = {
+    'dataElements': Dhis2Schemas.DataElement,
+    'organisationUnits': Dhis2Schemas.OrganisationUnit,
+    'categories': Dhis2Schemas.Category,
+    'categoryCombos': Dhis2Schemas.CategoryCombo,
+    'categoryOptions': Dhis2Schemas.CategoryOption,
+    'categoryOptionCombos': Dhis2Schemas.CategoryOptionCombo,
+    'dataSets': Dhis2Schemas.DataSet,
+    'programs': Dhis2Schemas.Program,
+    'programStages': Dhis2Schemas.ProgramStage,
+    'indicators': Dhis2Schemas.Indicator,
+    'indicatorTypes': Dhis2Schemas.IndicatorType,
+    'validationRules': Dhis2Schemas.ValidationRule,
+    'optionSets': Dhis2Schemas.OptionSet,
+    'trackedEntityTypes': Dhis2Schemas.TrackedEntityType,
+    'trackedEntityAttributes': Dhis2Schemas.TrackedEntityAttribute,
+};
+
+/**
+ * Registry of default dependencies for each metadata type
+ * This enables recursive dependency resolution
+ */
+export const TOOL_DEFAULT_DEPENDENCIES: Record<string, Array<{
+    type: string;
+    name: string;
+    createIfNotFound?: boolean;
+    createParams?: Record<string, any>;
+}>> = {
+    'dataElements': [
+        {
+            type: "categoryCombos",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default",
+                displayName: "Default",
+                shortName: "Default",
+                dataDimensionType: "DISAGGREGATION",
+                categories: []
+            }
+        }
+    ],
+    'categories': [
+        {
+            type: "categoryOptions",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default",
+                displayName: "Default",
+                shortName: "Default",
+                code: "DEFAULT"
+            }
+        }
+    ],
+    'categoryCombos': [
+        {
+            type: "categories",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default Category",
+                displayName: "Default Category",
+                shortName: "Default Cat",
+                dataDimension: true,
+                dataDimensionType: 'DISAGGREGATION',
+                categoryOptions: []
+            }
+        }
+    ],
+    'dataSets': [
+        {
+            type: "categoryCombos",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default",
+                displayName: "Default",
+                shortName: "Default",
+                dataDimensionType: "DISAGGREGATION",
+                categories: []
+            }
+        }
+    ],
+    'indicators': [
+        {
+            type: "indicatorTypes",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default",
+                displayName: "Default",
+                factor: 1,
+                number: false
+            }
+        }
+    ],
+};
+
+/**
+ * Dependency creation order (from most fundamental to complex)
+ * This ensures dependencies are created in the correct sequence
+ */
+export const DEPENDENCY_ORDER = [
+    'indicatorTypes',
+    'categoryOptions',
+    'categories',
+    'categoryCombos',
+    'categoryOptionCombos',
+    'optionSets',
+    'dataElements',
+    'organisationUnits',
+    'trackedEntityTypes',
+    'trackedEntityAttributes',
+    'programStages',
+    'programs',
+    'indicators',
+    'validationRules'
+];
+
+/**
+ * Resolve dependencies for a resource
+ * Creates dependencies in sequential order to respect dependency chains
+ */
+export async function
+resolveDependencies<T extends z.ZodSchema>(
     schema: T,
     dependencies: Array<{
         type: string;
@@ -733,13 +857,32 @@ export async function resolveDependencies<T extends z.ZodSchema>(
 ): Promise<Record<string, { id: string; name: string }>> {
     const resolved: Record<string, { id: string; name: string }> = {};
 
-    for (const dep of dependencies) {
+    // Group dependencies by their type's creation order
+    const orderedDeps = dependencies.sort((a, b) => {
+        const orderA = DEPENDENCY_ORDER.indexOf(a.type);
+        const orderB = DEPENDENCY_ORDER.indexOf(b.type);
+        return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
+    });
+
+    for (const dep of orderedDeps) {
         // Search for existing resource
         const existing = await searchDhis2Metadata(dep.type, dep.name, 1);
 
         if (existing.length > 0) {
             resolved[dep.name] = { id: existing[0].id, name: existing[0].name };
         } else if (dep.createIfNotFound && dep.createParams) {
+            // CRITICAL STEP: Recursively resolve THIS DEPENDENCY'S nested dependencies first
+            // This ensures CategoryCombos resolve their Category dependencies,
+            // and Categories resolve their CategoryOption dependencies
+            const nestedDeps = TOOL_DEFAULT_DEPENDENCIES[dep.type] || [];
+            if (nestedDeps.length > 0) {
+                console.log(`🔄 Resolving nested dependencies for ${dep.type} '${dep.name}' - needs: ${nestedDeps.map(nd => nd.type).join(', ')}`);
+                await resolveDependencies(schema, nestedDeps.map(nd => ({
+                    ...nd,
+                    name: `${dep.name}-${nd.name}` // Make nested dep names unique
+                })));
+            }
+
             // Create the dependency if it doesn't exist
             const id = await generateDhis2Id();
             const newResource = {
@@ -747,13 +890,31 @@ export async function resolveDependencies<T extends z.ZodSchema>(
                 ...dep.createParams,
             };
 
-            // Validate against schema
-            const validated = schema.parse(newResource);
+            // Validate against the correct schema for this dependency type
+            const depSchema = METADATA_TYPE_SCHEMAS[dep.type];
+            let validation: { success: boolean; data?: any; errors?: string[] };
+
+            if (depSchema) {
+                // Use the specific schema for this dependency type
+                validation = validateResourceData(depSchema, newResource);
+                console.log(`✓ Validated ${dep.type} '${dep.name}' against schema`);
+            } else {
+                // Fallback to validating against the provided schema (less accurate but better than nothing)
+                validation = validateResourceData(schema, newResource);
+                console.log(`⚠ Fallback validated ${dep.type} '${dep.name}'`);
+            }
+
+            if (!validation.success) {
+                throw new Error(`❌ Failed to create dependency ${dep.name}: Validation failed - ${validation.errors?.join(', ') || 'Unknown validation error'}`);
+            }
 
             try {
-                await createDhis2Metadata(dep.type, validated);
+                // Use direct creation to avoid batch issues with sequential dependencies
+                await createDhis2MetadataDirect(dep.type, validation.data);
                 resolved[dep.name] = { id, name: dep.createParams.name };
+                console.log(`✅ Created ${dep.type} '${dep.name}'`);
             } catch (error) {
+                console.error(`❌ Failed to create dependency ${dep.name}:`, error);
                 throw new Error(`Failed to create dependency ${dep.name}: ${error.message}`);
             }
         } else {
@@ -1363,7 +1524,7 @@ export async function batchProcessResources<T extends z.ZodSchema>(
             if (!validation.success) {
                 results.push({
                     success: false,
-                    error: `Validation failed: ${validation.errors?.join(', ') || 'Unknown validation error'}`
+                    error: `Validation failed: ${(validation as any).errors?.join(', ') || 'Unknown validation error'}`
                 });
                 continue;
             }

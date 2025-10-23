@@ -1,8 +1,6 @@
-import { createDhis2ResourceTool, createDhis2SearchTool, createDhis2GetByIdTool } from './base-tool';
+import { createDhis2GetByIdTool, createDhis2ResourceTool, createDhis2SearchTool, createDhis2UpdateTool } from './base-tool';
 import { Dhis2Schemas } from './schemas';
-import { tool } from "@langchain/core/tools";
-import { z } from "zod";
-import { generateDhis2Id, searchDhis2Metadata, createDhis2Metadata, parseNaturalLanguageDescription } from './helpers';
+import { parseNaturalLanguageDescription } from './helpers';
 
 // DataElement Tool
 export const createDhis2DataElement = createDhis2ResourceTool({
@@ -43,7 +41,7 @@ export const createDhis2DataElement = createDhis2ResourceTool({
         } else if (descLower.includes('coordinate') || descLower.includes('location')) {
             properties.valueType = 'COORDINATE';
             properties.aggregationType = 'NONE';
-        } else if (descLower.includes('yes/no') || descLower.includes('true/false')) {
+        } else if (descLower.includes('yes/no') || descLower.includes('true/false') || descLower.includes('boolean')) {
             properties.valueType = 'BOOLEAN';
             properties.aggregationType = 'COUNT';
         } else if (descLower.includes('file') || descLower.includes('document')) {
@@ -296,6 +294,70 @@ export const getDhis2OrganisationUnitById = createDhis2GetByIdTool("organisation
 export const getDhis2CategoryById = createDhis2GetByIdTool("categories", "Category");
 export const getDhis2DataSetById = createDhis2GetByIdTool("dataSets", "Data Set");
 export const getDhis2ProgramById = createDhis2GetByIdTool("programs", "Program");
+
+// Update Tools
+export const updateDhis2DataElement = createDhis2UpdateTool({
+    name: "update_dhis2_data_element",
+    description: "Update DHIS2 data elements using schema-compliant properties",
+    schema: Dhis2Schemas.DataElement,
+    metadataType: "dataElements",
+});
+
+export const updateDhis2OrganisationUnit = createDhis2UpdateTool({
+    name: "update_dhis2_organisation_unit",
+    description: "Update DHIS2 organisation units using schema-compliant properties",
+    schema: Dhis2Schemas.OrganisationUnit,
+    metadataType: "organisationUnits",
+});
+
+export const updateDhis2Category = createDhis2UpdateTool({
+    name: "update_dhis2_category",
+    description: "Update DHIS2 categories using schema-compliant properties",
+    schema: Dhis2Schemas.Category,
+    metadataType: "categories",
+});
+
+export const updateDhis2CategoryCombo = createDhis2UpdateTool({
+    name: "update_dhis2_category_combo",
+    description: "Update DHIS2 category combinations using schema-compliant properties",
+    schema: Dhis2Schemas.CategoryCombo,
+    metadataType: "categoryCombos",
+});
+
+export const updateDhis2DataSet = createDhis2UpdateTool({
+    name: "update_dhis2_data_set",
+    description: "Update DHIS2 data sets using schema-compliant properties",
+    schema: Dhis2Schemas.DataSet,
+    metadataType: "dataSets",
+});
+
+export const updateDhis2Program = createDhis2UpdateTool({
+    name: "update_dhis2_program",
+    description: "Update DHIS2 programs using schema-compliant properties",
+    schema: Dhis2Schemas.Program,
+    metadataType: "programs",
+});
+
+export const updateDhis2Indicator = createDhis2UpdateTool({
+    name: "update_dhis2_indicator",
+    description: "Update DHIS2 indicators using schema-compliant properties",
+    schema: Dhis2Schemas.Indicator,
+    metadataType: "indicators",
+});
+
+export const updateDhis2ValidationRule = createDhis2UpdateTool({
+    name: "update_dhis2_validation_rule",
+    description: "Update DHIS2 validation rules using schema-compliant properties",
+    schema: Dhis2Schemas.ValidationRule,
+    metadataType: "validationRules",
+});
+
+export const updateDhis2OptionSet = createDhis2UpdateTool({
+    name: "update_dhis2_option_set",
+    description: "Update DHIS2 option sets using schema-compliant properties",
+    schema: Dhis2Schemas.OptionSet,
+    metadataType: "optionSets",
+});
 
 // Export all tools
 export const Dhis2StructuredTools = {

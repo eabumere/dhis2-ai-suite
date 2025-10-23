@@ -1,6 +1,510 @@
 import { z } from 'zod';
 import { Dhis2Schemas } from './schemas';
 
+/**
+ * LLM-powered extraction tools that convert natural language descriptions into structured DHIS2 metadata
+ */
+import { tool } from '@langchain/core/tools';
+
+/**
+ * Resolve conversational references to resource IDs
+ */
+export const resolveResourceReference = tool(
+  async ({ reference }: { reference: string }) => {
+    const resolved = resolveReference(reference);
+    if (resolved && resolved.id) {
+      return JSON.stringify({
+        success: true,
+        id: resolved.id,
+        name: resolved.name,
+        type: resolved.type,
+        reference: reference
+      });
+    } else {
+      return JSON.stringify({
+        success: false,
+        error: `Could not resolve reference: ${reference}`,
+        availableReferences: Object.keys(getContextInfo().availableReferences)
+      });
+    }
+  },
+  {
+    name: "resolve_resource_reference",
+    description: "Resolve conversational references like 'the last created data element' to actual resource IDs. Use this when users reference previously created resources.",
+    schema: z.object({
+      reference: z.string().describe("Conversational reference to resolve (e.g., 'the last created data element', 'that category I made')")
+    }),
+  }
+);
+
+/**
+ * Extract data element information from natural language
+ */
+export const extractDataElementFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    // This will be handled by the LLM through tool schemas and prompts
+    // The LLM will extract structured data directly
+    return description;
+  },
+  {
+    name: "extract_data_element",
+    description: "Extract structured data element information from natural language description. Returns complete DataElement schema with name, valueType, domainType, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the data element to extract")
+    }),
+  }
+);
+
+/**
+ * Extract organization unit information from natural language
+ */
+export const extractOrganisationUnitFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_organisation_unit",
+    description: "Extract structured organization unit information from natural language description. Returns OrganisationUnit schema with name, level, path, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the organization unit to extract")
+    }),
+  }
+);
+
+/**
+ * Extract category information from natural language
+ */
+export const extractCategoryFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_category",
+    description: "Extract structured category information from natural language description. Returns Category schema with name, dataDimension settings, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the category to extract")
+    }),
+  }
+);
+
+/**
+ * Extract category combo information from natural language
+ */
+export const extractCategoryComboFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_category_combo",
+    description: "Extract structured category combination information from natural language description. Returns CategoryCombo schema with name, dataDimensionType, categories, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the category combination to extract")
+    }),
+  }
+);
+
+/**
+ * Extract data set information from natural language
+ */
+export const extractDataSetFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_data_set",
+    description: "Extract structured data set information from natural language description. Returns DataSet schema with name, periodType, data elements, organisation units, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the data set to extract")
+    }),
+  }
+);
+
+/**
+ * Extract program information from natural language
+ */
+export const extractProgramFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_program",
+    description: "Extract structured program information from natural language description. Returns Program schema with name, programType, trackedEntityType, programStages, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the program to extract")
+    }),
+  }
+);
+
+/**
+ * Extract indicator information from natural language
+ */
+export const extractIndicatorFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_indicator",
+    description: "Extract structured indicator information from natural language description. Returns Indicator schema with name, numerator, denominator, annualized settings, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the indicator to extract")
+    }),
+  }
+);
+
+/**
+ * Extract validation rule information from natural language
+ */
+export const extractValidationRuleFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_validation_rule",
+    description: "Extract structured validation rule information from natural language description. Returns ValidationRule schema with name, importance, operator, expressions, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the validation rule to extract")
+    }),
+  }
+);
+
+/**
+ * Extract option set information from natural language
+ */
+export const extractOptionSetFromDescription = tool(
+  async ({ description }: { description: string }) => {
+    return description;
+  },
+  {
+    name: "extract_option_set",
+    description: "Extract structured option set information from natural language description. Returns OptionSet schema with name, valueType, options, etc.",
+    schema: z.object({
+      description: z.string().describe("Natural language description of the option set to extract")
+    }),
+  }
+);
+
+/**
+ * Parse compound natural language descriptions into individual resource descriptions
+ * Detects batch creation requests and splits them into separate descriptions
+ */
+export function parseBatchDescriptions(description: string, resourceType?: string): string[] {
+    const descLower = description.toLowerCase().trim();
+
+    // Common resource types and their keywords for pattern matching
+    const resourceKeywords = {
+        dataElements: ['data element', 'data elements', 'indicator variable', 'variable'],
+        organisationUnits: ['organisation unit', 'org unit', 'orgunit', 'facility', 'health facility'],
+        categories: ['category', 'categories', 'dimension'],
+        categoryCombos: ['category combination', 'category combo', 'dimension combo'],
+        dataSets: ['data set', 'dataset', 'data sets'],
+        programs: ['program', 'programs', 'tracker program', 'event program'],
+        indicators: ['indicator', 'indicators', 'kpi', 'key performance indicator'],
+        validationRules: ['validation rule', 'validation rules'],
+        optionSets: ['option set', 'optionset', 'option sets']
+    };
+
+    // Look for the target resource type in the keywords
+    const targetKeywords = resourceType ? resourceKeywords[resourceType] || [] : [];
+    const allKeywords = Object.values(resourceKeywords).flat();
+
+    // If no specific resource type, try to detect from description
+    let workingKeywords = targetKeywords.length > 0 ? targetKeywords : allKeywords;
+
+    // Look for enumeration patterns that indicate multiple resources
+    const enumerationPatterns = [
+        // Numbered lists: "1. data element X and 2. data element Y"
+        /(\d+\.)\s*(.+?)(?=(\d+\.)\s|$)/gi,
+
+        // Bulleted lists: "• data element X, • data element Y"
+        /(•|\*\s*|-\s*)(.+?)(?=(•|\*\s*|-\s*|$))/gi,
+
+        // Conjunction patterns: "data element X and data element Y"
+        /\s+(and|&|plus|with)\s+(.+?)(?=\s*as\s+a\s+(?:whole|complete|final)|$)/gi,
+
+        // Comma-separated: "data element X, data element Y"
+        /(?:create|make|add)\s*(.*?),\s*(.*?)(?=(?:\s+(?:and|&|plus|with)\s+|$))/gi,
+
+        // Direct multiple mentions with the same resource type
+        new RegExp(`(${workingKeywords.join('|')})\\s+(\\w+)[^,]*?(?=\\s+(?:and|with|plus|&|$))`, 'gi')
+    ];
+
+    let descriptions: string[] = [];
+
+    // Try enumeration patterns first
+    for (const pattern of enumerationPatterns) {
+        const matches = [...descLower.matchAll(pattern)];
+        if (matches.length > 1) {
+            // Found multiple resource mentions
+            descriptions = matches.map(match => {
+                const matchText = match[match.length - 1] || match[1];
+                // Clean up the match and reconstruct the description
+                return `${resourceType || 'resource'} ${matchText}`.trim();
+            });
+
+            if (descriptions.length > 1) {
+                // Validate that we actually found multiple distinct resources
+                const uniqueNames = new Set(descriptions.map(desc => extractResourceName(desc)));
+                if (uniqueNames.size > 1) {
+                    break; // Found valid batch descriptions
+                }
+            }
+            descriptions = []; // Reset if validation failed
+        }
+    }
+
+    // If no enumeration patterns found, check for multiple occurrences of resource types
+    if (descriptions.length === 0) {
+        const resourceMentions: Array<{type: string, start: number, end: number, text: string}> = [];
+
+        for (const keyword of workingKeywords) {
+            const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+            let match;
+            while ((match = regex.exec(descLower)) !== null) {
+                resourceMentions.push({
+                    type: keyword,
+                    start: match.index,
+                    end: match.index + keyword.length,
+                    text: description.slice(match.index, match.index + keyword.length)
+                });
+            }
+        }
+
+        // If we have multiple mentions of the same resource type, try to split
+        if (resourceMentions.length > 1) {
+            const groups = groupResourceMentions(resourceMentions, description);
+            if (groups.length > 1) {
+                descriptions = groups.map(group => group.trim());
+            }
+        }
+    }
+
+    // Fall back to single description if no batch detected
+    if (descriptions.length === 0 || descriptions.length === 1) {
+        return [description]; // Return original description as single item
+    }
+
+    // Clean and validate descriptions
+    return descriptions
+        .map(desc => desc.trim())
+        .filter(desc => desc.length > 0)
+        .filter((desc, index, arr) =>
+            arr.findIndex(d => extractResourceName(d) === extractResourceName(desc)) === index
+        ); // Remove duplicates based on resource name
+}
+
+/**
+ * Group resource mentions into coherent description segments
+ */
+function groupResourceMentions(
+    mentions: Array<{type: string, start: number, end: number, text: string}>,
+    originalDescription: string
+): string[] {
+    if (mentions.length === 0) return [originalDescription];
+
+    const groups: string[] = [];
+    let currentStart = 0;
+
+    // Sort mentions by position
+    mentions.sort((a, b) => a.start - b.start);
+
+    for (let i = 0; i < mentions.length; i++) {
+        const current = mentions[i];
+        const next = mentions[i + 1];
+
+        let endPos = next ? next.start : originalDescription.length;
+
+        // Look for sentence boundaries, conjunctions, or punctuation
+        let adjustedEndpos = endPos;
+        for (let j = current.end; j < endPos; j++) {
+            const char = originalDescription[j];
+            if (char === '.' || char === ',' || char === ';' ||
+                (j + 3 < originalDescription.length && originalDescription.substr(j, 3).toLowerCase() === 'and')) {
+                adjustedEndpos = j + (char === '.' || char === ',' || char === ';' ? 1 : 3);
+                break;
+            }
+        }
+
+        const segment = originalDescription.slice(currentStart, adjustedEndpos).trim();
+        if (segment.length > 10 && segment.includes(current.type)) { // Ensure it's meaningful
+            groups.push(segment);
+        }
+
+        currentStart = adjustedEndpos;
+    }
+
+    return groups.filter(group => group.length > 0);
+}
+
+/**
+ * Extract resource name from a description
+ */
+function extractResourceName(description: string): string {
+    const descLower = description.toLowerCase();
+
+    // Look for quoted names first
+    const quotedMatch = description.match(/["']([^"']+)["']/);
+    if (quotedMatch) return quotedMatch[1];
+
+    // Look for common name patterns
+    const namePatterns = [
+        /\b(?:called|named|for)\s+["']?([^"'\s,.;!?]+)["']?/i,
+        /\w+\s+\w+/i // First two words as fallback
+    ];
+
+    for (const pattern of namePatterns) {
+        const match = description.match(pattern);
+        if (match && match[1] && !['create', 'make', 'add', 'build', 'generate'].includes(match[1].toLowerCase())) {
+            return match[1].trim();
+        }
+    }
+
+    return description.trim();
+}
+
+/**
+ * Reference Resolution for Conversational Context
+ * Helps resolve references like "the last created data element"
+ */
+export interface ContextReference {
+    type: 'last' | 'previous' | 'recent' | 'mentioned';
+    resourceType: string;
+    operation: 'created' | 'updated' | 'accessed';
+    pattern: RegExp;
+}
+
+/**
+ * Common conversational reference patterns
+ */
+export const REFERENCE_PATTERNS: ContextReference[] = [
+    {
+        type: 'last',
+        resourceType: 'dataElements',
+        operation: 'created',
+        pattern: /(?:the\s+)?last\s+(?:created\s+)?data\s+element/i
+    },
+    {
+        type: 'last',
+        resourceType: 'organisationUnits',
+        operation: 'created',
+        pattern: /(?:the\s+)?last\s+(?:created\s+)?(?:org(?:anisation)?\s+unit|facility)/i
+    },
+    {
+        type: 'last',
+        resourceType: 'categories',
+        operation: 'created',
+        pattern: /(?:the\s+)?last\s+(?:created\s+)?categor/i
+    },
+    {
+        type: 'previous',
+        resourceType: '',
+        operation: 'created',
+        pattern: /(?:the\s+)?previous\s+(?:one|resource|item)/i
+    },
+    {
+        type: 'mentioned',
+        resourceType: '',
+        operation: 'accessed',
+        pattern: /(?:that|the)\s+(?:\w+\s+)?i\s+(?:mentioned|talked\s+about)/i
+    }
+];
+
+/**
+ * Parse context references from natural language
+ */
+export function parseContextReference(text: string): ContextReference | null {
+    for (const ref of REFERENCE_PATTERNS) {
+        if (ref.pattern.test(text)) {
+            return ref;
+        }
+    }
+    return null;
+}
+
+/**
+ * Generate example context references for the LLM
+ */
+export function getContextReferenceExamples(): string[] {
+    return [
+        'the last created data element',
+        'that category I just made',
+        'the previous organization unit',
+        'the data element we mentioned earlier',
+        'change the name of the last created resource'
+    ];
+}
+// DHIS2 environment variables</content>
+<content>/**
+ * Simulate conversation context for reference resolution
+ * In a real implementation, this would be stored in session state
+ */
+let conversationContext = {
+  createdResources: [] as Array<{ id: string; type: string; name: string; operation: string; timestamp: number }>,
+  lastByType: {} as Record<string, { id: string; name: string }>,
+  references: {} as Record<string, { id: string; name: string }>
+};
+
+/**
+ * Add a resource to the conversation context
+ */
+export function addResourceToContext(id: string, type: string, name: string, operation: 'created' | 'updated' = 'created') {
+  const resource = { id, type, name, operation, timestamp: Date.now() };
+  conversationContext.createdResources.unshift(resource); // Most recent first
+  conversationContext.lastByType[type] = { id, name };
+}
+
+/**
+ * Resolve a conversational reference to a resource ID
+ */
+export function resolveReference(reference: string): { id?: string; name?: string; type?: string } | null {
+  const ref = parseContextReference(reference);
+  if (!ref) return null;
+
+  // Handle different reference types
+  switch (ref.type) {
+    case 'last':
+      return conversationContext.lastByType[ref.resourceType];
+    case 'previous':
+      if (reference.toLowerCase().includes('one') || reference.toLowerCase().includes('resource')) {
+        // Find the most recently accessed resource
+        return conversationContext.createdResources[0];
+      }
+      // Type-specific previous
+      const typeResources = conversationContext.createdResources.filter(r => r.type === ref.resourceType);
+      return typeResources.length >= 2 ? typeResources[1] : null;
+    case 'mentioned':
+      // Return the most recently accessed resource
+      return conversationContext.createdResources[0];
+    default:
+      return null;
+  }
+}
+
+/**
+ * Get context information for the LLM
+ */
+export function getContextInfo(): {
+  lastCreatedResources: Array<{ type: string; name: string }>;
+  referenceExamples: string[];
+  availableReferences: Record<string, string>;
+} {
+  const lastCreatedResources = Object.entries(conversationContext.lastByType).map(([type, resource]) => ({
+    type,
+    name: resource.name
+  }));
+
+  const availableReferences = Object.entries(conversationContext.lastByType).reduce((acc, [type, resource]) => {
+    acc[`last ${type.slice(0, -1)}`] = resource.name; // Remove 's' from plural
+    return acc;
+  }, {} as Record<string, string>);
+
+  return {
+    lastCreatedResources,
+    referenceExamples: getContextReferenceExamples(),
+    availableReferences
+  };
+}
+// DHIS2 environment variables
+
 // DHIS2 environment variables
 const dhis2BaseUrl = import.meta.env.DHIS2_API_BASE_URL;
 const username = import.meta.env.DHIS2_USERNAME;

@@ -173,16 +173,26 @@ const MyApp: FC = () => {
 
             if (lastMessage.content) {
                 const content = lastMessage.content as string
-                try {
-                    const parsedResults = JSON.parse(content)
-                    setCreateResults(parsedResults)
-                } catch (parseError) {
-                    console.error('Error parsing creation results:', parseError)
+
+                // Check if response is an error message (starts with "There was an error")
+                if (content.trim().startsWith('There was an error')) {
                     setCreateResults({
                         success: false,
-                        error: 'Error parsing creation results',
+                        error: content,
                         rawResponse: content
                     })
+                } else {
+                    try {
+                        const parsedResults = JSON.parse(content)
+                        setCreateResults(parsedResults)
+                    } catch (parseError) {
+                        console.error('Error parsing creation results:', parseError)
+                        setCreateResults({
+                            success: false,
+                            error: 'Error parsing creation results: Response is not valid JSON',
+                            rawResponse: content
+                        })
+                    }
                 }
             }
         } catch (error) {
@@ -275,7 +285,7 @@ const MyApp: FC = () => {
                             {createResults.success ? 'Data Element Created Successfully' : 'Creation Failed'}
                         </h4>
 
-                        {createResults.success ? (
+                        {createResults.success && createResults.dataElements && createResults.dataElements.length > 0 ? (
                             <div style={{
                                 backgroundColor: '#e8f5e8',
                                 border: '1px solid #4CAF50',
@@ -305,6 +315,22 @@ const MyApp: FC = () => {
                                             <div>Category Combo: {element.categoryCombo?.id}</div>
                                         </div>
                                     ))}
+                                </div>
+                            </div>
+                        ) : createResults.success ? (
+                            <div style={{
+                                backgroundColor: '#e8f5e8',
+                                border: '1px solid #4CAF50',
+                                borderRadius: '4px',
+                                padding: '15px',
+                                marginTop: '10px'
+                            }}>
+                                <div>
+                                    <strong>Data Element Creation Reported as Successful</strong>
+                                    <div style={{marginTop: '10px'}}>
+                                        <p>No data elements details returned in the response. The creation may have succeeded, but response format might be incomplete.</p>
+                                        {createResults.count && <p>Total elements reported: {createResults.count}</p>}
+                                    </div>
                                 </div>
                             </div>
                         ) : (

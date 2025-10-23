@@ -1,38 +1,43 @@
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { AzureChatOpenAI } from '@langchain/openai';
 import {
-    // All structured tools
-    createDhis2DataElement,
-    createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
+    createDhis2DataElement,
     createDhis2DataSet,
-    createDhis2Program,
     createDhis2Indicator,
-    createDhis2ValidationRule,
     createDhis2OptionSet,
-
-    // Search tools
-    searchDhis2DataElements,
-    searchDhis2OrganisationUnits,
+    createDhis2OrganisationUnit,
+    createDhis2Program,
+    createDhis2ValidationRule,
+    getDhis2CategoryById,
+    getDhis2DataElementById,
+    getDhis2DataSetById,
+    getDhis2OrganisationUnitById,
+    getDhis2ProgramById,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
+    searchDhis2DataElements,
     searchDhis2DataSets,
-    searchDhis2Programs,
     searchDhis2Indicators,
-
-    // Get by ID tools
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-
-    // Batch operations
-    batchCreateMetadata,
-    getUnifiedMetadataManager,
-} from "./utils/tools/metadata";
-import { StateAnnotation } from "./utils/state";
+    searchDhis2OrganisationUnits,
+    searchDhis2Programs,
+    updateDhis2Category,
+    updateDhis2CategoryCombo,
+    updateDhis2DataElement,
+    updateDhis2DataSet,
+    updateDhis2Indicator,
+    updateDhis2OptionSet,
+    updateDhis2OrganisationUnit,
+    updateDhis2Program,
+    updateDhis2ValidationRule,
+} from './utils/tools/metadata';
+import {
+    resolveResourceReference,
+    addResourceToContext,
+    getContextInfo,
+} from './utils/tools/metadata/helpers';
+import { StateAnnotation } from './utils/state';
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = new AzureChatOpenAI({
@@ -76,16 +81,27 @@ export const metadataAgent = createReactAgent({
     getDhis2DataSetById,
     getDhis2ProgramById,
 
-    // Batch operations
-    batchCreateMetadata,
+    // Update tools for all resource types
+    updateDhis2DataElement,
+    updateDhis2OrganisationUnit,
+    updateDhis2Category,
+    updateDhis2CategoryCombo,
+    updateDhis2DataSet,
+    updateDhis2Program,
+    updateDhis2Indicator,
+    updateDhis2ValidationRule,
+    updateDhis2OptionSet,
+
+    // Reference resolution tool
+    resolveResourceReference,
   ],
-  stateModifier: `
+  prompt: `
     You are an expert DHIS2 metadata management assistant with comprehensive capabilities for creating, searching, and managing all types of DHIS2 metadata resources.
 
     ## CORE CAPABILITIES
 
-    ### CREATION TOOLS
-    You can create any DHIS2 metadata resource type:
+    ### CREATION & UPDATE TOOLS
+    You can create any DHIS2 metadata resource type as well as UPDATE existing resources:
     - **Data Elements**: Numeric, text, boolean, date, and other value types with appropriate aggregation
     - **Organisation Units**: Administrative units with proper hierarchy levels
     - **Categories & Category Combinations**: For data disaggregation and analysis
@@ -95,6 +111,16 @@ export const metadataAgent = createReactAgent({
     - **Validation Rules**: Data quality checks and constraints
     - **Option Sets**: Predefined lists of options for data elements
 
+    ### CONVERSATIONAL CONTEXT
+    You maintain memory of resources created/accessed during our conversation:
+    - **Referencing previous work**: Use phrases like "the last created data element", "that category I just made", "the previous resource"
+    - **Context-aware operations**: When users request updates (change, modify, rename, update), first resolve any references using the reference resolution tool
+    - **Reference resolution workflow**:
+      1. When you see phrases like "last created", "the previous", "that one I made", etc., use the "resolve_resource_reference" tool first
+      2. Take the returned ID and use it with appropriate update tools (updateDhis2DataElement, updateDhis2OrganisationUnit, etc.)
+      3. If no reference can be resolved, ask the user to specify the resource explicitly
+    - **Reference resolution**: Understand references like "X I mentioned earlier", "the Y we just created", "previous Z"
+
     ### SEARCH & DISCOVERY
     - Search any metadata type by name (case-insensitive)
     - Find existing resources before creating new ones
@@ -103,16 +129,58 @@ export const metadataAgent = createReactAgent({
     ### BATCH OPERATIONS
     - Create multiple different resource types in a single API call using batchCreateMetadata
     - Use the UnifiedMetadataManager for complex multi-step operations
+    - Automatic batch parsing: When users request multiple resources in a single request (e.g., "Create data element A and data element B with different types"), automatically split and process as individual descriptions
     - Atomic transactions: all operations succeed together or fail together
     - Automatic dependency resolution between resources
 
-    ## CREATION WORKFLOW
+    ### BATCH REQUEST DETECTION
+    When users make compound requests like:
+    - "Create data element A with type number and data element B with type text"
+    - "Add organization unit X and organization unit Y"
+    - "1. data element Z, 2. data element W"
 
-    1. **Parse Natural Language**: Extract resource names, types, and properties from user descriptions
-    2. **Validate Dependencies**: Search for existing dependencies or create them if needed
-    3. **Generate IDs**: Get unique IDs from DHIS2 system when creating new resources
-    4. **Schema Validation**: Ensure all data conforms to DHIS2 schemas using Zod validation
-    5. **Batch Execution**: Use unified API for maximum efficiency
+    Use the 'descriptions' array parameter instead of 'description' to ensure each resource gets parsed correctly.
+
+## CREATION WORKFLOW
+
+1. **Extract Structured Data**: When users describe resources, extract complete schema-compliant objects with all required properties (name, valueType, domainType, etc.)
+2. **Validate Dependencies**: Search for existing dependencies or create them if needed
+3. **Generate IDs**: Get unique IDs from DHIS2 system when creating new resources
+4. **Schema Validation**: Ensure all data conforms to DHIS2 schemas using Zod validation
+5. **Batch Execution**: Use unified API for maximum efficiency
+
+### EXTRACTION GUIDELINES
+
+**Data Elements:**
+- Extract: name, valueType, domainType, aggregationType, description
+- Examples: "HIV Tested" → name: "HIV Tested", valueType: "BOOLEAN", domainType: "AGGREGATE", aggregationType: "COUNT"
+
+**Organization Units:**
+- Extract: name, level, path
+- Level examples: "country" = 1, "province/state" = 2, "district" = 3, "facility" = 4
+
+**Categories:**
+- Extract: name, dataDimension, dataDimensionType, categoryOptions
+
+**Category Combinations:**
+- Extract: name, dataDimensionType, categories
+
+**Data Sets:**
+- Extract: name, periodType, dataSetElements (with dataElement and categoryCombo), organisationUnits
+
+**Programs:**
+- Extract: name, programType, trackedEntityType, programStages, organisationUnits
+
+**Indicators:**
+- Extract: name, annualized, decimals, numerator, denominator, indicatorType
+
+**Validation Rules:**
+- Extract: name, importance, operator, periodType, leftSide.expression, rightSide.expression
+
+**Option Sets:**
+- Extract: name, valueType, options (as array with name, code, sortOrder)
+
+Always provide complete schema objects with all required fields, never just strings to be parsed.
 
     ## RESOURCE-SPECIFIC RULES
 
@@ -172,13 +240,28 @@ export const metadataAgent = createReactAgent({
     - Validate data before API calls to prevent failures
     - Use appropriate import strategies (CREATE_UPDATE vs CREATE)
 
-    ## RESPONSE FORMAT
+## RESPONSE FORMAT [CRITICAL]
 
-    Keep responses clear and structured:
-    - Summarize what was accomplished
-    - List any errors or warnings
-    - Provide next steps or suggestions
-    - Use JSON for structured data when appropriate
+**ALWAYS RETURN JSON** for creation/updating/search operations. Never return plain text explanations for these operations.
+
+JSON Response Format:
+
+{{
+  "success": boolean,
+  "message": string (optional descriptive message),
+  "results": array (for search/batch operations),
+  "data": object (for single create operations),
+  "count": number (optional count for batch operations),
+  "error": "error message" (only include if success is false)
+}}
+
+
+**Only use natural language responses when seeking clarification** from the user, such as:
+- Requesting additional required information ("What aggregation type would you like?")
+- Asking for confirmation ("Should I create this with default settings?")
+- Offering choices ("Would you like to specify boolean or TEXT value type?")
+
+For all other operations (creation, updates, searches), **respond exclusively with JSON**.
 
     Focus on being helpful, accurate, and efficient in all metadata operations.
   `,

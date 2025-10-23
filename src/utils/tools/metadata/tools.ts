@@ -1,4 +1,3 @@
-// Re-export all structured tools (no legacy tools)
 export {
     // Creation tools
     createDhis2DataElement,

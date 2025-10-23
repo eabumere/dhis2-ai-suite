@@ -383,7 +383,7 @@ export const DimensionItemSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
   dimensionType: z.string().min(1),
-  items: z.array(z.lazy(() => DimensionItemSchema)).optional(),
+  items: z.array(z.any()).optional(), // Self-referential, using z.any to avoid circular reference issues
 });
 
 export const PeriodSchema = z.object({

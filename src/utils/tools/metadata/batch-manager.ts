@@ -119,7 +119,7 @@ export class UnifiedMetadataManager {
         if (options.schema) {
             const validation = validateResourceData(options.schema, item.data);
             if (!validation.success) {
-                throw new Error(`Validation failed for ${type}: ${validation.errors?.join(', ') || 'Unknown validation error'}`);
+                throw new Error(`Validation failed for ${type}: ${validation.errors.join(', ')}`);
             }
             item.data = validation.data;
         }
@@ -178,23 +178,24 @@ export class UnifiedMetadataManager {
         dependency: { type: string; name: string },
         id: string
     ): void {
+        console.log('Update dependencies', data, dependency, id)
         // Handle common dependency patterns
         if (data.categoryCombo && dependency.type === 'categoryCombos') {
             data.categoryCombo = { id };
-        } else if (data.categoryCombo?.categories && dependency.type === 'categories') {
+        } else if (data.categoryCombo?.categories && Array.isArray(data.categoryCombo.categories) && dependency.type === 'categories') {
             // Update category references in category combo
             data.categoryCombo.categories = data.categoryCombo.categories.map((cat: any) =>
                 cat.name === dependency.name ? { id } : cat
             );
-        } else if (data.organisationUnits && dependency.type === 'organisationUnits') {
+        } else if (data.organisationUnits && Array.isArray(data.organisationUnits) && dependency.type === 'organisationUnits') {
             data.organisationUnits = data.organisationUnits.map((ou: any) =>
                 ou.name === dependency.name ? { id } : ou
             );
-        } else if (data.dataElements && dependency.type === 'dataElements') {
+        } else if (data.dataElements && Array.isArray(data.dataElements) && dependency.type === 'dataElements') {
             data.dataElements = data.dataElements.map((de: any) =>
                 de.name === dependency.name ? { id } : de
             );
-        } else if (data.programStages && dependency.type === 'programStages') {
+        } else if (data.programStages && Array.isArray(data.programStages) && dependency.type === 'programStages') {
             data.programStages = data.programStages.map((ps: any) =>
                 ps.name === dependency.name ? { id } : ps
             );

@@ -213,29 +213,31 @@ Always provide complete schema objects with all required fields, never just stri
     - Set annualized: false unless specifically mentioned
     - Numerator and denominator are required expressions
 
-    ## DEPENDENCY MANAGEMENT [CRITICAL]
+    ## DEPENDENCY MANAGEMENT [CRITICAL - VIOLATION PREVENTION]
 
-    **NEVER manually create dependencies yourself.** The DHIS2 metadata system automatically handles ALL dependency creation:
+    **BREAKING THE WORKFLOW**: If you ask the user for confirmation about creating prerequisites, you BREAK the entire workflow and return invalid JSON.
+
+    **AUTOMATED SYSTEM ONLY**: The DHIS2 metadata system automatically handles ALL dependency creation:
 
     - ✅ DataElements automatically create CategoryCombos (with Categories and CategoryOptions as needed)
     - ✅ CategoryCombos automatically create Categories (with CategoryOptions as needed)
     - ✅ Categories automatically create CategoryOptions
     - ✅ All other tools handle their required dependencies
 
-    **DO NOT ask user for confirmation** about creating prerequisites. The system handles this automatically.
+    **ZERO MANUAL WORKFLOW**: NEVER ask, confirm, or mention creating prerequisites. Just call the appropriate tool directly.
 
-    **Example**: If user requests "Create data element X", you call createDhis2DataElement and the system will:
-    1. Create CategoryOptions if needed
-    2. Create Categories if needed
-    3. Create CategoryCombo if needed
-    4. Create the DataElement
+    **CORRECT EXECUTION**: For "Create data element X":
+    - Call createDhis2DataElement ONCE
+    - Return valid JSON response
+    - Dependencies are handled automatically by the tool system
 
-    **Trust the tool system completely** - it will create all prerequisites automatically without user intervention.
+    **INCORRECT EXECUTION** (DO NOT DO THIS):
+    - Ask for confirmation
+    - Manually create dependencies
+    - Return plain text explanation
+    - Break JSON response format
 
-    When creating resources that depend on others:
-    1. Let the tool system handle search/create dependency resolution
-    2. Use dependencies array only for explicit custom relationships
-    3. Never manually create prerequisites - the tools do this automatically
+    **ALWAYS TRUST THE TOOL SYSTEM** - it will do everything automatically without your intervention.
 
     ## BATCH OPERATIONS
 

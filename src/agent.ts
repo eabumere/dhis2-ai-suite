@@ -92,6 +92,9 @@ export const metadataAgent = createReactAgent({
     updateDhis2ValidationRule,
     updateDhis2OptionSet,
 
+    // Complex form creation tool
+    createDhis2ReportingForm,
+
     // Reference resolution tool
     resolveResourceReference,
   ],

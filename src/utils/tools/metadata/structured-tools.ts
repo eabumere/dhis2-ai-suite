@@ -1,6 +1,15 @@
 import { createDhis2GetByIdTool, createDhis2ResourceTool, createDhis2SearchTool, createDhis2UpdateTool } from './base-tool';
 import { Dhis2Schemas } from './schemas';
 import { parseNaturalLanguageDescription } from './helpers';
+import { tool } from '@langchain/core/tools';
+import { z } from 'zod';
+import {
+    addResourceToContext,
+    generateDhis2Id,
+    searchDhis2Metadata,
+} from './helpers';
+import { UnifiedMetadataManager } from './batch-manager';
+
 
 // DataElement Tool
 export const createDhis2DataElement = createDhis2ResourceTool({
@@ -359,6 +368,159 @@ export const updateDhis2OptionSet = createDhis2UpdateTool({
     metadataType: "optionSets",
 });
 
+
+
+/**
+ * Create a complex DHIS2 reporting form with dependencies
+ * Handles sequential creation: CategoryOptions → Category → CategoryCombo → DataSet
+ */
+export const createDhis2ReportingForm = tool(
+    async ({
+        formName,
+        dataElementName,
+        categoryName,
+        categoryOptions = [],
+        dataElementDescription,
+        periodType = 'Monthly'
+    }: {
+        formName: string;
+        dataElementName: string;
+        categoryName: string;
+        categoryOptions?: string[];
+        dataElementDescription?: string;
+        periodType?: 'Monthly' | 'Weekly' | 'Daily' | 'Quarterly' | 'Yearly';
+    }) => {
+        try {
+            // Step 1: Create CategoryOptions FIRST (sequentially)
+            const categoryOptionIds: string[] = [];
+            for (const option of categoryOptions) {
+                const id = await generateDhis2Id();
+                const optionData = {
+                    id,
+                    name: option,
+                    displayName: option,
+                    shortName: option.length > 50 ? option.substring(0, 47) + '...' : option,
+                    code: option.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+                    sortOrder: categoryOptionIds.length + 1,
+                };
+
+                try {
+                    await createDhis2Metadata('categoryOptions', optionData);
+                    categoryOptionIds.push(id);
+                    addResourceToContext(id, 'categoryOptions', option, 'created');
+                } catch (error) {
+                    console.error(`Failed to create CategoryOption "${option}":`, error);
+                    throw error;
+                }
+            }
+
+            // Step 2: Create Category with references to CategoryOptions
+            const categoryId = await generateDhis2Id();
+            const categoryData = {
+                id: categoryId,
+                name: categoryName,
+                displayName: categoryName,
+                shortName: categoryName.length > 50 ? categoryName.substring(0, 47) + '...' : categoryName,
+                dataDimension: true,
+                dataDimensionType: 'DISAGGREGATION',
+                categoryOptions: categoryOptionIds.map(id => ({ id })),
+            };
+
+            await createDhis2Metadata('categories', categoryData);
+            addResourceToContext(categoryId, 'categories', categoryName, 'created');
+
+            // Step 3: Create CategoryCombo
+            const categoryComboId = await generateDhis2Id();
+            const comboData = {
+                id: categoryComboId,
+                name: `${categoryName} Combo`,
+                displayName: `${categoryName} Combo`,
+                shortName: `${categoryName} Combo`.substring(0, 50),
+                dataDimensionType: 'DISAGGREGATION',
+                categories: [{ id: categoryId }],
+            };
+
+            await createDhis2Metadata('categoryCombos', comboData);
+            addResourceToContext(categoryComboId, 'categoryCombos', `${categoryName} Combo`, 'created');
+
+            // Step 4: Create Data Element
+            const dataElementId = await generateDhis2Id();
+            const dataElementData = {
+                id: dataElementId,
+                name: dataElementName,
+                displayName: dataElementName,
+                shortName: dataElementName.length > 50 ? dataElementName.substring(0, 47) + '...' : dataElementName,
+                valueType: 'INTEGER',
+                domainType: 'AGGREGATE',
+                aggregationType: 'COUNT',
+                zeroIsSignificant: true,
+                categoryCombo: { id: categoryComboId },
+                description: dataElementDescription || `${dataElementName} tracked by ${categoryName}`,
+            };
+
+            await createDhis2Metadata('dataElements', dataElementData);
+            addResourceToContext(dataElementId, 'dataElements', dataElementName, 'created');
+
+            // Step 5: Create DataSet with data elements
+            const dataSetId = await generateDhis2Id();
+            const dataSetData = {
+                id: dataSetId,
+                name: formName,
+                displayName: formName,
+                shortName: formName.length > 50 ? formName.substring(0, 47) + '...' : formName,
+                periodType,
+                openFuturePeriods: 1,
+                dataSetElements: [{
+                    dataElement: { id: dataElementId },
+                    categoryCombo: { id: categoryComboId },
+                    sortOrder: 1,
+                }],
+                organisationUnits: [], // Will need to be set based on context
+                description: `Monthly reporting form for ${formName}`,
+            };
+
+            await createDhis2Metadata('dataSets', dataSetData);
+            addResourceToContext(dataSetId, 'dataSets', formName, 'created');
+
+            return JSON.stringify({
+                success: true,
+                message: `Successfully created ${formName} reporting form with disaggregation by ${categoryName}`,
+                formId: dataSetId,
+                dataElementId,
+                categoryId,
+                categoryOptionIds,
+                categoryComboId,
+                created: categoryOptions.length + 4, // categoryOptions + category + combo + dataElement + dataSet
+                failed: 0,
+                total: categoryOptions.length + 4,
+                results: [{
+                    message: 'All components created successfully',
+                    status: 'SUCCESS'
+                }],
+            });
+
+        } catch (error) {
+            console.error('Error creating reporting form:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to create reporting form: ${error.message}`,
+            });
+        }
+    },
+    {
+        name: "create_dhis2_reporting_form",
+        description: "Create a complex DHIS2 reporting form with category-based disaggregation (e.g., maternal health reporting broken down by visit type)",
+        schema: z.object({
+            formName: z.string().describe("Name of the reporting form (DataSet)"),
+            dataElementName: z.string().describe("Name of the main indicator/data element"),
+            categoryName: z.string().describe("Name of the disaggregation category"),
+            categoryOptions: z.array(z.string()).describe("List of category options for disaggregation (e.g., ['First Visit', 'Follow-up Visit'])"),
+            dataElementDescription: z.string().optional().describe("Optional description for the data element"),
+            periodType: z.enum(['Monthly', 'Weekly', 'Daily', 'Quarterly', 'Yearly']).default('Monthly').describe("Reporting frequency"),
+        }),
+    }
+);
+
 // Export all tools
 export const Dhis2StructuredTools = {
     // Creation tools
@@ -371,6 +533,9 @@ export const Dhis2StructuredTools = {
     createDhis2Indicator,
     createDhis2ValidationRule,
     createDhis2OptionSet,
+
+    // Complex form creation tool
+    createDhis2ReportingForm,
 
     // Search tools
     searchDhis2DataElements,

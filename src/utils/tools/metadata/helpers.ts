@@ -593,7 +593,48 @@ export async function getDhis2MetadataById(metadataType: string, id: string): Pr
 }
 
 /**
- * Create DHIS2 metadata using unified batch API
+ * Create DHIS2 metadata directly via single API calls (bypasses batch manager)
+ * Use for sequential dependency creation where order matters
+ */
+export async function createDhis2MetadataDirect(
+    metadataType: string,
+    payload: Record<string, any>
+): Promise<{ response: any; httpStatus: number; uid?: string }> {
+    if (Array.isArray(payload)) {
+        throw new Error('createDhis2MetadataDirect only supports single objects, not arrays');
+    }
+
+    const metadataPayload = { [metadataType]: [payload] };
+
+    console.log('Creating metadata directly:', JSON.stringify(metadataPayload, null, 2));
+
+    const response = await fetch(`${dhis2BaseUrl}/metadata?importStrategy=CREATE_UPDATE`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(metadataPayload)
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+        console.error('Metadata creation failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            data
+        });
+        throw new Error(`Metadata API error: ${response.status} ${response.statusText} - ${JSON.stringify(data)}`);
+    }
+
+    console.log('Metadata creation success:', data);
+    return {
+        response: data,
+        httpStatus: response.status,
+        uid: payload.id // Return the ID that was used
+    };
+}
+
+/**
+ * Create DHIS2 metadata using unified batch API (for multiple resources at once)
  */
 export async function createDhis2Metadata(
     metadataType: string,
@@ -1255,7 +1296,7 @@ export function validateResourceData<T extends z.ZodSchema>(
         if (error instanceof z.ZodError) {
             return {
                 success: false,
-                errors: error.errors.map(err => `${err.path.join('.')}: ${err.message}`)
+                errors: error.issues.map(err => `${err.path.join('.')}: ${err.message}`)
             };
         }
         return { success: false, errors: [error.message] };

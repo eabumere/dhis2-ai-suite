@@ -5,10 +5,11 @@ import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
     addResourceToContext,
+    createDhis2Metadata,
+    createDhis2MetadataDirect,
     generateDhis2Id,
     searchDhis2Metadata,
 } from './helpers';
-import { UnifiedMetadataManager } from './batch-manager';
 
 
 // DataElement Tool
@@ -405,7 +406,7 @@ export const createDhis2ReportingForm = tool(
                 };
 
                 try {
-                    await createDhis2Metadata('categoryOptions', optionData);
+                    await createDhis2MetadataDirect('categoryOptions', optionData);
                     categoryOptionIds.push(id);
                     addResourceToContext(id, 'categoryOptions', option, 'created');
                 } catch (error) {
@@ -426,7 +427,7 @@ export const createDhis2ReportingForm = tool(
                 categoryOptions: categoryOptionIds.map(id => ({ id })),
             };
 
-            await createDhis2Metadata('categories', categoryData);
+            await createDhis2MetadataDirect('categories', categoryData);
             addResourceToContext(categoryId, 'categories', categoryName, 'created');
 
             // Step 3: Create CategoryCombo
@@ -440,7 +441,7 @@ export const createDhis2ReportingForm = tool(
                 categories: [{ id: categoryId }],
             };
 
-            await createDhis2Metadata('categoryCombos', comboData);
+            await createDhis2MetadataDirect('categoryCombos', comboData);
             addResourceToContext(categoryComboId, 'categoryCombos', `${categoryName} Combo`, 'created');
 
             // Step 4: Create Data Element
@@ -458,7 +459,7 @@ export const createDhis2ReportingForm = tool(
                 description: dataElementDescription || `${dataElementName} tracked by ${categoryName}`,
             };
 
-            await createDhis2Metadata('dataElements', dataElementData);
+            await createDhis2MetadataDirect('dataElements', dataElementData);
             addResourceToContext(dataElementId, 'dataElements', dataElementName, 'created');
 
             // Step 5: Create DataSet with data elements
@@ -479,7 +480,7 @@ export const createDhis2ReportingForm = tool(
                 description: `Monthly reporting form for ${formName}`,
             };
 
-            await createDhis2Metadata('dataSets', dataSetData);
+            await createDhis2MetadataDirect('dataSets', dataSetData);
             addResourceToContext(dataSetId, 'dataSets', formName, 'created');
 
             return JSON.stringify({

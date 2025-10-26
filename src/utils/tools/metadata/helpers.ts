@@ -686,3 +686,31 @@ export function validateResourceData<T extends z.ZodSchema>(
         return { success: false, errors: [error.message] };
     }
 }
+
+/**
+ * Generate a short name from a given name (for DHIS2 shortName field)
+ */
+export function generateShortName(name: string, maxLength: number = 50): string {
+    if (!name) return 'Unknown';
+
+    // Trim spaces and limit length
+    const trimmed = name.trim();
+    if (trimmed.length <= maxLength) {
+        return trimmed;
+    }
+
+    // Take first part of compound name or truncate with ellipses
+    const words = trimmed.split(/\s+/);
+    if (words.length > 1) {
+        // Try to create a meaningful abbreviation
+        const abbreviation = words.map(word => word.charAt(0).toUpperCase()).join('');
+
+        // If abbreviation is short enough and reasonable, use it
+        if (abbreviation.length <= maxLength && abbreviation.length >= 2) {
+            return abbreviation;
+        }
+    }
+
+    // Fall back to truncation with ellipses
+    return trimmed.substring(0, maxLength - 3) + '...';
+}

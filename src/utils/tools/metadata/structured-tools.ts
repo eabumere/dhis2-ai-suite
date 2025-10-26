@@ -7,6 +7,7 @@ import {
     addResourceToContext,
     createDhis2Metadata,
     createDhis2MetadataDirect,
+    createDhis2MetadataAggregated,
     generateDhis2Id,
     searchDhis2Metadata,
 } from './helpers';
@@ -400,6 +401,74 @@ export const updateDhis2OptionSet = createDhis2UpdateTool({
 
 
 /**
+ * Create DHIS2 metadata using aggregated single payload for related resources
+ * Reduces API calls by creating multiple related metadata types in one request
+ * Automatically checks for existence to avoid duplicates
+ */
+export const createDhis2AggregatedMetadata = tool(
+    async ({
+        metadata,
+    }: {
+        metadata: Record<string, Record<string, any>[]>;
+    }) => {
+        try {
+            console.log('Creating aggregated metadata:', JSON.stringify(metadata, null, 2));
+
+            // Pre-process: Generate IDs for resources that don't have them
+            for (const [metadataType, resources] of Object.entries(metadata)) {
+                for (const resource of resources) {
+                    if (!resource.id) {
+                        resource.id = await generateDhis2Id();
+                    }
+                }
+            }
+
+            const result = await createDhis2MetadataAggregated(metadata);
+
+            // Add successfully created resources to context
+            for (const r of result.results) {
+                if (r.created) {
+                    const resource = metadata[r.type]?.find(res => res.id === r.id);
+                    if (resource) {
+                        addResourceToContext(r.id!, r.type, resource.name || `Unnamed ${r.type}`, 'created');
+                    }
+                }
+            }
+
+            const createdCount = result.results.filter(r => r.created).length;
+            const existingCount = result.results.filter(r => !r.created).length;
+
+            return JSON.stringify({
+                success: true,
+                message: `Processed ${result.results.length} resources: ${createdCount} created, ${existingCount} already existed`,
+                total: result.results.length,
+                created: createdCount,
+                existing: existingCount,
+                results: result.results,
+                apiResponse: result.response,
+            });
+
+        } catch (error) {
+            console.error('Error creating aggregated metadata:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to create aggregated metadata: ${error.message}`,
+            });
+        }
+    },
+    {
+        name: "create_dhis2_aggregated_metadata",
+        description: "Create multiple related DHIS2 metadata objects in a single API call when all IDs are resolvable in the payload. Automatically checks for existence to avoid duplicates.",
+        schema: z.object({
+            metadata: z.record(
+                z.string(), // metadata type (e.g., "categoryOptions", "categories", "categoryCombos", "dataElements")
+                z.array(z.record(z.string(), z.any())) // array of resource objects
+            ).describe("Aggregated metadata payload with multiple resource types. IDs must be resolvable within the payload. Example: { categoryOptions: [...], categories: [...], categoryCombos: [...], dataElements: [...] }"),
+        }),
+    }
+);
+
+/**
  * Create a complex DHIS2 reporting form with dependencies
  * Handles sequential creation: CategoryOptions → Category → CategoryCombo → DataSet
  */
@@ -562,6 +631,9 @@ export const Dhis2StructuredTools = {
     createDhis2Indicator,
     createDhis2ValidationRule,
     createDhis2OptionSet,
+
+    // Aggregated metadata creation tool
+    createDhis2AggregatedMetadata,
 
     // Complex form creation tool
     createDhis2ReportingForm,

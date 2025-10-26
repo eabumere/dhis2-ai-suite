@@ -10,6 +10,9 @@ export {
     createDhis2ValidationRule,
     createDhis2OptionSet,
 
+    // Aggregated metadata creation tool
+    createDhis2AggregatedMetadata,
+
     // Search tools
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,

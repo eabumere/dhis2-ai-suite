@@ -241,15 +241,153 @@ export async function searchDhis2Metadata(
 }
 
 /**
+ * Check if a specific resource exists and get its ID
+ */
+export async function checkResourceExists(
+    metadataType: string,
+    name?: string,
+    id?: string
+): Promise<{ exists: boolean; id?: string; data?: any } | null> {
+    try {
+        let url: string;
+        if (id) {
+            url = `${DHIS2_API_BASE_URL}/${metadataType}/${id}?fields=id,name,code,displayName`;
+        } else if (name) {
+            const exactMatch = await searchDhis2Metadata(metadataType, name, 5);
+            const match = exactMatch.find(item =>
+                item.name.toLowerCase() === name.toLowerCase() ||
+                (item.code && item.code.toLowerCase() === name.toLowerCase())
+            );
+            if (match) {
+                return { exists: true, id: match.id, data: match };
+            } else {
+                return { exists: false };
+            }
+        } else {
+            return null;
+        }
+
+        const response = await fetch(url, {
+            method: "GET",
+            headers: authHeaders(),
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            return { exists: true, id: data.id, data };
+        } else if (response.status === 404) {
+            return { exists: false };
+        } else {
+            throw new Error(`DHIS2 API error: ${response.status} ${response.statusText}`);
+        }
+    } catch (error) {
+        console.error('Error checking resource existence:', error);
+        return null;
+    }
+}
+
+/**
+ * Create DHIS2 metadata using aggregated single payload (for related resources where all IDs are resolvable)
+ * Reduces number of API calls by creating multiple related metadata types at once
+ * Checks for existence first for each resource
+ */
+export async function createDhis2MetadataAggregated(
+    aggregatedPayload: Record<string, Record<string, any>[]>
+): Promise<{ response: any; httpStatus: number; results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> }> {
+    const results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> = [];
+
+    // Process each resource type
+    for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
+        for (const resource of resources) {
+            // Check if resource already exists
+            const existsCheck = await checkResourceExists(metadataType, resource.name, resource.id);
+            if (existsCheck?.exists) {
+                console.log(`✅ Resource already exists: ${metadataType} '${resource.name}' with ID: ${existsCheck.id}`);
+                results.push({ type: metadataType, id: existsCheck.id, exists: true, created: false });
+                // Skip this resource but continue with others
+                continue;
+            }
+
+            // Mark as will be created
+            results.push({ type: metadataType, id: resource.id, exists: false, created: true });
+        }
+    }
+
+    // Filter the payload to only include resources that don't exist
+    const filteredPayload: Record<string, Record<string, any>[]> = {};
+    let hasNewResources = false;
+
+    for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
+        const newResources = resources.filter(resource => {
+            const result = results.find(r => r.type === metadataType && r.id === resource.id);
+            return !result?.exists;
+        });
+
+        if (newResources.length > 0) {
+            filteredPayload[metadataType] = newResources;
+            hasNewResources = true;
+        }
+    }
+
+    if (!hasNewResources) {
+        console.log('All resources already exist, no creation needed');
+        return {
+            response: { status: 'OK', message: 'All resources already exist' },
+            httpStatus: 200,
+            results
+        };
+    }
+
+    console.log('Creating aggregated metadata:', JSON.stringify(filteredPayload, null, 2));
+
+    const response = await fetch(`${DHIS2_API_BASE_URL}/metadata?importStrategy=CREATE_UPDATE`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(filteredPayload)
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+        console.error('Aggregated metadata creation failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            data
+        });
+        throw new Error(`Aggregated metadata API error: ${response.status} ${response.statusText} - ${JSON.stringify(data)}`);
+    }
+
+    console.log('Aggregated metadata creation success:', data);
+    return {
+        response: data,
+        httpStatus: response.status,
+        results
+    };
+}
+
+/**
  * Create DHIS2 metadata directly via single API calls (bypasses batch manager)
  * Use for sequential dependency creation where order matters
+ * Checks for existence first, and returns existing ID if resource already exists (409 status)
  */
 export async function createDhis2MetadataDirect(
     metadataType: string,
     payload: Record<string, any>
-): Promise<{ response: any; httpStatus: number; uid?: string }> {
+): Promise<{ response: any; httpStatus: number; uid?: string; exists?: boolean }> {
     if (Array.isArray(payload)) {
         throw new Error('createDhis2MetadataDirect only supports single objects, not arrays');
+    }
+
+    // Check if resource already exists
+    const existsCheck = await checkResourceExists(metadataType, payload.name, payload.id);
+    if (existsCheck?.exists) {
+        console.log(`✅ Resource already exists: ${metadataType} '${payload.name}' with ID: ${existsCheck.id}`);
+        return {
+            response: existsCheck.data,
+            httpStatus: 200, // Pretend it's a successful creation
+            uid: existsCheck.id,
+            exists: true
+        };
     }
 
     const metadataPayload = { [metadataType]: [payload] };
@@ -265,6 +403,21 @@ export async function createDhis2MetadataDirect(
     const data = await response.json();
 
     if (!response.ok) {
+        // If 409 conflict (resource exists), try to get the existing ID
+        if (response.status === 409) {
+            console.log('Resource conflicts (409), checking if it actually exists:');
+            const existsAfterConflict = await checkResourceExists(metadataType, payload.name, payload.id);
+            if (existsAfterConflict?.exists) {
+                console.log(`✅ Resource existed after 409: ${metadataType} '${payload.name}' with ID: ${existsAfterConflict.id}`);
+                return {
+                    response: existsAfterConflict.data,
+                    httpStatus: 200,
+                    uid: existsAfterConflict.id,
+                    exists: true
+                };
+            }
+        }
+
         console.error('Metadata creation failed:', {
             status: response.status,
             statusText: response.statusText,
@@ -277,7 +430,8 @@ export async function createDhis2MetadataDirect(
     return {
         response: data,
         httpStatus: response.status,
-        uid: payload.id // Return the ID that was used
+        uid: payload.id, // Return the ID that was used
+        exists: false
     };
 }
 

@@ -461,6 +461,31 @@ export async function createDhis2Metadata(
 }
 
 /**
+ * Update DHIS2 metadata using unified batch API (for multiple resources at once)
+ */
+export async function updateDhis2Metadata(
+    metadataType: string,
+    payload: Record<string, any> | Record<string, any>[]
+): Promise<any> {
+    const { batchUpdateMetadata } = await import('./batch-manager');
+
+    const items = Array.isArray(payload)
+        ? payload.map(data => ({ type: metadataType, id: data.id, data }))
+        : [{ type: metadataType, id: payload.id, data: payload }];
+
+    const result = await batchUpdateMetadata(items, {
+        importStrategy: 'UPDATE',
+        atomic: false // Allow partial success for backward compatibility
+    });
+
+    if (!result.success) {
+        throw new Error(`Failed to update metadata: ${result.errors?.join(', ')}`);
+    }
+
+    return result.apiResponse;
+}
+
+/**
  * Registry of default dependencies for each metadata type
  * This enables recursive dependency resolution
  */

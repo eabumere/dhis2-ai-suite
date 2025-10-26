@@ -739,3 +739,64 @@ export function generateShortName(name: string, maxLength: number = 50): string 
     // Fall back to truncation with ellipses
     return trimmed.substring(0, maxLength - 3) + '...';
 }
+
+/**
+ * Parse natural language descriptions to extract resource names and properties
+ * Used by LLM-driven tools to interpret user descriptions
+ */
+export function parseNaturalLanguageDescription(description: string): {
+    name: string;
+    properties: Record<string, any>;
+} {
+    if (!description || typeof description !== 'string') {
+        return {
+            name: 'Unnamed Resource',
+            properties: {}
+        };
+    }
+
+    const trimmed = description.trim();
+
+    // Simple name extraction - take the first meaningful phrase
+    // For more complex parsing, this could be enhanced with NLP
+    let name = trimmed;
+
+    // Try to extract name from common patterns
+    const sentences = trimmed.split(/[.!?]+/).filter(s => s.trim());
+    if (sentences.length > 0) {
+        name = sentences[0].trim();
+    }
+
+    // Remove common prefixes that aren't part of the name
+    const prefixPatterns = [
+        /^create\s+/i,
+        /^make\s+/i,
+        /^add\s+/i,
+        /^setup\s+/i,
+        /^new\s+/i,
+        /^a\s+/i,
+        /^an\s+/i
+    ];
+
+    for (const pattern of prefixPatterns) {
+        name = name.replace(pattern, '');
+    }
+
+    // Clean up the name
+    name = name.trim();
+
+    // If name is too short or too long, use default
+    if (name.length < 2 || name.length > 50) {
+        name = 'Unnamed Resource';
+    }
+
+    // Basic properties extraction (could be enhanced)
+    const properties: Record<string, any> = {
+        description: trimmed
+    };
+
+    return {
+        name,
+        properties
+    };
+}

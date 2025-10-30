@@ -475,6 +475,50 @@ export const getDhis2CategoryById = createDhis2GetByIdTool("categories", "Catego
 export const getDhis2DataSetById = createDhis2GetByIdTool("dataSets", "Data Set");
 export const getDhis2ProgramById = createDhis2GetByIdTool("programs", "Program");
 
+// Track existing tools
+export const existingTools = {
+    create: [
+        'createDhis2DataElement',
+        'createDhis2OrganisationUnit',
+        'createDhis2Category',
+        'createDhis2CategoryCombo',
+        'createDhis2DataSet',
+        'createDhis2Program',
+        'createDhis2Indicator',
+        'createDhis2ValidationRule',
+        'createDhis2OptionSet',
+        'createDhis2AggregatedMetadata',
+        'createDhis2ReportingForm'
+    ],
+    update: [
+        'updateDhis2DataElement',
+        'updateDhis2OrganisationUnit',
+        'updateDhis2Category',
+        'updateDhis2CategoryCombo',
+        'updateDhis2DataSet',
+        'updateDhis2Program',
+        'updateDhis2Indicator',
+        'updateDhis2ValidationRule',
+        'updateDhis2OptionSet'
+    ],
+    search: [
+        'searchDhis2DataElements',
+        'searchDhis2OrganisationUnits',
+        'searchDhis2Categories',
+        'searchDhis2CategoryCombos',
+        'searchDhis2DataSets',
+        'searchDhis2Programs',
+        'searchDhis2Indicators'
+    ],
+    getById: [
+        'getDhis2DataElementById',
+        'getDhis2OrganisationUnitById',
+        'getDhis2CategoryById',
+        'getDhis2DataSetById',
+        'getDhis2ProgramById'
+    ]
+};
+
 // Direct CRUD Tools for Top-level Entities
 export const createDhis2CategoryOption = createDhis2ResourceTool({
     name: "create_dhis2_category_option",
@@ -1085,7 +1129,6 @@ async function createDhis2ReportingFormAggregated({
     }
 }
 
-// Complex Entity Tools with Dependencies
 export const createDhis2TrackedEntityType = createDhis2ResourceTool({
     name: "create_dhis2_tracked_entity_type",
     description: "Create DHIS2 tracked entity types from schema-compliant objects",
@@ -1113,7 +1156,7 @@ export const createDhis2TrackedEntityType = createDhis2ResourceTool({
     }
 });
 
-// Program Stage and Related Tools
+// Complex Entity Tools with Dependencies
 export const createDhis2ProgramStage = createDhis2ResourceTool({
     name: "create_dhis2_program_stage",
     description: "Create DHIS2 program stages from schema-compliant objects. Requires a parent program.",
@@ -1247,67 +1290,7 @@ export const createDhis2Event = tool(
     }
 );
 
-// Extended Search Tools
-export const searchDhis2CategoryOptions = createDhis2SearchTool("categoryOptions", "Category Options");
-export const searchDhis2OrganisationUnitGroups = createDhis2SearchTool("organisationUnitGroups", "Organisation Unit Groups");
-export const searchDhis2OrganisationUnitGroupSets = createDhis2SearchTool("organisationUnitGroupSets", "Organisation Unit Group Sets");
-export const searchDhis2Programs = createDhis2SearchTool("programs", "Programs");
-export const searchDhis2TrackedEntityTypes = createDhis2SearchTool("trackedEntityTypes", "Tracked Entity Types");
-export const searchDhis2TrackedEntityAttributes = createDhis2SearchTool("trackedEntityAttributes", "Tracked Entity Attributes");
-export const searchDhis2Validations = createDhis2SearchTool("validationRules", "Validation Rules");
-export const searchDhis2OptionSets = createDhis2SearchTool("optionSets", "Option Sets");
-export const searchDhis2Indicators = createDhis2SearchTool("indicators", "Indicators");
-export const searchDhis2Visualizations = createDhis2SearchTool("visualizations", "Visualizations");
-export const searchDhis2Dashboards = createDhis2SearchTool("dashboards", "Dashboards");
 
-// Extended Get by ID Tools
-export const getDhis2CategoryOptionById = createDhis2GetByIdTool("categoryOptions", "Category Option");
-export const getDhis2OrganisationUnitGroupById = createDhis2GetByIdTool("organisationUnitGroups", "Organisation Unit Group");
-export const getDhis2OrganisationUnitGroupSetById = createDhis2GetByIdTool("organisationUnitGroupSets", "Organisation Unit Group Set");
-export const getDhis2ProgramById = createDhis2GetByIdTool("programs", "Program");
-export const getDhis2TrackedEntityTypeById = createDhis2GetByIdTool("trackedEntityTypes", "Tracked Entity Type");
-export const getDhis2TrackedEntityAttributeById = createDhis2GetByIdTool("trackedEntityAttributes", "Tracked Entity Attribute");
-export const getDhis2ValidationRuleById = createDhis2GetByIdTool("validationRules", "Validation Rule");
-export const getDhis2OptionSetById = createDhis2GetByIdTool("optionSets", "Option Set");
-export const getDhis2IndicatorById = createDhis2GetByIdTool("indicators", "Indicator");
-export const getDhis2VisualizationById = createDhis2GetByIdTool("visualizations", "Visualization");
-export const getDhis2DashboardById = createDhis2GetByIdTool("dashboards", "Dashboard");
-
-// Complex Entity Update Tools
-export const updateDhis2TrackedEntityType = createDhis2UpdateTool({
-    name: "update_dhis2_tracked_entity_type",
-    description: "Update DHIS2 tracked entity types using schema-compliant properties",
-    schema: Dhis2Schemas.TrackedEntityType,
-    metadataType: "trackedEntityTypes",
-});
-
-export const updateDhis2ProgramStage = createDhis2UpdateTool({
-    name: "update_dhis2_program_stage",
-    description: "Update DHIS2 program stages using schema-compliant properties",
-    schema: Dhis2Schemas.ProgramStage,
-    metadataType: "programStages",
-});
-
-export const updateDhis2ProgramRule = createDhis2UpdateTool({
-    name: "update_dhis2_program_rule",
-    description: "Update DHIS2 program rules using schema-compliant properties",
-    schema: Dhis2Schemas.ProgramRule,
-    metadataType: "programRules",
-});
-
-export const updateDhis2ProgramIndicator = createDhis2UpdateTool({
-    name: "update_dhis2_program_indicator",
-    description: "Update DHIS2 program indicators using schema-compliant properties",
-    schema: Dhis2Schemas.ProgramIndicator,
-    metadataType: "programIndicators",
-});
-
-export const updateDhis2DashboardItem = createDhis2UpdateTool({
-    name: "update_dhis2_dashboard_item",
-    description: "Update DHIS2 dashboard items using schema-compliant properties",
-    schema: Dhis2Schemas.DashboardItem,
-    metadataType: "dashboardItems",
-});
 
 // Export all tools
 export const Dhis2StructuredTools = {
@@ -1349,16 +1332,12 @@ export const Dhis2StructuredTools = {
     updateDhis2Program,
     updateDhis2TrackedEntityType,
     updateDhis2TrackedEntityAttribute,
-    updateDhis2ProgramStage,
-    updateDhis2ProgramRule,
-    updateDhis2ProgramIndicator,
     updateDhis2Indicator,
     updateDhis2IndicatorType,
     updateDhis2ValidationRule,
     updateDhis2OptionSet,
     updateDhis2Visualization,
     updateDhis2Dashboard,
-    updateDhis2DashboardItem,
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,
@@ -1369,38 +1348,19 @@ export const Dhis2StructuredTools = {
     // Data retrieval tools
     getDhis2DataValues,
 
-    // Search tools - Extended
+    // Search tools - Existing
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
-    searchDhis2CategoryOptions,
-    searchDhis2OrganisationUnitGroups,
-    searchDhis2OrganisationUnitGroupSets,
     searchDhis2DataSets,
     searchDhis2Programs,
-    searchDhis2TrackedEntityTypes,
-    searchDhis2TrackedEntityAttributes,
-    searchDhis2Validations,
-    searchDhis2OptionSets,
     searchDhis2Indicators,
-    searchDhis2Visualizations,
-    searchDhis2Dashboards,
 
-    // Get by ID tools - Extended
+    // Get by ID tools - Existing
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
     getDhis2DataSetById,
     getDhis2ProgramById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
 };

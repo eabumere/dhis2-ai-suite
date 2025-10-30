@@ -1235,7 +1235,7 @@ export const createDhis2Option = createLLMFirstTool({
         name: z.string().min(1).describe("The name of the option value"),
         displayName: z.string().optional().describe("Display name (defaults to name)"),
         shortName: z.string().optional().describe("Short name (defaults to name)"),
-        code: z.string().optional().describe("Unique code for the option - will auto-generate from name if not provided"),
+        code: z.string().optional().describe("Optional unique code - if not provided, automatically generated from the name (e.g. 'Agreed' becomes 'AGREED')"),
         sortOrder: z.number().int().min(1).describe("Sort order for the option (must be >= 1)")
     }),
     metadataType: "options",

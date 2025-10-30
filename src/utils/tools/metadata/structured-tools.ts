@@ -1308,84 +1308,11 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
     dhis2SchemaName: "OrganisationUnit" // Validates against actual DHIS2 OrganisationUnit schema
 });
 
-// Update the exports to include the new tool
-export const Dhis2StructuredTools = {
-    // Creation tools - Core
-    createDhis2DataElement,
-    createDhis2OrganisationUnit, // Updated to prioritize LLM-first version
-    createDhis2Category,
-    createDhis2CategoryCombo,
-    createDhis2CategoryOption,
-    createDhis2DataSet,
-    createDhis2OrganisationUnitGroup,
-    createDhis2OrganisationUnitGroupSet,
-    createDhis2Program,
-    createDhis2TrackedEntityType,
-    createDhis2TrackedEntityAttribute,
-    createDhis2ProgramStage,
-    createDhis2ProgramRule,
-    createDhis2ProgramIndicator,
-    createDhis2Indicator,
-    createDhis2IndicatorType,
-    createDhis2ValidationRule,
-    createDhis2Option,
-    createDhis2OptionSet,
-    createDhis2Visualization,
-    createDhis2Dashboard,
-    createDhis2DashboardItem,
-    createDhis2TrackedEntityInstance,
-    createDhis2Enrollment,
-    createDhis2Event,
-
-    // Update tools - Core
-    updateDhis2DataElement,
-    updateDhis2OrganisationUnit,
-    updateDhis2Category,
-    updateDhis2CategoryCombo,
-    updateDhis2CategoryOption,
-    updateDhis2DataSet,
-    updateDhis2OrganisationUnitGroup,
-    updateDhis2OrganisationUnitGroupSet,
-    updateDhis2Program,
-    updateDhis2TrackedEntityType,
-    updateDhis2TrackedEntityAttribute,
-    updateDhis2Indicator,
-    updateDhis2IndicatorType,
-    updateDhis2ValidationRule,
-    updateDhis2OptionSet,
-    updateDhis2Visualization,
-    updateDhis2Dashboard,
-
-    // Aggregated metadata creation tool
-    createDhis2AggregatedMetadata,
-
-    // Complex form creation tool
-    createDhis2ReportingForm,
-
-    // Data retrieval tools
-    getDhis2DataValues,
-
-    // Search tools - Existing
-    searchDhis2DataElements,
-    searchDhis2OrganisationUnits,
-    searchDhis2Categories,
-    searchDhis2CategoryCombos,
-    searchDhis2DataSets,
-    searchDhis2Programs,
-    searchDhis2Indicators,
-
-    // Get by ID tools - Existing
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-
 // Export all tools
 export const Dhis2StructuredTools = {
     // Creation tools - Core
     createDhis2DataElement,
-    createDhis2OrganisationUnit,
+    createDhis2OrganisationUnit, // Updated to prioritize LLM-first version
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2CategoryOption,

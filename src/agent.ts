@@ -6,6 +6,7 @@ import {
     createDhis2DataElement,
     createDhis2DataSet,
     createDhis2Indicator,
+    createDhis2Option,
     createDhis2OptionSet,
     createDhis2OrganisationUnit,
     createDhis2Program, createDhis2ReportingForm,
@@ -62,6 +63,7 @@ export const metadataAgent = createReactAgent({
     createDhis2DataSet,
     createDhis2Program,
     createDhis2Indicator,
+    createDhis2Option,
     createDhis2ValidationRule,
     createDhis2OptionSet,
 
@@ -112,6 +114,7 @@ export const metadataAgent = createReactAgent({
     - **Programs**: Tracker programs for individual-level data
     - **Indicators**: Calculated indicators with numerators and denominators
     - **Validation Rules**: Data quality checks and constraints
+    - **Options**: Individual options that can belong to option sets or be standalone
     - **Option Sets**: Predefined lists of options for data elements
 
     ### CONVERSATIONAL CONTEXT

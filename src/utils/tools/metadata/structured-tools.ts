@@ -1283,6 +1283,19 @@ export const createDhis2OptionSet = createLLMFirstTool({
     dhis2SchemaName: "OptionSet" // Validates against actual DHIS2 OptionSet schema
 });
 
+export const createDhis2IndicatorType = createLLMFirstTool({
+    name: "create_dhis2_indicator_type",
+    description: "Create DHIS2 indicator types that define how indicator calculations are performed (counting vs percentage vs average). These specify the mathematical operations for indicators. Examples: 'Percentage', 'Count', 'Average', 'Ratio'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the indicator type"),
+        description: z.string().optional().describe("Description of the indicator calculation method"),
+        factor: z.number().int().default(1).describe("Number of decimal places to display (typically 1 for percentages)"),
+        number: z.boolean().default(false).describe("Whether the result is treated as a number (false for percentages)")
+    }),
+    metadataType: "indicatorTypes",
+    dhis2SchemaName: "IndicatorType" // Validates against actual DHIS2 IndicatorType schema
+});
+
 // Export all tools
 export const Dhis2StructuredTools = {
     // Creation tools - Core

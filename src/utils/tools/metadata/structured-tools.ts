@@ -1,6 +1,6 @@
 import { createDhis2GetByIdTool, createDhis2ResourceTool, createDhis2SearchTool, createDhis2UpdateTool } from './base-tool';
 import { Dhis2Schemas } from './schemas';
-import { parseNaturalLanguageDescription } from './helpers';
+import { parseNaturalLanguageDescription, parseExpressionForDataElements, generateDataElementFromExpression } from './helpers';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
@@ -242,36 +242,177 @@ export const createDhis2Program = createDhis2ResourceTool({
     }
 });
 
-// Indicator Tool
-export const createDhis2Indicator = createDhis2ResourceTool({
-    name: "create_dhis2_indicator",
-    description: "Create DHIS2 indicators from natural language descriptions.",
-    schema: Dhis2Schemas.Indicator,
-    metadataType: "indicators",
-    defaultDependencies: [
-        {
-            type: "indicatorTypes",
-            name: "default",
-            createIfNotFound: true,
-            createParams: {
-                name: "Default",
-                displayName: "Default",
+/**
+ * Enhanced indicator creation with automatic data element creation
+ * Parses expressions and creates required data elements automatically
+ */
+export const createDhis2Indicator = tool(
+    async ({
+        description,
+        name,
+        shortName,
+        annualized,
+        numerator,
+        denominator,
+        indicatorType
+    }: {
+        description: string;
+        name?: string;
+        shortName?: string;
+        annualized?: boolean;
+        numerator?: string;
+        denominator?: string;
+        indicatorType?: string;
+    }) => {
+        try {
+            // Parse the description to extract properties
+            const { name: parsedName, properties } = parseNaturalLanguageDescription(description);
+
+            // Override with explicit parameters if provided
+            const finalName = name || parsedName;
+            const finalShortName = shortName || (finalName.length > 50 ? finalName.substring(0, 47) + '...' : finalName);
+            const finalAnnualized = annualized !== undefined ? annualized : properties.annualized || false;
+
+            // Parse expression to identify data elements
+            let dataElements: Array<{ code: string; name: string; inferredValueType: string }> = [];
+
+            // Check both provided expressions and those parsed from description
+            const expressionsToCheck = [
+                numerator || properties.numerator,
+                denominator || properties.denominator,
+                properties.numerator === "1" ? null : properties.numerator,
+                properties.denominator === "1" ? null : properties.denominator
+            ].filter(Boolean);
+
+            // Additionally, parse expressions directly from the description text
+            const descriptionExpressions = parseExpressionForDataElements(description);
+            expressionsToCheck.push(...descriptionExpressions.map(de => `#{${de.code}}`));
+
+            for (const expr of expressionsToCheck) {
+                if (typeof expr === 'string') {
+                    dataElements = dataElements.concat(parseExpressionForDataElements(expr));
+                }
+            }
+
+            // Remove duplicates by code
+            const uniqueDataElements = dataElements.filter((de, index, arr) =>
+                arr.findIndex(d => d.code === de.code) === index
+            );
+
+            console.log(`Found ${uniqueDataElements.length} referenced data elements:`, uniqueDataElements.map(de => de.code));
+
+            // Generate indicator properties
+            const indicatorProps = {
+                name: finalName,
+                displayName: finalName,
+                shortName: finalShortName,
+                description: description,
+                annualized: finalAnnualized,
+                numerator: numerator || properties.numerator || '#{DE_Default_Num}',
+                denominator: denominator || properties.denominator || '#{DE_Default_Den}',
+                decimals: 2 // Default
+            };
+
+            // Create default indicator type if not specified
+            const defaultIndicatorType = await generateDhis2Id();
+            const defaultIndicatorTypeData = {
+                id: defaultIndicatorType,
+                name: "Default Indicator Type",
+                displayName: "Default Indicator Type",
                 factor: 1,
                 number: false
+            };
+
+            // Generate data elements (ensure they don't already exist)
+            const dataElementPayloads = [];
+            for (const de of uniqueDataElements) {
+                const id = await generateDhis2Id();
+                dataElementPayloads.push({
+                    ...generateDataElementFromExpression(de.code, de.name, de.inferredValueType),
+                    id
+                });
             }
+
+            // Create indicator payload
+            const indicatorId = await generateDhis2Id();
+            const indicatorPayload = {
+                id: indicatorId,
+                ...indicatorProps,
+                indicatorType: { id: defaultIndicatorType }
+            };
+
+            // Build aggregated payload
+            const aggregatedPayload: Record<string, any[]> = {};
+
+            // Add indicator type if needed
+            aggregatedPayload.indicatorTypes = [defaultIndicatorTypeData];
+
+            // Add data elements
+            if (dataElementPayloads.length > 0) {
+                aggregatedPayload.dataElements = dataElementPayloads;
+            }
+
+            // Add indicator
+            aggregatedPayload.indicators = [indicatorPayload];
+
+            // Execute batch creation
+            console.log('Creating indicator with referenced data elements:', JSON.stringify(aggregatedPayload, null, 2));
+
+            const result = await createDhis2MetadataAggregated(aggregatedPayload);
+
+            // Add successfully created resources to context
+            for (const r of result.results) {
+                if (r.created) {
+                    const resourceType = r.type;
+                    const resource = aggregatedPayload[resourceType]?.find((res: any) => res.id === r.id);
+                    if (resource) {
+                        addResourceToContext(r.id!, resourceType, resource.name || `Unnamed ${resourceType}`, 'created');
+                    }
+                }
+            }
+
+            const createdItems = result.results.filter(r => r.created);
+            const totalItems = result.results.length;
+
+            // Check if creation was successful
+            const indicatorCreated = createdItems.some(r => r.type === 'indicators');
+
+            return JSON.stringify({
+                success: true,
+                message: `Created indicator "${finalName}" with ${dataElementPayloads.length} referenced data elements`,
+                indicatorId,
+                indicatorName: finalName,
+                dataElementsCreated: dataElementPayloads.length,
+                dataElementCodes: uniqueDataElements.map(de => de.code),
+                created: createdItems.length,
+                total: totalItems,
+                results: result.results,
+                apiResponse: result.response,
+            });
+
+        } catch (error) {
+            console.error('Error creating indicator with data elements:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to create indicator: ${error.message}`,
+                description
+            });
         }
-    ],
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Set defaults for indicators
-        properties.numerator = "1"; // Default numerator
-        properties.denominator = "1"; // Default denominator
-        properties.annualized = false;
-
-        return { name, properties };
+    },
+    {
+        name: "create_dhis2_indicator",
+        description: "Create DHIS2 indicators from natural language descriptions. Automatically parses expressions and creates any referenced data elements.",
+        schema: z.object({
+            description: z.string().describe("Natural language description of the indicator, including the expression with data element references"),
+            name: z.string().optional().describe("Override for the indicator name"),
+            shortName: z.string().optional().describe("Override for the short name"),
+            annualized: z.boolean().optional().default(false).describe("Whether the indicator is annualized"),
+            numerator: z.string().optional().describe("Custom numerator expression"),
+            denominator: z.string().optional().describe("Custom denominator expression"),
+            indicatorType: z.string().optional().describe("Indicator type to use (defaults to auto-created type)"),
+        }).describe(`Create DHIS2 indicator with automatic data element creation from expressions like #{DE_Code} / #{DE_Code}`),
     }
-});
+);
 
 // Validation Rule Tool
 export const createDhis2ValidationRule = createDhis2ResourceTool({
@@ -334,7 +475,103 @@ export const getDhis2CategoryById = createDhis2GetByIdTool("categories", "Catego
 export const getDhis2DataSetById = createDhis2GetByIdTool("dataSets", "Data Set");
 export const getDhis2ProgramById = createDhis2GetByIdTool("programs", "Program");
 
-// Update Tools
+// Direct CRUD Tools for Top-level Entities
+export const createDhis2CategoryOption = createDhis2ResourceTool({
+    name: "create_dhis2_category_option",
+    description: "Create DHIS2 category options from schema-compliant objects",
+    schema: Dhis2Schemas.CategoryOption,
+    metadataType: "categoryOptions",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        return { name, properties };
+    }
+});
+
+export const createDhis2OrganisationUnitGroup = createDhis2ResourceTool({
+    name: "create_dhis2_organisation_unit_group",
+    description: "Create DHIS2 organisation unit groups from schema-compliant objects",
+    schema: Dhis2Schemas.OrganisationUnitGroup,
+    metadataType: "organisationUnitGroups",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.organisationUnits = [];
+        return { name, properties };
+    }
+});
+
+export const createDhis2OrganisationUnitGroupSet = createDhis2ResourceTool({
+    name: "create_dhis2_organisation_unit_group_set",
+    description: "Create DHIS2 organisation unit group sets from schema-compliant objects",
+    schema: Dhis2Schemas.OrganisationUnitGroupSet,
+    metadataType: "organisationUnitGroupSets",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.organisationUnitGroups = [];
+        return { name, properties };
+    }
+});
+
+export const createDhis2TrackedEntityAttribute = createDhis2ResourceTool({
+    name: "create_dhis2_tracked_entity_attribute",
+    description: "Create DHIS2 tracked entity attributes from schema-compliant objects",
+    schema: Dhis2Schemas.TrackedEntityAttribute,
+    metadataType: "trackedEntityAttributes",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        // Default to TEXT valueType if not specified
+        properties.valueType = properties.valueType || 'TEXT';
+        properties.unique = properties.unique || false;
+        properties.inherit = properties.inherit || false;
+        return { name, properties };
+    }
+});
+
+export const createDhis2IndicatorType = createDhis2ResourceTool({
+    name: "create_dhis2_indicator_type",
+    description: "Create DHIS2 indicator types from schema-compliant objects",
+    schema: Dhis2Schemas.IndicatorType,
+    metadataType: "indicatorTypes",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.factor = properties.factor || 1;
+        properties.number = properties.number || false;
+        return { name, properties };
+    }
+});
+
+export const createDhis2Visualization = createDhis2ResourceTool({
+    name: "create_dhis2_visualization",
+    description: "Create DHIS2 visualizations (charts/tables) from schema-compliant objects",
+    schema: Dhis2Schemas.Visualization,
+    metadataType: "visualizations",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.type = properties.type || 'COLUMN';
+        properties.dataDimensionItems = properties.dataDimensionItems || [];
+        properties.columns = properties.columns || [];
+        properties.rows = properties.rows || [];
+        properties.filters = properties.filters || [];
+        properties.organisationUnits = [];
+        properties.periods = [];
+        return { name, properties };
+    }
+});
+
+export const createDhis2Dashboard = createDhis2ResourceTool({
+    name: "create_dhis2_dashboard",
+    description: "Create DHIS2 dashboards from schema-compliant objects",
+    schema: Dhis2Schemas.Dashboard,
+    metadataType: "dashboards",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.dashboardItems = [];
+        properties.publicAccess = '--------';
+        properties.externalAccess = false;
+        return { name, properties };
+    }
+});
+
+// Update Tools - Direct CRUD
 export const updateDhis2DataElement = createDhis2UpdateTool({
     name: "update_dhis2_data_element",
     description: "Update DHIS2 data elements using schema-compliant properties",
@@ -363,11 +600,32 @@ export const updateDhis2CategoryCombo = createDhis2UpdateTool({
     metadataType: "categoryCombos",
 });
 
+export const updateDhis2CategoryOption = createDhis2UpdateTool({
+    name: "update_dhis2_category_option",
+    description: "Update DHIS2 category options using schema-compliant properties",
+    schema: Dhis2Schemas.CategoryOption,
+    metadataType: "categoryOptions",
+});
+
 export const updateDhis2DataSet = createDhis2UpdateTool({
     name: "update_dhis2_data_set",
     description: "Update DHIS2 data sets using schema-compliant properties",
     schema: Dhis2Schemas.DataSet,
     metadataType: "dataSets",
+});
+
+export const updateDhis2OrganisationUnitGroup = createDhis2UpdateTool({
+    name: "update_dhis2_organisation_unit_group",
+    description: "Update DHIS2 organisation unit groups using schema-compliant properties",
+    schema: Dhis2Schemas.OrganisationUnitGroup,
+    metadataType: "organisationUnitGroups",
+});
+
+export const updateDhis2OrganisationUnitGroupSet = createDhis2UpdateTool({
+    name: "update_dhis2_organisation_unit_group_set",
+    description: "Update DHIS2 organisation unit group sets using schema-compliant properties",
+    schema: Dhis2Schemas.OrganisationUnitGroupSet,
+    metadataType: "organisationUnitGroupSets",
 });
 
 export const updateDhis2Program = createDhis2UpdateTool({
@@ -377,11 +635,32 @@ export const updateDhis2Program = createDhis2UpdateTool({
     metadataType: "programs",
 });
 
+export const updateDhis2TrackedEntityType = createDhis2UpdateTool({
+    name: "update_dhis2_tracked_entity_type",
+    description: "Update DHIS2 tracked entity types using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityType,
+    metadataType: "trackedEntityTypes",
+});
+
+export const updateDhis2TrackedEntityAttribute = createDhis2UpdateTool({
+    name: "update_dhis2_tracked_entity_attribute",
+    description: "Update DHIS2 tracked entity attributes using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityAttribute,
+    metadataType: "trackedEntityAttributes",
+});
+
 export const updateDhis2Indicator = createDhis2UpdateTool({
     name: "update_dhis2_indicator",
     description: "Update DHIS2 indicators using schema-compliant properties",
     schema: Dhis2Schemas.Indicator,
     metadataType: "indicators",
+});
+
+export const updateDhis2IndicatorType = createDhis2UpdateTool({
+    name: "update_dhis2_indicator_type",
+    description: "Update DHIS2 indicator types using schema-compliant properties",
+    schema: Dhis2Schemas.IndicatorType,
+    metadataType: "indicatorTypes",
 });
 
 export const updateDhis2ValidationRule = createDhis2UpdateTool({
@@ -396,6 +675,20 @@ export const updateDhis2OptionSet = createDhis2UpdateTool({
     description: "Update DHIS2 option sets using schema-compliant properties",
     schema: Dhis2Schemas.OptionSet,
     metadataType: "optionSets",
+});
+
+export const updateDhis2Visualization = createDhis2UpdateTool({
+    name: "update_dhis2_visualization",
+    description: "Update DHIS2 visualizations using schema-compliant properties",
+    schema: Dhis2Schemas.Visualization,
+    metadataType: "visualizations",
+});
+
+export const updateDhis2Dashboard = createDhis2UpdateTool({
+    name: "update_dhis2_dashboard",
+    description: "Update DHIS2 dashboards using schema-compliant properties",
+    schema: Dhis2Schemas.Dashboard,
+    metadataType: "dashboards",
 });
 
 
@@ -792,18 +1085,280 @@ async function createDhis2ReportingFormAggregated({
     }
 }
 
+// Complex Entity Tools with Dependencies
+export const createDhis2TrackedEntityType = createDhis2ResourceTool({
+    name: "create_dhis2_tracked_entity_type",
+    description: "Create DHIS2 tracked entity types from schema-compliant objects",
+    schema: Dhis2Schemas.TrackedEntityType,
+    metadataType: "trackedEntityTypes",
+    defaultDependencies: [
+        {
+            type: "trackedEntityTypeAttributes",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                trackedEntityAttribute: { id: "default_tea" },
+                displayInList: false,
+                mandatory: false,
+                searchable: true,
+                sortOrder: 1
+            }
+        }
+    ],
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.trackedEntityTypeAttributes = [];
+        properties.allowAuditLog = false;
+        return { name, properties };
+    }
+});
+
+// Program Stage and Related Tools
+export const createDhis2ProgramStage = createDhis2ResourceTool({
+    name: "create_dhis2_program_stage",
+    description: "Create DHIS2 program stages from schema-compliant objects. Requires a parent program.",
+    schema: Dhis2Schemas.ProgramStage,
+    metadataType: "programStages",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.repeatable = false;
+        properties.minDaysFromStart = 0;
+        properties.programStageDataElements = [];
+        properties.validationStrategy = 'ON_COMPLETE';
+        return { name, properties };
+    }
+});
+
+export const createDhis2ProgramRule = createDhis2ResourceTool({
+    name: "create_dhis2_program_rule",
+    description: "Create DHIS2 program rules from schema-compliant objects. Requires a parent program.",
+    schema: Dhis2Schemas.ProgramRule,
+    metadataType: "programRules",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.programRuleActions = [];
+        return { name, properties };
+    }
+});
+
+export const createDhis2ProgramIndicator = createDhis2ResourceTool({
+    name: "create_dhis2_program_indicator",
+    description: "Create DHIS2 program indicators from schema-compliant objects. Requires a parent program.",
+    schema: Dhis2Schemas.ProgramIndicator,
+    metadataType: "programIndicators",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        properties.displayInForm = false;
+        properties.analyticsType = 'EVENT';
+        return { name, properties };
+    }
+});
+
+// Dashboard Items
+export const createDhis2DashboardItem = createDhis2ResourceTool({
+    name: "create_dhis2_dashboard_item",
+    description: "Create DHIS2 dashboard items from schema-compliant objects. Requires a parent dashboard.",
+    schema: Dhis2Schemas.DashboardItem,
+    metadataType: "dashboardItems",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+        return { name, properties };
+    }
+});
+
+// DataValue Tool (special read-only tool)
+export const getDhis2DataValues = tool(
+    async ({ dataElementIds, period, orgUnits }: {
+        dataElementIds: string[];
+        period: string;
+        orgUnits: string[];
+    }) => {
+        try {
+            // This would fetch data values - special case as it's data, not metadata
+            return JSON.stringify({ success: false, message: "DataValue retrieval not implemented - this is raw data, not metadata" });
+        } catch (error) {
+            return JSON.stringify({ success: false, error: error.message });
+        }
+    },
+    {
+        name: "get_dhis2_data_values",
+        description: "Retrieve DHIS2 data values for specific data elements, periods, and organisation units",
+        schema: z.object({
+            dataElementIds: z.array(z.string()).describe("Array of data element IDs"),
+            period: z.string().describe("Period identifier"),
+            orgUnits: z.array(z.string()).describe("Array of organisation unit IDs"),
+        }),
+    }
+);
+
+// Tracker Event Relationship Tools
+export const createDhis2TrackedEntityInstance = tool(
+    async ({ resource }: { resource: any }) => {
+        try {
+            // Special handling for tracker entities with relationships
+            const result = await createDhis2Metadata('trackedEntityInstances', [resource]);
+            return JSON.stringify({ success: true, result });
+        } catch (error) {
+            return JSON.stringify({ success: false, error: error.message });
+        }
+    },
+    {
+        name: "create_dhis2_tracked_entity_instance",
+        description: "Create DHIS2 tracked entity instances with relationships",
+        schema: z.object({
+            resource: Dhis2Schemas.TrackedEntityInstance.describe("Tracked entity instance object"),
+        }),
+    }
+);
+
+export const createDhis2Enrollment = tool(
+    async ({ resource }: { resource: any }) => {
+        try {
+            const result = await createDhis2Metadata('enrollments', [resource]);
+            return JSON.stringify({ success: true, result });
+        } catch (error) {
+            return JSON.stringify({ success: false, error: error.message });
+        }
+    },
+    {
+        name: "create_dhis2_enrollment",
+        description: "Create DHIS2 enrollments",
+        schema: z.object({
+            resource: Dhis2Schemas.Enrollment.describe("Enrollment object"),
+        }),
+    }
+);
+
+export const createDhis2Event = tool(
+    async ({ resource }: { resource: any }) => {
+        try {
+            const result = await createDhis2Metadata('events', [resource]);
+            return JSON.stringify({ success: true, result });
+        } catch (error) {
+            return JSON.stringify({ success: false, error: error.message });
+        }
+    },
+    {
+        name: "create_dhis2_event",
+        description: "Create DHIS2 events",
+        schema: z.object({
+            resource: Dhis2Schemas.Event.describe("Event object"),
+        }),
+    }
+);
+
+// Extended Search Tools
+export const searchDhis2CategoryOptions = createDhis2SearchTool("categoryOptions", "Category Options");
+export const searchDhis2OrganisationUnitGroups = createDhis2SearchTool("organisationUnitGroups", "Organisation Unit Groups");
+export const searchDhis2OrganisationUnitGroupSets = createDhis2SearchTool("organisationUnitGroupSets", "Organisation Unit Group Sets");
+export const searchDhis2Programs = createDhis2SearchTool("programs", "Programs");
+export const searchDhis2TrackedEntityTypes = createDhis2SearchTool("trackedEntityTypes", "Tracked Entity Types");
+export const searchDhis2TrackedEntityAttributes = createDhis2SearchTool("trackedEntityAttributes", "Tracked Entity Attributes");
+export const searchDhis2Validations = createDhis2SearchTool("validationRules", "Validation Rules");
+export const searchDhis2OptionSets = createDhis2SearchTool("optionSets", "Option Sets");
+export const searchDhis2Indicators = createDhis2SearchTool("indicators", "Indicators");
+export const searchDhis2Visualizations = createDhis2SearchTool("visualizations", "Visualizations");
+export const searchDhis2Dashboards = createDhis2SearchTool("dashboards", "Dashboards");
+
+// Extended Get by ID Tools
+export const getDhis2CategoryOptionById = createDhis2GetByIdTool("categoryOptions", "Category Option");
+export const getDhis2OrganisationUnitGroupById = createDhis2GetByIdTool("organisationUnitGroups", "Organisation Unit Group");
+export const getDhis2OrganisationUnitGroupSetById = createDhis2GetByIdTool("organisationUnitGroupSets", "Organisation Unit Group Set");
+export const getDhis2ProgramById = createDhis2GetByIdTool("programs", "Program");
+export const getDhis2TrackedEntityTypeById = createDhis2GetByIdTool("trackedEntityTypes", "Tracked Entity Type");
+export const getDhis2TrackedEntityAttributeById = createDhis2GetByIdTool("trackedEntityAttributes", "Tracked Entity Attribute");
+export const getDhis2ValidationRuleById = createDhis2GetByIdTool("validationRules", "Validation Rule");
+export const getDhis2OptionSetById = createDhis2GetByIdTool("optionSets", "Option Set");
+export const getDhis2IndicatorById = createDhis2GetByIdTool("indicators", "Indicator");
+export const getDhis2VisualizationById = createDhis2GetByIdTool("visualizations", "Visualization");
+export const getDhis2DashboardById = createDhis2GetByIdTool("dashboards", "Dashboard");
+
+// Complex Entity Update Tools
+export const updateDhis2TrackedEntityType = createDhis2UpdateTool({
+    name: "update_dhis2_tracked_entity_type",
+    description: "Update DHIS2 tracked entity types using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityType,
+    metadataType: "trackedEntityTypes",
+});
+
+export const updateDhis2ProgramStage = createDhis2UpdateTool({
+    name: "update_dhis2_program_stage",
+    description: "Update DHIS2 program stages using schema-compliant properties",
+    schema: Dhis2Schemas.ProgramStage,
+    metadataType: "programStages",
+});
+
+export const updateDhis2ProgramRule = createDhis2UpdateTool({
+    name: "update_dhis2_program_rule",
+    description: "Update DHIS2 program rules using schema-compliant properties",
+    schema: Dhis2Schemas.ProgramRule,
+    metadataType: "programRules",
+});
+
+export const updateDhis2ProgramIndicator = createDhis2UpdateTool({
+    name: "update_dhis2_program_indicator",
+    description: "Update DHIS2 program indicators using schema-compliant properties",
+    schema: Dhis2Schemas.ProgramIndicator,
+    metadataType: "programIndicators",
+});
+
+export const updateDhis2DashboardItem = createDhis2UpdateTool({
+    name: "update_dhis2_dashboard_item",
+    description: "Update DHIS2 dashboard items using schema-compliant properties",
+    schema: Dhis2Schemas.DashboardItem,
+    metadataType: "dashboardItems",
+});
+
 // Export all tools
 export const Dhis2StructuredTools = {
-    // Creation tools
+    // Creation tools - Core
     createDhis2DataElement,
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
+    createDhis2CategoryOption,
     createDhis2DataSet,
+    createDhis2OrganisationUnitGroup,
+    createDhis2OrganisationUnitGroupSet,
     createDhis2Program,
+    createDhis2TrackedEntityType,
+    createDhis2TrackedEntityAttribute,
+    createDhis2ProgramStage,
+    createDhis2ProgramRule,
+    createDhis2ProgramIndicator,
     createDhis2Indicator,
+    createDhis2IndicatorType,
     createDhis2ValidationRule,
     createDhis2OptionSet,
+    createDhis2Visualization,
+    createDhis2Dashboard,
+    createDhis2DashboardItem,
+    createDhis2TrackedEntityInstance,
+    createDhis2Enrollment,
+    createDhis2Event,
+
+    // Update tools - Core
+    updateDhis2DataElement,
+    updateDhis2OrganisationUnit,
+    updateDhis2Category,
+    updateDhis2CategoryCombo,
+    updateDhis2CategoryOption,
+    updateDhis2DataSet,
+    updateDhis2OrganisationUnitGroup,
+    updateDhis2OrganisationUnitGroupSet,
+    updateDhis2Program,
+    updateDhis2TrackedEntityType,
+    updateDhis2TrackedEntityAttribute,
+    updateDhis2ProgramStage,
+    updateDhis2ProgramRule,
+    updateDhis2ProgramIndicator,
+    updateDhis2Indicator,
+    updateDhis2IndicatorType,
+    updateDhis2ValidationRule,
+    updateDhis2OptionSet,
+    updateDhis2Visualization,
+    updateDhis2Dashboard,
+    updateDhis2DashboardItem,
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,
@@ -811,19 +1366,41 @@ export const Dhis2StructuredTools = {
     // Complex form creation tool
     createDhis2ReportingForm,
 
-    // Search tools
+    // Data retrieval tools
+    getDhis2DataValues,
+
+    // Search tools - Extended
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
+    searchDhis2CategoryOptions,
+    searchDhis2OrganisationUnitGroups,
+    searchDhis2OrganisationUnitGroupSets,
     searchDhis2DataSets,
     searchDhis2Programs,
+    searchDhis2TrackedEntityTypes,
+    searchDhis2TrackedEntityAttributes,
+    searchDhis2Validations,
+    searchDhis2OptionSets,
     searchDhis2Indicators,
+    searchDhis2Visualizations,
+    searchDhis2Dashboards,
 
-    // Get by ID tools
+    // Get by ID tools - Extended
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
+    getDhis2CategoryOptionById,
+    getDhis2OrganisationUnitGroupById,
+    getDhis2OrganisationUnitGroupSetById,
     getDhis2DataSetById,
     getDhis2ProgramById,
+    getDhis2TrackedEntityTypeById,
+    getDhis2TrackedEntityAttributeById,
+    getDhis2ValidationRuleById,
+    getDhis2OptionSetById,
+    getDhis2IndicatorById,
+    getDhis2VisualizationById,
+    getDhis2DashboardById,
 };

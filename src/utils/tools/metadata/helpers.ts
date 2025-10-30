@@ -242,17 +242,20 @@ export async function searchDhis2Metadata(
 
 /**
  * Check if a specific resource exists and get its ID
+ * For data elements, also checks by code field
  */
 export async function checkResourceExists(
     metadataType: string,
     name?: string,
-    id?: string
+    id?: string,
+    code?: string
 ): Promise<{ exists: boolean; id?: string; data?: any } | null> {
     try {
         let url: string;
         if (id) {
             url = `${DHIS2_API_BASE_URL}/${metadataType}/${id}?fields=id,name,code,displayName`;
         } else if (name) {
+            // First try exact name match
             const exactMatch = await searchDhis2Metadata(metadataType, name, 5);
             const match = exactMatch.find(item =>
                 item.name.toLowerCase() === name.toLowerCase() ||
@@ -260,9 +263,30 @@ export async function checkResourceExists(
             );
             if (match) {
                 return { exists: true, id: match.id, data: match };
-            } else {
-                return { exists: false };
             }
+
+            // For data elements, also try searching by code if name search failed
+            if (metadataType === 'dataElements' && code) {
+                // Search by code directly using API filter
+                const response = await fetch(
+                    `${DHIS2_API_BASE_URL}/${metadataType}?filter=code:eq:${encodeURIComponent(code)}&fields=id,name,code,displayName&paging=false`,
+                    {
+                        method: "GET",
+                        headers: authHeaders(),
+                    }
+                );
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const items = data[metadataType] || [];
+                    if (items.length > 0) {
+                        return { exists: true, id: items[0].id, data: items[0] };
+                    }
+                }
+            }
+
+            // No match found
+            return { exists: false };
         } else {
             return null;
         }
@@ -299,8 +323,13 @@ export async function createDhis2MetadataAggregated(
     // Process each resource type
     for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
         for (const resource of resources) {
-            // Check if resource already exists
-            const existsCheck = await checkResourceExists(metadataType, resource.name, resource.id);
+            // Check if resource already exists (for data elements, also check by code)
+            const existsCheck = await checkResourceExists(
+                metadataType,
+                resource.name,
+                resource.id,
+                metadataType === 'dataElements' ? resource.code : undefined
+            );
             if (existsCheck?.exists) {
                 console.log(`✅ Resource already exists: ${metadataType} '${resource.name}' with ID: ${existsCheck.id}`);
                 results.push({ type: metadataType, id: existsCheck.id, exists: true, created: false });
@@ -738,6 +767,137 @@ export function generateShortName(name: string, maxLength: number = 50): string 
 
     // Fall back to truncation with ellipses
     return trimmed.substring(0, maxLength - 3) + '...';
+}
+
+/**
+ * Parse DHIS2 expressions to extract data element references
+ * Handles patterns like #{DE_Code} and returns the referenced data elements
+ */
+export function parseExpressionForDataElements(expression: string): Array<{
+    code: string;
+    name: string;
+    inferredValueType: 'INTEGER' | 'NUMBER' | 'BOOLEAN' | 'TEXT';
+}> {
+    if (!expression || typeof expression !== 'string') {
+        return [];
+    }
+
+    const trimmed = expression.trim();
+
+    // Match DHIS2 data element references: #{...}
+    const dataElementRefRegex = /#\{([^}]+)\}/g;
+    const matches = [];
+    let match;
+
+    while ((match = dataElementRefRegex.exec(trimmed)) !== null) {
+        const code = match[1].trim();
+        if (code) {
+            matches.push({
+                code,
+                name: parseDataElementCodeToName(code),
+                inferredValueType: inferValueType(code, trimmed)
+            });
+        }
+    }
+
+    return matches;
+}
+
+/**
+ * Parse data element codes to generate human-readable names
+ * Converts codes like DE_Immunised_U5_all_schedule to "Immunised U5 all schedule"
+ */
+function parseDataElementCodeToName(code: string): string {
+    if (!code) return 'Unnamed Data Element';
+
+    // Remove common prefixes
+    let name = code.replace(/^(DE|ID)_/, '');
+
+    // Split on underscores and capitalize each word
+    const words = name.split('_').map(word => {
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    });
+
+    // Join words with spaces
+    name = words.join(' ');
+
+    // Clean up common abbreviations (expand for better readability)
+    const abbreviations: Record<string, string> = {
+        'U5': 'Under 5',
+        'U1': 'Under 1',
+        'Immvax': 'Immunization',
+        'Tb': 'Tuberculosis',
+        'Sti': 'STI',
+        'Ovc': 'OVC',
+        'Hiv': 'HIV',
+        'Art': 'ART',
+        'Cd4': 'CD4',
+        'Vl': 'Viral Load',
+        'Svc': 'Service',
+        'Pop': 'Population',
+        'Num': 'Number',
+        'Tot': 'Total',
+        'Cnt': 'Count',
+        'Rat': 'Rate',
+        'Per': 'Percent',
+        'Pro': 'Proportion',
+        'Cov': 'Coverage',
+        'Sch': 'Schedule',
+        'All': 'All',
+        'Ful': 'Fully',
+        'Com': 'Completed'
+    };
+
+    for (const [abbrev, full] of Object.entries(abbreviations)) {
+        name = name.replace(new RegExp(`\\b${abbrev}\\b`, 'gi'), full);
+    }
+
+    return name;
+}
+
+/**
+ * Infer value type from data element code and context
+ */
+function inferValueType(code: string, expression: string): 'INTEGER' | 'NUMBER' | 'BOOLEAN' | 'TEXT' {
+    const codeLower = code.toLowerCase();
+    const exprLower = expression.toLowerCase();
+
+    // Check if expression suggests count (integer), percentage (number), or yes/no (boolean)
+    if (exprLower.includes('count') || exprLower.includes('number of') ||
+        codeLower.includes('total') || codeLower.includes('sum')) {
+        return 'INTEGER';
+    }
+
+    if (exprLower.includes('percent') || exprLower.includes('rate') ||
+        codeLower.includes('proportion') || codeLower.includes('coverage')) {
+        return 'NUMBER';
+    }
+
+    if (codeLower.includes('yesno') || codeLower.includes('positive') ||
+        codeLower.includes('negative') || codeLower.includes('confirmed')) {
+        return 'BOOLEAN';
+    }
+
+    // Default to INTEGER for aggregated data
+    return 'INTEGER';
+}
+
+/**
+ * Generate data element creation parameters from expression parsing
+ */
+export function generateDataElementFromExpression(code: string, name: string, valueType: string): Record<string, any> {
+    return {
+        code,
+        name,
+        displayName: name,
+        shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+        valueType,
+        domainType: 'AGGREGATE',
+        aggregationType: valueType === 'BOOLEAN' ? 'COUNT' :
+                        valueType === 'INTEGER' ? 'COUNT' :
+                        valueType === 'NUMBER' ? 'AVERAGE' : 'NONE',
+        zeroIsSignificant: true, // Most health data elements need to track zeros
+    };
 }
 
 /**

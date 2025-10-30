@@ -120,6 +120,20 @@ export const DataElementOperandSchema = z.object({
   categoryOptionCombo: z.object({ id: z.string() }).optional(),
 });
 
+export const DataValueSchema = z.object({
+  dataElement: z.string(),
+  period: z.string(),
+  orgUnit: z.string(),
+  categoryOptionCombo: z.string().optional(),
+  attributeOptionCombo: z.string().optional(),
+  value: z.string(),
+  storedBy: z.string().optional(),
+  created: z.string().optional(),
+  lastUpdated: z.string().optional(),
+  comment: z.string().optional(),
+  followup: z.boolean().optional(),
+});
+
 export const DataEntryFormSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -197,18 +211,13 @@ export const ValidationRuleSchema = z.object({
   organisationUnitLevels: z.array(z.number().int().min(1)),
 });
 
-// Program Schema
-export const TrackedEntityTypeSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1),
-  displayName: z.string().min(1),
-  shortName: z.string().min(1),
-  code: z.string().optional(),
-  description: z.string().optional(),
-  trackedEntityTypeAttributes: z.array(z.any()), // Will be defined properly
-  allowAuditLog: z.boolean().optional(),
-  minAttributesRequiredToSearch: z.number().int().min(0).optional(),
-  maxTeiCountToReturn: z.number().int().min(1).optional(),
+export const ValidationResultSchema = z.object({
+  validationRule: z.object({ id: z.string() }),
+  period: z.string(),
+  organisationUnit: z.object({ id: z.string() }),
+  dayInPeriod: z.number().int(),
+  leftSideValue: z.number(),
+  rightSideValue: z.number(),
 });
 
 export const TrackedEntityAttributeSchema = z.object({
@@ -224,6 +233,29 @@ export const TrackedEntityAttributeSchema = z.object({
   optionSet: z.object({ id: z.string() }).optional(),
   pattern: z.string().optional(),
   confidential: z.boolean().optional(),
+});
+
+export const TrackedEntityTypeAttributeSchema = z.object({
+  id: z.string().optional(),
+  trackedEntityAttribute: z.object({ id: z.string() }),
+  displayInList: z.boolean(),
+  mandatory: z.boolean(),
+  searchable: z.boolean(),
+  sortOrder: z.number().int().min(0),
+});
+
+// Program Schema
+export const TrackedEntityTypeSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  shortName: z.string().min(1),
+  code: z.string().optional(),
+  description: z.string().optional(),
+  trackedEntityTypeAttributes: z.array(TrackedEntityTypeAttributeSchema),
+  allowAuditLog: z.boolean().optional(),
+  minAttributesRequiredToSearch: z.number().int().min(0).optional(),
+  maxTeiCountToReturn: z.number().int().min(1).optional(),
 });
 
 export const OptionSetSchema = z.object({
@@ -326,6 +358,17 @@ export const ProgramRuleSchema = z.object({
   programRuleActions: z.array(ProgramRuleActionSchema),
 });
 
+export const ProgramRuleVariableSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  program: z.object({ id: z.string() }),
+  programStage: z.object({ id: z.string() }).optional(),
+  dataElement: z.object({ id: z.string() }).optional(),
+  trackedEntityAttribute: z.object({ id: z.string() }).optional(),
+  sourceType: z.enum(['DATAELEMENT_NEWEST_EVENT_PROGRAM_STAGE', 'DATAELEMENT_NEWEST_EVENT_PROGRAM', 'DATAELEMENT_CURRENT_EVENT', 'DATAELEMENT_PREVIOUS_EVENT', 'CALCULATED_VALUE', 'TEI_ATTRIBUTE']),
+});
+
 // Program Indicator Schema
 export const ProgramIndicatorSchema = z.object({
   id: z.string().optional(),
@@ -340,6 +383,37 @@ export const ProgramIndicatorSchema = z.object({
   aggregationType: z.string().min(1),
   analyticsType: z.enum(['EVENT', 'ENROLLMENT']),
   displayInForm: z.boolean(),
+});
+
+export const ProgramDataElementSchema = z.object({
+  id: z.string().optional(),
+  dataElement: z.object({ id: z.string() }),
+  program: z.object({ id: z.string() }),
+});
+
+export const ProgramAttributeSchema = z.object({
+  id: z.string().optional(),
+  trackedEntityAttribute: z.object({ id: z.string() }),
+  program: z.object({ id: z.string() }),
+});
+
+export const AnalyticsQuerySchema = z.object({
+  dimension: z.string().optional(),
+  filter: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  aggregationType: z.string().optional(),
+  measureCriteria: z.string().optional(),
+  preAggregationMeasureCriteria: z.string().optional(),
+  skipMeta: z.boolean().optional(),
+  skipData: z.boolean().optional(),
+  skipRounding: z.boolean().optional(),
+  hierarchyMeta: z.boolean().optional(),
+  ignoreLimit: z.boolean().optional(),
+  tableLayout: z.boolean().optional(),
+  columns: z.string().optional(),
+  rows: z.string().optional(),
+  includeNumDen: z.boolean().optional(),
 });
 
 // Indicator Schema
@@ -395,6 +469,120 @@ export const PeriodSchema = z.object({
   endDate: z.string().min(1),
 });
 
+// Tracker Schemas
+export const CoordinateSchema = z.object({
+  latitude: z.number(),
+  longitude: z.number(),
+});
+
+export const NoteSchema = z.object({
+  id: z.string(),
+  noteText: z.string(),
+  storedDate: z.string(),
+  storedBy: z.string(),
+});
+
+export const RelationshipTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  displayName: z.string(),
+  fromToName: z.string(),
+  toFromName: z.string(),
+  bidirectional: z.boolean(),
+});
+
+export const RelationshipItemSchema = z.lazy(() => z.object({
+  trackedEntityInstance: z.lazy(() => TrackedEntityInstanceSchema).optional(),
+  enrollment: z.lazy(() => EnrollmentSchema).optional(),
+  event: z.lazy(() => EventSchema).optional(),
+}));
+
+export const RelationshipSchema = z.object({
+  id: z.string(),
+  relationshipType: z.object({ id: z.string() }),
+  from: RelationshipItemSchema,
+  to: RelationshipItemSchema,
+  created: z.string(),
+  lastUpdated: z.string(),
+});
+
+export const TrackedEntityInstanceSchema = z.object({
+  id: z.string(),
+  trackedEntityType: z.string(),
+  orgUnit: z.string(),
+  attributes: z.array(z.object({
+    attribute: z.string(),
+    value: z.string(),
+    displayValue: z.string().optional(),
+    created: z.string().optional(),
+    lastUpdated: z.string().optional(),
+    storedBy: z.string().optional(),
+  })),
+  enrollments: z.array(z.lazy(() => EnrollmentSchema)).optional(),
+  relationships: z.array(z.lazy(() => RelationshipSchema)).optional(),
+  inactive: z.boolean(),
+  deleted: z.boolean(),
+  potentialDuplicate: z.boolean(),
+  created: z.string(),
+  lastUpdated: z.string(),
+});
+
+export const EnrollmentSchema = z.object({
+  id: z.string(),
+  trackedEntityInstance: z.string(),
+  program: z.string(),
+  orgUnit: z.string(),
+  enrollmentDate: z.string(),
+  incidentDate: z.string(),
+  status: z.enum(['ACTIVE', 'COMPLETED', 'CANCELLED']),
+  events: z.array(z.lazy(() => EventSchema)).optional(),
+  attributes: z.array(z.object({
+    attribute: z.string(),
+    value: z.string(),
+    displayValue: z.string().optional(),
+    created: z.string().optional(),
+    lastUpdated: z.string().optional(),
+    storedBy: z.string().optional(),
+  })).optional(),
+  notes: z.array(z.object({
+    id: z.string(),
+    noteText: z.string(),
+    storedDate: z.string(),
+    storedBy: z.string(),
+  })).optional(),
+  followup: z.boolean(),
+  deleted: z.boolean(),
+  created: z.string(),
+  lastUpdated: z.string(),
+});
+
+export const EventSchema = z.object({
+  id: z.string(),
+  enrollment: z.string().optional(),
+  program: z.string(),
+  programStage: z.string(),
+  orgUnit: z.string(),
+  trackedEntityInstance: z.string().optional(),
+  status: z.enum(['ACTIVE', 'COMPLETED', 'VISITED', 'SCHEDULE', 'OVERDUE', 'SKIPPED']),
+  eventDate: z.string().optional(),
+  dueDate: z.string().optional(),
+  coordinate: z.object({
+    latitude: z.number(),
+    longitude: z.number(),
+  }).optional(),
+  dataValues: z.array(DataValueSchema),
+  notes: z.array(z.object({
+    id: z.string(),
+    noteText: z.string(),
+    storedDate: z.string(),
+    storedBy: z.string(),
+  })).optional(),
+  followup: z.boolean(),
+  deleted: z.boolean(),
+  created: z.string(),
+  lastUpdated: z.string(),
+});
+
 export const VisualizationSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -415,6 +603,50 @@ export const VisualizationSchema = z.object({
 });
 
 // Dashboard Schema
+export const MapViewSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  layer: z.string().min(1),
+  organisationUnitGroupSet: z.object({ id: z.string() }).optional(),
+  organisationUnits: z.array(z.object({ id: z.string() })),
+  periods: z.array(z.object({ id: z.string() })),
+});
+
+export const MapSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  mapViews: z.array(MapViewSchema),
+});
+
+export const ReportTableSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  columns: z.array(DimensionItemSchema),
+  rows: z.array(DimensionItemSchema),
+  filters: z.array(DimensionItemSchema),
+});
+
+export const ChartSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  type: z.string().min(1),
+  series: z.array(DimensionItemSchema),
+  category: z.array(DimensionItemSchema),
+  filter: z.array(DimensionItemSchema),
+});
+
+export const ReportSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  type: z.enum(['JASPER_REPORT_TABLE', 'JASPER_JDBC']),
+  designContent: z.string().min(1),
+  cacheStrategy: z.enum(['NO_CACHE', 'CACHE_1_HOUR', 'CACHE_TWO_WEEKS', 'CACHE_6AM_TOMORROW']),
+});
+
 export const DashboardItemSchema = z.object({
   id: z.string().optional(),
   type: z.enum([
@@ -451,6 +683,26 @@ export const UserCredentialsSchema = z.object({
   twoFA: z.boolean(),
   externalAuth: z.boolean(),
   userRoles: z.array(z.object({ id: z.string() })),
+});
+
+export const UserRoleSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  displayName: z.string().min(1),
+  description: z.string().optional(),
+  authorities: z.array(z.string()),
+});
+
+export const UserAccessSchema = z.object({
+  id: z.string().optional(),
+  displayName: z.string().min(1),
+  access: z.string().min(1),
+});
+
+export const UserGroupAccessSchema = z.object({
+  id: z.string().optional(),
+  displayName: z.string().min(1),
+  access: z.string().min(1),
 });
 
 export const DashboardSchema = z.object({
@@ -510,8 +762,10 @@ export const Dhis2Schemas = {
   OrganisationUnitGroupSet: OrganisationUnitGroupSetSchema,
   ValidationRule: ValidationRuleSchema,
   Expression: ExpressionSchema,
+  ValidationResult: ValidationResultSchema,
   Program: ProgramSchema,
   TrackedEntityType: TrackedEntityTypeSchema,
+  TrackedEntityTypeAttribute: TrackedEntityTypeAttributeSchema,
   TrackedEntityAttribute: TrackedEntityAttributeSchema,
   OptionSet: OptionSetSchema,
   Option: OptionSchema,
@@ -520,7 +774,10 @@ export const Dhis2Schemas = {
   ProgramStageSection: ProgramStageSectionSchema,
   ProgramRule: ProgramRuleSchema,
   ProgramRuleAction: ProgramRuleActionSchema,
+  ProgramRuleVariable: ProgramRuleVariableSchema,
   ProgramIndicator: ProgramIndicatorSchema,
+  ProgramDataElement: ProgramDataElementSchema,
+  ProgramAttribute: ProgramAttributeSchema,
   Indicator: IndicatorSchema,
   IndicatorType: IndicatorTypeSchema,
   Visualization: VisualizationSchema,
@@ -529,6 +786,24 @@ export const Dhis2Schemas = {
   Period: PeriodSchema,
   Dashboard: DashboardSchema,
   DashboardItem: DashboardItemSchema,
+  Map: MapSchema,
+  MapView: MapViewSchema,
+  ReportTable: ReportTableSchema,
+  Chart: ChartSchema,
+  Report: ReportSchema,
   User: UserSchema,
   UserCredentials: UserCredentialsSchema,
+  UserRole: UserRoleSchema,
+  UserAccess: UserAccessSchema,
+  UserGroupAccess: UserGroupAccessSchema,
+  DataValue: DataValueSchema,
+  Coordinate: CoordinateSchema,
+  Note: NoteSchema,
+  Relationship: RelationshipSchema,
+  RelationshipType: RelationshipTypeSchema,
+  RelationshipItem: RelationshipItemSchema,
+  TrackedEntityInstance: TrackedEntityInstanceSchema,
+  Enrollment: EnrollmentSchema,
+  Event: EventSchema,
+  AnalyticsQuery: AnalyticsQuerySchema,
 };

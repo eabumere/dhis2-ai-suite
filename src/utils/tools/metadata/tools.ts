@@ -1,31 +1,94 @@
 export {
-    // Creation tools
+    // Creation tools - Extended
     createDhis2DataElement,
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
+    createDhis2CategoryOption,
     createDhis2DataSet,
+    createDhis2OrganisationUnitGroup,
+    createDhis2OrganisationUnitGroupSet,
     createDhis2Program,
+    createDhis2TrackedEntityType,
+    createDhis2TrackedEntityAttribute,
+    createDhis2ProgramStage,
+    createDhis2ProgramRule,
+    createDhis2ProgramIndicator,
     createDhis2Indicator,
+    createDhis2IndicatorType,
     createDhis2ValidationRule,
     createDhis2OptionSet,
+    createDhis2Visualization,
+    createDhis2Dashboard,
+    createDhis2DashboardItem,
+    createDhis2TrackedEntityInstance,
+    createDhis2Enrollment,
+    createDhis2Event,
+
+    // Update tools - Extended
+    updateDhis2DataElement,
+    updateDhis2OrganisationUnit,
+    updateDhis2Category,
+    updateDhis2CategoryCombo,
+    updateDhis2CategoryOption,
+    updateDhis2DataSet,
+    updateDhis2OrganisationUnitGroup,
+    updateDhis2OrganisationUnitGroupSet,
+    updateDhis2Program,
+    updateDhis2TrackedEntityType,
+    updateDhis2TrackedEntityAttribute,
+    updateDhis2ProgramStage,
+    updateDhis2ProgramRule,
+    updateDhis2ProgramIndicator,
+    updateDhis2Indicator,
+    updateDhis2IndicatorType,
+    updateDhis2ValidationRule,
+    updateDhis2OptionSet,
+    updateDhis2Visualization,
+    updateDhis2Dashboard,
+    updateDhis2DashboardItem,
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,
 
-    // Search tools
+    // Complex form creation tool
+    createDhis2ReportingForm,
+
+    // Data retrieval tools
+    getDhis2DataValues,
+
+    // Search tools - Extended
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
+    searchDhis2CategoryOptions,
+    searchDhis2OrganisationUnitGroups,
+    searchDhis2OrganisationUnitGroupSets,
     searchDhis2DataSets,
     searchDhis2Programs,
+    searchDhis2TrackedEntityTypes,
+    searchDhis2TrackedEntityAttributes,
+    searchDhis2Validations,
+    searchDhis2OptionSets,
     searchDhis2Indicators,
+    searchDhis2Visualizations,
+    searchDhis2Dashboards,
 
-    // Get by ID tools
+    // Get by ID tools - Extended
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
+    getDhis2CategoryOptionById,
+    getDhis2OrganisationUnitGroupById,
+    getDhis2OrganisationUnitGroupSetById,
     getDhis2DataSetById,
     getDhis2ProgramById,
+    getDhis2TrackedEntityTypeById,
+    getDhis2TrackedEntityAttributeById,
+    getDhis2ValidationRuleById,
+    getDhis2OptionSetById,
+    getDhis2IndicatorById,
+    getDhis2VisualizationById,
+    getDhis2DashboardById,
 } from './structured-tools';

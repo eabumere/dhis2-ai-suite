@@ -1134,23 +1134,11 @@ export const createDhis2TrackedEntityType = createDhis2ResourceTool({
     description: "Create DHIS2 tracked entity types from schema-compliant objects",
     schema: Dhis2Schemas.TrackedEntityType,
     metadataType: "trackedEntityTypes",
-    defaultDependencies: [
-        {
-            type: "trackedEntityTypeAttributes",
-            name: "default",
-            createIfNotFound: true,
-            createParams: {
-                trackedEntityAttribute: { id: "default_tea" },
-                displayInList: false,
-                mandatory: false,
-                searchable: true,
-                sortOrder: 1
-            }
-        }
-    ],
+    // Note: trackedEntityTypeAttributes are properties of TrackedEntityType, not separate entities
+    // They cannot be created as standalone dependencies
     parseDescription: (description: string) => {
         const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.trackedEntityTypeAttributes = [];
+        properties.trackedEntityTypeAttributes = []; // Initialize as empty array
         properties.allowAuditLog = false;
         return { name, properties };
     }

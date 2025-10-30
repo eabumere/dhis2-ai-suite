@@ -1239,6 +1239,7 @@ export const createDhis2Option = createLLMFirstTool({
         sortOrder: z.number().int().min(1).describe("Sort order for the option (must be >= 1)")
     }),
     metadataType: "options",
+    dhis2SchemaName: "Option", // Validates against actual DHIS2 Option schema
 });
 
 export const createDhis2DataElement = createLLMFirstTool({
@@ -1253,6 +1254,7 @@ export const createDhis2DataElement = createLLMFirstTool({
         zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant")
     }),
     metadataType: "dataElements",
+    dhis2SchemaName: "DataElement", // Validates against actual DHIS2 DataElement schema
     dependencies: [
         {
             type: "categoryCombos",

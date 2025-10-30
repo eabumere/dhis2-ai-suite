@@ -31,68 +31,87 @@ export interface LLMToolConfig<T extends z.ZodSchema> {
 
 /**
  * LLM-First Tool Factory
- * Pure tool calling architecture: LLM handles everything
+ * Pure tool calling architecture: LLM handles everything, we handle validation & DHIS2 format
  */
 export function createLLMFirstTool<T extends z.ZodSchema>(
-    config: LLMToolConfig<T>
+    config: LLMToolConfig<T> & { dhis2SchemaName?: keyof typeof import('./schemas').Dhis2Schemas }
 ) {
     return tool(
         async (params: z.infer<T>) => {
             try {
-                // LLM provides structured parameters directly - no parsing needed
-                const resourceData = params;
+                // LLM provides structured parameters directly
+                const llmInput = params as any;
 
-                // Generate ID if not provided
-                const id = (resourceData as any).id || await generateDhis2Id();
-                const dataWithId = { ...resourceData, id };
+                // 1. Transform LLM input to full DHIS2 object
+                const dhis2Object = {
+                    // LLM-provided fields
+                    ...llmInput,
 
-                // Generate commonly derived fields
-                const finalData = {
-                    ...dataWithId,
-                    name: dataWithId.name,
-                    displayName: dataWithId.displayName || dataWithId.name,
-                    shortName: dataWithId.shortName || generateShortName(dataWithId.name || 'Unknown'),
+                    // Auto-generate required fields if missing
+                    id: llmInput.id || await generateDhis2Id(),
+                    name: llmInput.name,
+                    displayName: llmInput.displayName || llmInput.name,
+                    shortName: llmInput.shortName || generateShortName(llmInput.name || 'Unknown'),
+
+                    // Special handling for codes - auto-generate if not provided
+                    ...(llmInput.code ? {} : {
+                        code: llmInput.name ?
+                            llmInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
+                            `CODE_${Date.now()}`
+                    })
                 };
 
-                // Resolve dependencies using LLM-provided dependency info or defaults
-                const resolvedDeps = await resolveDependencies(
-                    config.schema,
-                    config.dependencies || []
-                );
+                // 2. Use DLHIS2 schema for validation if provided
+                const schemaToUse = config.dhis2SchemaName ?
+                    (await import('./schemas')).Dhis2Schemas[config.dhis2SchemaName] :
+                    config.schema;
 
-                // Merge resolved dependencies
-                const finalResourceData = {
-                    ...finalData,
-                    ...resolvedDeps,
-                };
-
-                // Validate against schema
-                const validation = validateResourceData(config.schema, finalResourceData);
+                // Validate against DHIS2 schema
+                const validation = validateResourceData(schemaToUse, dhis2Object);
                 if (!validation.success) {
                     return JSON.stringify({
                         success: false,
                         error: `Validation failed: ${(validation as any).errors?.join(', ') || 'Unknown validation error'}`,
+                        provided: llmInput,
+                        required: 'Depends on DHIS2 schema requirements'
                     });
                 }
 
-                // Create in DHIS2
+                // 3. Resolve dependencies (default category combos for data elements, etc.)
+                if (config.dependencies && config.dependencies.length > 0) {
+                    const resolvedDeps = await resolveDependencies(
+                        schemaToUse,
+                        config.dependencies
+                    );
+                    validation.data = {
+                        ...validation.data,
+                        ...resolvedDeps,
+                    };
+                }
+
+                // 4. Create in DHIS2
                 const createResult = await createDhis2Metadata(
                     config.metadataType,
-                    validation.data
+                    [validation.data]
                 );
 
-                // Track in conversation context
+                // 5. Track in conversation context
                 try {
                     addResourceToContext(validation.data.id, config.metadataType, validation.data.name, 'created');
                 } catch (contextError) {
                     console.warn('Failed to add resource to context:', contextError);
                 }
 
+                // 6. Return success response
                 return JSON.stringify({
                     success: true,
-                    message: `${config.metadataType} created successfully`,
-                    data: validation.data,
-                    apiResponse: createResult
+                    message: `Successfully created ${config.metadataType.slice(0, -1)}: ${validation.data.name}`,
+                    id: validation.data.id,
+                    name: validation.data.name,
+                    code: validation.data.code,
+                    sortOrder: validation.data.sortOrder,
+                    llm_input: llmInput,
+                    dhis2_object: validation.data
                 });
 
             } catch (error) {
@@ -100,14 +119,15 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 return JSON.stringify({
                     success: false,
                     error: `Failed to create resource: ${error.message}`,
-                    params
+                    tool: config.name,
+                    llm_params: params
                 });
             }
         },
         {
             name: config.name,
             description: config.description,
-            schema: config.schema.describe(`Parameters for creating DHIS2 ${config.metadataType}`),
+            schema: config.schema.describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with these properties`),
         }
     );
 }

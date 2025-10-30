@@ -1271,6 +1271,18 @@ export const createDhis2DataElement = createLLMFirstTool({
     ]
 });
 
+export const createDhis2OptionSet = createLLMFirstTool({
+    name: "create_dhis2_option_set",
+    description: "Create DHIS2 option sets that define dropdown lists for data elements. Option sets contain multiple mutually exclusive options. Examples: 'Sex (Male/Female)', 'Vaccine Types', 'Blood Groups (A/B/AB/O)', 'Yes/No/Maybe'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the option set"),
+        description: z.string().optional().describe("Description of what this option set represents"),
+        valueType: z.enum(['TEXT', 'NUMBER']).default('TEXT').describe("The data type - TEXT for text options, NUMBER for numeric codes")
+    }),
+    metadataType: "optionSets",
+    dhis2SchemaName: "OptionSet" // Validates against actual DHIS2 OptionSet schema
+});
+
 // Export all tools
 export const Dhis2StructuredTools = {
     // Creation tools - Core

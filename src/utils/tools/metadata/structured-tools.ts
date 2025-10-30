@@ -16,7 +16,7 @@ import {
 // DataElement Tool
 export const createDhis2DataElement = createDhis2ResourceTool({
     name: "create_dhis2_data_element",
-    description: "Create DHIS2 data elements from natural language descriptions. Supports both single and batch creation with automatic dependency resolution.",
+    description: "Create DHIS2 data elements that collect data values. Data elements are fields in forms that store measurable data like numbers, text, dates, or selections from option sets. Examples: 'HIV test result (Yes/No)', 'Number of patients', 'Age in years', 'Registration date'.",
     schema: Dhis2Schemas.DataElement,
     metadataType: "dataElements",
     defaultDependencies: [
@@ -445,7 +445,7 @@ export const createDhis2ValidationRule = createDhis2ResourceTool({
 // Option Creation Tool (standalone options)
 export const createDhis2Option = createDhis2ResourceTool({
     name: "create_dhis2_option",
-    description: "Create DHIS2 options from natural language descriptions. Use for standalone options that may belong to option sets.",
+    description: "Create individual DHIS2 option values like 'Yes', 'No', 'Male', 'Female', 'High', 'Low', 'Positive', 'Negative'. Use for option values that appear in dropdown lists, not for creating data collection fields. Examples: create option 'Agreed', create option 'Critical Priority'.",
     schema: Dhis2Schemas.Option,
     metadataType: "options",
     parseDescription: (description: string) => {

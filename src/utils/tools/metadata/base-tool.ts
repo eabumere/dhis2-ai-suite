@@ -53,12 +53,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                     displayName: llmInput.displayName || llmInput.name,
                     shortName: llmInput.shortName || generateShortName(llmInput.name || 'Unknown'),
 
-                    // Special handling for codes - auto-generate if not provided
-                    ...(llmInput.code ? {} : {
-                        code: llmInput.name ?
-                            llmInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
-                            `CODE_${Date.now()}`
-                    })
+                    // Explicitly generate code if not provided
+                    code: llmInput.code || (llmInput.name ?
+                        llmInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
+                        `CODE_${Date.now()}`)
                 };
 
                 // 2. Use DLHIS2 schema for validation if provided

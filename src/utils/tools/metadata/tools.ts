@@ -17,6 +17,7 @@ export {
     createDhis2Indicator,
     createDhis2IndicatorType,
     createDhis2ValidationRule,
+    createDhis2Option,
     createDhis2OptionSet,
     createDhis2Visualization,
     createDhis2Dashboard,
@@ -37,16 +38,16 @@ export {
     updateDhis2Program,
     updateDhis2TrackedEntityType,
     updateDhis2TrackedEntityAttribute,
-    updateDhis2ProgramStage,
-    updateDhis2ProgramRule,
-    updateDhis2ProgramIndicator,
+    // updateDhis2ProgramStage, // TODO: Implement
+    // updateDhis2ProgramRule, // TODO: Implement
+    // updateDhis2ProgramIndicator, // TODO: Implement
     updateDhis2Indicator,
     updateDhis2IndicatorType,
     updateDhis2ValidationRule,
     updateDhis2OptionSet,
     updateDhis2Visualization,
     updateDhis2Dashboard,
-    updateDhis2DashboardItem,
+    // updateDhis2DashboardItem, // TODO: Implement
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,
@@ -62,33 +63,33 @@ export {
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
-    searchDhis2CategoryOptions,
-    searchDhis2OrganisationUnitGroups,
-    searchDhis2OrganisationUnitGroupSets,
+    // searchDhis2CategoryOptions, // TODO: Implement
+    // searchDhis2OrganisationUnitGroups, // TODO: Implement
+    // searchDhis2OrganisationUnitGroupSets, // TODO: Implement
     searchDhis2DataSets,
     searchDhis2Programs,
-    searchDhis2TrackedEntityTypes,
-    searchDhis2TrackedEntityAttributes,
-    searchDhis2Validations,
-    searchDhis2OptionSets,
+    // searchDhis2TrackedEntityTypes, // TODO: Implement
+    // searchDhis2TrackedEntityAttributes, // TODO: Implement
+    // searchDhis2Validations, // TODO: Implement
+    // searchDhis2OptionSets, // TODO: Implement
     searchDhis2Indicators,
-    searchDhis2Visualizations,
-    searchDhis2Dashboards,
+    // searchDhis2Visualizations, // TODO: Implement
+    // searchDhis2Dashboards, // TODO: Implement
 
     // Get by ID tools - Extended
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
+    // getDhis2CategoryOptionById, // TODO: Implement
+    // getDhis2OrganisationUnitGroupById, // TODO: Implement
+    // getDhis2OrganisationUnitGroupSetById, // TODO: Implement
     getDhis2DataSetById,
     getDhis2ProgramById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
+    // getDhis2TrackedEntityTypeById, // TODO: Implement
+    // getDhis2TrackedEntityAttributeById, // TODO: Implement
+    // getDhis2ValidationRuleById, // TODO: Implement
+    // getDhis2OptionSetById, // TODO: Implement
+    // getDhis2IndicatorById, // TODO: Implement
+    // getDhis2VisualizationById, // TODO: Implement
+    // getDhis2DashboardById, // TODO: Implement
 } from './structured-tools';

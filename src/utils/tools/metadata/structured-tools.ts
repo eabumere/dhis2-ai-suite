@@ -442,6 +442,44 @@ export const createDhis2ValidationRule = createDhis2ResourceTool({
     }
 });
 
+// Option Creation Tool (standalone options)
+export const createDhis2Option = createDhis2ResourceTool({
+    name: "create_dhis2_option",
+    description: "Create DHIS2 options from natural language descriptions. Use for standalone options that may belong to option sets.",
+    schema: Dhis2Schemas.Option,
+    metadataType: "options",
+    parseDescription: (description: string) => {
+        const { name, properties } = parseNaturalLanguageDescription(description);
+
+        // Enhanced parsing for options
+        const descLower = description.toLowerCase();
+
+        // Parse quoted option name (e.g., "create option 'Agreed'")
+        const quotedMatch = description.match(/['"]([^'"]+)['"]/);
+        if (quotedMatch) {
+            properties.name = quotedMatch[1];
+            properties.displayName = quotedMatch[1];
+            properties.shortName = quotedMatch[1].length > 50 ? quotedMatch[1].substring(0, 47) + '...' : quotedMatch[1];
+        }
+
+        // Generate code from name if not specified
+        if (properties.name && !properties.code) {
+            // Convert spaces to underscores and make uppercase
+            properties.code = properties.name.toUpperCase().replace(/\s+/g, '_').replace(/[^A-Z0-9_]/g, '');
+        }
+
+        // Parse sortOrder (default to 0 if not specified)
+        const sortOrderMatch = descLower.match(/sort\s*order\s*(\d+)/i);
+        if (sortOrderMatch) {
+            properties.sortOrder = parseInt(sortOrderMatch[1]);
+        } else {
+            properties.sortOrder = 0; // Default sort order
+        }
+
+        return { name: properties.name || name, properties };
+    }
+});
+
 // Option Set Tool
 export const createDhis2OptionSet = createDhis2ResourceTool({
     name: "create_dhis2_option_set",
@@ -1300,6 +1338,7 @@ export const Dhis2StructuredTools = {
     createDhis2Indicator,
     createDhis2IndicatorType,
     createDhis2ValidationRule,
+    createDhis2Option,
     createDhis2OptionSet,
     createDhis2Visualization,
     createDhis2Dashboard,

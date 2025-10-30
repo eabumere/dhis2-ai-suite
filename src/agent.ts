@@ -1,14 +1,13 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { AzureChatOpenAI } from '@langchain/openai';
 import {
+    createDhis2DataElement, // LLM-FIRST: Pure tool calling architecture
+    createDhis2Option, // LLM-FIRST: Fixed option routing (the key fix!)
+    // LEGACY TOOLS (will be migrated) - Keeping them for now
     createDhis2Category,
     createDhis2CategoryCombo,
-    createDhis2DataElement,
-    createDhis2DataElementPure, // NEW LLM-FIRST: Pure tool calling architecture
     createDhis2DataSet,
     createDhis2Indicator,
-    createDhis2Option,
-    createDhis2OptionPure, // NEW LLM-FIRST: Pure tool calling architecture (the fix!)
     createDhis2OptionSet,
     createDhis2OrganisationUnit,
     createDhis2Program, createDhis2ReportingForm,
@@ -57,15 +56,17 @@ const model = new AzureChatOpenAI({
 export const metadataAgent = createReactAgent({
   llm: model,
   tools: [
-    // Creation tools for all resource types
-    createDhis2DataElementPure, // NEW LLM-FIRST: Pure tool calling (replaces old parsing logic)
+    // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
+    createDhis2DataElement, // LLM-FIRST: Pure tool calling (replaces ALL custom parsing)
+    createDhis2Option, // LLM-FIRST: FIXED OPTION ROUTING (the key solution!)
+
+    // ████████ LEGACY TOOLS (will be migrated) ████████
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2DataSet,
     createDhis2Program,
     createDhis2Indicator,
-    createDhis2OptionPure, // NEW LLM-FIRST: The fixed option tool (LLM handles all NL processing!)
     createDhis2ValidationRule,
     createDhis2OptionSet,
 

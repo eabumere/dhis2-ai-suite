@@ -13,69 +13,7 @@ import {
 } from './helpers';
 
 
-// DataElement Tool
-export const createDhis2DataElement = createDhis2ResourceTool({
-    name: "create_dhis2_data_element",
-    description: "Create DHIS2 data elements that collect data values. Data elements are fields in forms that store measurable data like numbers, text, dates, or selections from option sets. Examples: 'HIV test result (Yes/No)', 'Number of patients', 'Age in years', 'Registration date'.",
-    schema: Dhis2Schemas.DataElement,
-    metadataType: "dataElements",
-    defaultDependencies: [
-        {
-            type: "categoryCombos",
-            name: "default",
-            createIfNotFound: true,
-            createParams: {
-                name: "Default",
-                displayName: "Default",
-                shortName: "Default",
-                dataDimensionType: "DISAGGREGATION",
-                categories: []
-            }
-        }
-    ],
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
 
-        // Enhanced parsing for data elements
-        const descLower = description.toLowerCase();
-
-        // Parse value type with more specific patterns
-        if (descLower.includes('percentage') || descLower.includes('percent')) {
-            properties.valueType = 'NUMBER';
-            properties.aggregationType = 'AVERAGE';
-        } else if (descLower.includes('count') || descLower.includes('number of')) {
-            properties.valueType = 'INTEGER';
-            properties.aggregationType = 'COUNT';
-        } else if (descLower.includes('age')) {
-            properties.valueType = 'AGE';
-            properties.aggregationType = 'AVERAGE';
-        } else if (descLower.includes('coordinate') || descLower.includes('location')) {
-            properties.valueType = 'COORDINATE';
-            properties.aggregationType = 'NONE';
-        } else if (descLower.includes('yes/no') || descLower.includes('true/false') || descLower.includes('boolean')) {
-            properties.valueType = 'BOOLEAN';
-            properties.aggregationType = 'COUNT';
-        } else if (descLower.includes('file') || descLower.includes('document')) {
-            properties.valueType = 'FILE_RESOURCE';
-            properties.aggregationType = 'NONE';
-        } else if (descLower.includes('url') || descLower.includes('link')) {
-            properties.valueType = 'URL';
-            properties.aggregationType = 'NONE';
-        }
-
-        // Parse zero significance
-        if (descLower.includes('zero is significant') || descLower.includes('include zero')) {
-            properties.zeroIsSignificant = true;
-        }
-
-        // Parse description from the original description
-        if (description.length > name.length) {
-            properties.description = description;
-        }
-
-        return { name, properties };
-    }
-});
 
 // OrganisationUnit Tool
 export const createDhis2OrganisationUnit = createDhis2ResourceTool({
@@ -442,43 +380,7 @@ export const createDhis2ValidationRule = createDhis2ResourceTool({
     }
 });
 
-// Option Creation Tool (standalone options)
-export const createDhis2Option = createDhis2ResourceTool({
-    name: "create_dhis2_option",
-    description: "Create individual DHIS2 option values like 'Yes', 'No', 'Male', 'Female', 'High', 'Low', 'Positive', 'Negative'. Use for option values that appear in dropdown lists, not for creating data collection fields. Examples: create option 'Agreed', create option 'Critical Priority'.",
-    schema: Dhis2Schemas.Option,
-    metadataType: "options",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
 
-        // Enhanced parsing for options
-        const descLower = description.toLowerCase();
-
-        // Parse quoted option name (e.g., "create option 'Agreed'")
-        const quotedMatch = description.match(/['"]([^'"]+)['"]/);
-        if (quotedMatch) {
-            properties.name = quotedMatch[1];
-            properties.displayName = quotedMatch[1];
-            properties.shortName = quotedMatch[1].length > 50 ? quotedMatch[1].substring(0, 47) + '...' : quotedMatch[1];
-        }
-
-        // Generate code from name if not specified
-        if (properties.name && !properties.code) {
-            // Convert spaces to underscores and make uppercase
-            properties.code = properties.name.toUpperCase().replace(/\s+/g, '_').replace(/[^A-Z0-9_]/g, '');
-        }
-
-        // Parse sortOrder (default to 0 if not specified)
-        const sortOrderMatch = descLower.match(/sort\s*order\s*(\d+)/i);
-        if (sortOrderMatch) {
-            properties.sortOrder = parseInt(sortOrderMatch[1]);
-        } else {
-            properties.sortOrder = 0; // Default sort order
-        }
-
-        return { name: properties.name || name, properties };
-    }
-});
 
 // Option Set Tool
 export const createDhis2OptionSet = createDhis2ResourceTool({
@@ -1323,23 +1225,24 @@ export const createDhis2Event = tool(
 // Pure tool calling: LLM handles all NL processing and parameter extraction
 // =============================================================================
 
-// LLM-First Option Creation Tool (the corrected version)
-export const createDhis2OptionPure = createLLMFirstTool({
-    name: "create_dhis2_option_llm",
+// TODO: Migrate ALL tools to LLM-first architecture (replace all existing tools below)
+
+// LLM-First Creation Tools (new standard - LLM handles all NL processing)
+export const createDhis2Option = createLLMFirstTool({
+    name: "create_dhis2_option",
     description: "Create individual DHIS2 option values like 'Yes', 'No', 'Male', 'Female', 'High', 'Low', 'Positive', 'Negative'. Use for option values that appear in dropdown lists, not for creating data collection fields. Examples: create option 'Agreed', create option 'Critical Priority'.",
     schema: z.object({
         name: z.string().min(1).describe("The name of the option value"),
         displayName: z.string().optional().describe("Display name (defaults to name)"),
         shortName: z.string().optional().describe("Short name (defaults to name)"),
-        code: z.string().optional().describe("Code for the option (auto-generated from name if not provided)"),
-        sortOrder: z.number().int().min(0).default(0).describe("Sort order for the option")
+        code: z.string().min(1).describe("Unique code for the option - will auto-generate from name if not provided"),
+        sortOrder: z.number().int().min(1).describe("Sort order for the option (must be >= 1)")
     }),
     metadataType: "options",
 });
 
-// LLM-First Data Element Creation Tool
-export const createDhis2DataElementPure = createLLMFirstTool({
-    name: "create_dhis2_data_element_llm",
+export const createDhis2DataElement = createLLMFirstTool({
+    name: "create_dhis2_data_element",
     description: "Create DHIS2 data elements that collect data values. Data elements are fields in forms that store measurable data like numbers, text, dates, or selections from option sets. Examples: 'HIV test result (Yes/No)', 'Number of patients', 'Age in years', 'Registration date'.",
     schema: z.object({
         name: z.string().min(1).describe("The name of the data element"),

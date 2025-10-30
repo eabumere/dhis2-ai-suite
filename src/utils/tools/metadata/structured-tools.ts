@@ -1296,6 +1296,91 @@ export const createDhis2IndicatorType = createLLMFirstTool({
     dhis2SchemaName: "IndicatorType" // Validates against actual DHIS2 IndicatorType schema
 });
 
+export const createDhis2OrganisationUnit = createLLMFirstTool({
+    name: "create_dhis2_organisation_unit",
+    description: "Create DHIS2 organisation units for geographic/administrative hierarchy. These represent facilities, regions, and administrative divisions in your health system. Examples: 'Country Hospital', 'Region A', 'District Clinic', 'National Ministry'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the organisation unit"),
+        level: z.number().int().min(1).max(5).default(1).describe("Administrative level in hierarchy (1=country, 2=province/state, 3=district, 4=sub-district, 5=facility)"),
+        path: z.string().optional().describe("Full hierarchical path (auto-generated if not provided)")
+    }),
+    metadataType: "organisationUnits",
+    dhis2SchemaName: "OrganisationUnit" // Validates against actual DHIS2 OrganisationUnit schema
+});
+
+// Update the exports to include the new tool
+export const Dhis2StructuredTools = {
+    // Creation tools - Core
+    createDhis2DataElement,
+    createDhis2OrganisationUnit, // Updated to prioritize LLM-first version
+    createDhis2Category,
+    createDhis2CategoryCombo,
+    createDhis2CategoryOption,
+    createDhis2DataSet,
+    createDhis2OrganisationUnitGroup,
+    createDhis2OrganisationUnitGroupSet,
+    createDhis2Program,
+    createDhis2TrackedEntityType,
+    createDhis2TrackedEntityAttribute,
+    createDhis2ProgramStage,
+    createDhis2ProgramRule,
+    createDhis2ProgramIndicator,
+    createDhis2Indicator,
+    createDhis2IndicatorType,
+    createDhis2ValidationRule,
+    createDhis2Option,
+    createDhis2OptionSet,
+    createDhis2Visualization,
+    createDhis2Dashboard,
+    createDhis2DashboardItem,
+    createDhis2TrackedEntityInstance,
+    createDhis2Enrollment,
+    createDhis2Event,
+
+    // Update tools - Core
+    updateDhis2DataElement,
+    updateDhis2OrganisationUnit,
+    updateDhis2Category,
+    updateDhis2CategoryCombo,
+    updateDhis2CategoryOption,
+    updateDhis2DataSet,
+    updateDhis2OrganisationUnitGroup,
+    updateDhis2OrganisationUnitGroupSet,
+    updateDhis2Program,
+    updateDhis2TrackedEntityType,
+    updateDhis2TrackedEntityAttribute,
+    updateDhis2Indicator,
+    updateDhis2IndicatorType,
+    updateDhis2ValidationRule,
+    updateDhis2OptionSet,
+    updateDhis2Visualization,
+    updateDhis2Dashboard,
+
+    // Aggregated metadata creation tool
+    createDhis2AggregatedMetadata,
+
+    // Complex form creation tool
+    createDhis2ReportingForm,
+
+    // Data retrieval tools
+    getDhis2DataValues,
+
+    // Search tools - Existing
+    searchDhis2DataElements,
+    searchDhis2OrganisationUnits,
+    searchDhis2Categories,
+    searchDhis2CategoryCombos,
+    searchDhis2DataSets,
+    searchDhis2Programs,
+    searchDhis2Indicators,
+
+    // Get by ID tools - Existing
+    getDhis2DataElementById,
+    getDhis2OrganisationUnitById,
+    getDhis2CategoryById,
+    getDhis2DataSetById,
+    getDhis2ProgramById,
+
 // Export all tools
 export const Dhis2StructuredTools = {
     // Creation tools - Core

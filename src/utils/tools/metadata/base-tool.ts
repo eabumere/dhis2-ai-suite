@@ -12,6 +12,107 @@ import {
 } from './helpers';
 
 /**
+ * New LLM-First Tool Configuration
+ * Pure tool calling: LLM selects tool + extracts parameters from schema
+ * No custom NL processing in tools - let LLM handle everything
+ */
+export interface LLMToolConfig<T extends z.ZodSchema> {
+    name: string;
+    description: string;           // Clear, specific description for LLM tool selection
+    schema: T;                   // Pure Zod schema for LLM parameter extraction
+    metadataType: string;        // DHIS2 API endpoint
+    dependencies?: Array<{       // Optional default dependencies
+        type: string;
+        name: string;
+        createIfNotFound?: boolean;
+        createParams?: Record<string, any>;
+    }>;
+}
+
+/**
+ * LLM-First Tool Factory
+ * Pure tool calling architecture: LLM handles everything
+ */
+export function createLLMFirstTool<T extends z.ZodSchema>(
+    config: LLMToolConfig<T>
+) {
+    return tool(
+        async (params: z.infer<T>) => {
+            try {
+                // LLM provides structured parameters directly - no parsing needed
+                const resourceData = params;
+
+                // Generate ID if not provided
+                const id = (resourceData as any).id || await generateDhis2Id();
+                const dataWithId = { ...resourceData, id };
+
+                // Generate commonly derived fields
+                const finalData = {
+                    ...dataWithId,
+                    name: dataWithId.name,
+                    displayName: dataWithId.displayName || dataWithId.name,
+                    shortName: dataWithId.shortName || generateShortName(dataWithId.name || 'Unknown'),
+                };
+
+                // Resolve dependencies using LLM-provided dependency info or defaults
+                const resolvedDeps = await resolveDependencies(
+                    config.schema,
+                    config.dependencies || []
+                );
+
+                // Merge resolved dependencies
+                const finalResourceData = {
+                    ...finalData,
+                    ...resolvedDeps,
+                };
+
+                // Validate against schema
+                const validation = validateResourceData(config.schema, finalResourceData);
+                if (!validation.success) {
+                    return JSON.stringify({
+                        success: false,
+                        error: `Validation failed: ${(validation as any).errors?.join(', ') || 'Unknown validation error'}`,
+                    });
+                }
+
+                // Create in DHIS2
+                const createResult = await createDhis2Metadata(
+                    config.metadataType,
+                    validation.data
+                );
+
+                // Track in conversation context
+                try {
+                    addResourceToContext(validation.data.id, config.metadataType, validation.data.name, 'created');
+                } catch (contextError) {
+                    console.warn('Failed to add resource to context:', contextError);
+                }
+
+                return JSON.stringify({
+                    success: true,
+                    message: `${config.metadataType} created successfully`,
+                    data: validation.data,
+                    apiResponse: createResult
+                });
+
+            } catch (error) {
+                console.error(`Error in ${config.name}:`, error);
+                return JSON.stringify({
+                    success: false,
+                    error: `Failed to create resource: ${error.message}`,
+                    params
+                });
+            }
+        },
+        {
+            name: config.name,
+            description: config.description,
+            schema: config.schema.describe(`Parameters for creating DHIS2 ${config.metadataType}`),
+        }
+    );
+}
+
+/**
  * Configuration for creating a DHIS2 resource tool
  */
 export interface Dhis2ToolConfig<T extends z.ZodSchema> {

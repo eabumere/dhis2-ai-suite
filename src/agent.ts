@@ -4,9 +4,11 @@ import {
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2DataElement,
+    createDhis2DataElementPure, // NEW LLM-FIRST: Pure tool calling architecture
     createDhis2DataSet,
     createDhis2Indicator,
     createDhis2Option,
+    createDhis2OptionPure, // NEW LLM-FIRST: Pure tool calling architecture (the fix!)
     createDhis2OptionSet,
     createDhis2OrganisationUnit,
     createDhis2Program, createDhis2ReportingForm,
@@ -56,14 +58,14 @@ export const metadataAgent = createReactAgent({
   llm: model,
   tools: [
     // Creation tools for all resource types
-    createDhis2DataElement,
+    createDhis2DataElementPure, // NEW LLM-FIRST: Pure tool calling (replaces old parsing logic)
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2DataSet,
     createDhis2Program,
     createDhis2Indicator,
-    createDhis2Option,
+    createDhis2OptionPure, // NEW LLM-FIRST: The fixed option tool (LLM handles all NL processing!)
     createDhis2ValidationRule,
     createDhis2OptionSet,
 

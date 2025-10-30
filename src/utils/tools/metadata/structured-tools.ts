@@ -1,4 +1,4 @@
-import { createDhis2GetByIdTool, createDhis2ResourceTool, createDhis2SearchTool, createDhis2UpdateTool } from './base-tool';
+import { createDhis2GetByIdTool, createDhis2ResourceTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool, LLMToolConfig } from './base-tool';
 import { Dhis2Schemas } from './schemas';
 import { parseNaturalLanguageDescription, parseExpressionForDataElements, generateDataElementFromExpression } from './helpers';
 import { tool } from '@langchain/core/tools';
@@ -1317,6 +1317,54 @@ export const createDhis2Event = tool(
 );
 
 
+
+// =============================================================================
+// LLM-FIRST TOOLS - NEW ARCHITECTURE
+// Pure tool calling: LLM handles all NL processing and parameter extraction
+// =============================================================================
+
+// LLM-First Option Creation Tool (the corrected version)
+export const createDhis2OptionPure = createLLMFirstTool({
+    name: "create_dhis2_option_llm",
+    description: "Create individual DHIS2 option values like 'Yes', 'No', 'Male', 'Female', 'High', 'Low', 'Positive', 'Negative'. Use for option values that appear in dropdown lists, not for creating data collection fields. Examples: create option 'Agreed', create option 'Critical Priority'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the option value"),
+        displayName: z.string().optional().describe("Display name (defaults to name)"),
+        shortName: z.string().optional().describe("Short name (defaults to name)"),
+        code: z.string().optional().describe("Code for the option (auto-generated from name if not provided)"),
+        sortOrder: z.number().int().min(0).default(0).describe("Sort order for the option")
+    }),
+    metadataType: "options",
+});
+
+// LLM-First Data Element Creation Tool
+export const createDhis2DataElementPure = createLLMFirstTool({
+    name: "create_dhis2_data_element_llm",
+    description: "Create DHIS2 data elements that collect data values. Data elements are fields in forms that store measurable data like numbers, text, dates, or selections from option sets. Examples: 'HIV test result (Yes/No)', 'Number of patients', 'Age in years', 'Registration date'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the data element"),
+        valueType: z.enum(['TEXT', 'NUMBER', 'INTEGER', 'BOOLEAN', 'DATE', 'DATETIME']).default('TEXT').describe("The data type"),
+        domainType: z.enum(['AGGREGATE', 'TRACKER']).default('AGGREGATE').describe("Domain type"),
+        aggregationType: z.enum(['SUM', 'AVERAGE', 'COUNT', 'NONE']).optional().describe("How values are aggregated"),
+        description: z.string().optional().describe("Description of the data element"),
+        zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant")
+    }),
+    metadataType: "dataElements",
+    dependencies: [
+        {
+            type: "categoryCombos",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                name: "Default",
+                displayName: "Default",
+                shortName: "Default",
+                dataDimensionType: "DISAGGREGATION",
+                categories: []
+            }
+        }
+    ]
+});
 
 // Export all tools
 export const Dhis2StructuredTools = {

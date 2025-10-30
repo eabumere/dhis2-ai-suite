@@ -10,5 +10,8 @@ export * from './batch-manager';
 // Export the complete tools collection
 export { Dhis2StructuredTools } from './structured-tools';
 
+// Explicit exports for new LLM-first tools
+export { createDhis2OptionPure, createDhis2DataElementPure } from './structured-tools';
+
 // Export unified metadata manager
 export { getUnifiedMetadataManager, batchCreateMetadata, batchUpdateMetadata } from './batch-manager';

@@ -134,12 +134,8 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
 
         for (const categoryName of categoryNames) {
             try {
-                // Search for existing category by name
-                const searchResults = await searchDhis2Metadata('categories', {
-                    filter: `name:ilike:${categoryName}`,
-                    fields: 'id,name,dataDimension,dataDimensionType',
-                    paging: 'false'
-                });
+                // Search for existing category by name (exact match preferred)
+                const searchResults = await searchDhis2Metadata('categories', categoryName, 10);
 
                 let categoryId: string;
 
@@ -240,10 +236,36 @@ export const createDhis2DataSet = createLLMFirstTool({
     schema: z.object({
         name: z.string().min(1).describe("The name of the data set/reporting form"),
         description: z.string().optional().describe("Description of what this data set collects"),
-        periodType: z.enum(['Daily', 'Weekly', 'Monthly', 'Quarterly', 'SixMonthly', 'Yearly', 'FinancialApril', 'FinancialJuly', 'FinancialOct']).default('Monthly').describe("How often data is reported")
+        periodType: z.enum(['Daily', 'Weekly', 'Monthly', 'Quarterly', 'SixMonthly', 'Yearly', 'FinancialApril', 'FinancialJuly', 'FinancialOct']).default('Monthly').describe("How often data is reported"),
+        categoryComboName: z.string().optional().describe("Name of category combination to use for disaggregation (e.g., 'Age and Gender'). If not specified, uses a default category combination.")
     }),
     metadataType: "dataSets",
     dhis2SchemaName: "DataSet",
+    preparePayload: async (input) => {
+        let result = { ...input };
+
+        // If category combo name is specified, resolve it to category combo ID
+        if (result.categoryComboName) {
+            try {
+                const searchResults = await searchDhis2Metadata('categoryCombos', result.categoryComboName, 10);
+
+                const exactMatch = searchResults.find((combo: any) =>
+                    combo.name.toLowerCase() === result.categoryComboName!.toLowerCase()
+                ) || searchResults[0];
+
+                if (exactMatch) {
+                    result.categoryCombo = { id: exactMatch.id };
+                    console.log(`Resolved category combo "${result.categoryComboName}" to ID: ${exactMatch.id}`);
+                } else {
+                    console.warn(`Category combo "${result.categoryComboName}" not found. Dataset will use default category combo.`);
+                }
+            } catch (error) {
+                console.warn(`Failed to resolve category combo "${result.categoryComboName}":`, error);
+            }
+        }
+
+        return result;
+    },
     dependencies: [
         {
             type: "categoryCombos",
@@ -434,7 +456,7 @@ export const createDhis2IndicatorLegacy = tool(
             description: z.string().describe("Natural language description of the indicator, including the expression with data element references"),
             name: z.string().optional().describe("Override for the indicator name"),
             shortName: z.string().optional().describe("Override for the short name"),
-            annualized: z.boolean().optional().default(false).desrcribe("Whether the indicator is annualized"),
+            annualized: z.boolean().optional().default(false).describe("Whether the indicator is annualized"),
             numerator: z.string().optional().describe("Custom numerator expression"),
             denominator: z.string().optional().describe("Custom denominator expression"),
             indicatorType: z.string().optional().describe("Indicator type to use (defaults to auto-created type)"),

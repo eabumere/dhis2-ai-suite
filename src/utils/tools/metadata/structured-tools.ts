@@ -142,14 +142,63 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
 
                 let categoryId: string;
 
-                if (searchResults.length > 0 && searchResults[0].name === categoryName) {
-                    // Found existing category
-                    categoryId = searchResults[0].id;
+                // First check for exact name match
+                const exactMatch = searchResults.find((cat: any) => cat.name === categoryName);
+
+                if (exactMatch) {
+                    // Found existing category with exact name match
+                    categoryId = exactMatch.id;
                     console.log(`Found existing category "${categoryName}" with ID: ${categoryId}`);
                 } else {
-                    // Category doesn't exist, try to create it (this should be done by dependencies, but let's ensure it)
-                    // For now, we'll throw an error since we can't create categories without options from this context
-                    throw new Error(`Category "${categoryName}" does not exist. Please create the category first using "Create a category named '${categoryName}' with options".`);
+                    // No exact match found - create a new category with appropriate options
+                    console.log(`No exact match for "${categoryName}". Attempting to create new category.`);
+
+                    // Generate default options based on common category types
+                    let defaultOptions: string[] = [];
+                    if (categoryName.toLowerCase() === 'age' || categoryName.toLowerCase() === 'age groups') {
+                        defaultOptions = ['<5 years', '5-14 years', '15-49 years', '50+ years'];
+                    } else if (categoryName.toLowerCase() === 'gender' || categoryName.toLowerCase() === 'sex') {
+                        defaultOptions = ['Male', 'Female'];
+                    } else {
+                        // Generic fallback - this shouldn't happen but provides some options
+                        defaultOptions = ['Option 1', 'Option 2'];
+                    }
+
+                    // Create the category using the existing aggregated category creation approach
+                    const newCategoryId = await generateDhis2Id();
+                    const optionIds = await Promise.all(
+                        defaultOptions.map(async () => await generateDhis2Id())
+                    );
+
+                    // Build aggregated payload for the new category and options
+                    const newCategoryPayload = {
+                        categories: [{
+                            id: newCategoryId,
+                            name: categoryName,
+                            displayName: categoryName,
+                            shortName: categoryName.length > 50 ? categoryName.substring(0, 47) + '...' : categoryName,
+                            code: categoryName.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+                            dataDimension: true,
+                            dataDimensionType: 'DISAGGREGATION',
+                            categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
+                        }],
+                        options: defaultOptions.map((optionName: string, index: number) => ({
+                            id: optionIds[index],
+                            name: optionName,
+                            displayName: optionName,
+                            code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
+                            sortOrder: index + 1
+                        }))
+                    };
+
+                    // Create the category
+                    const categoryResult = await createDhis2MetadataAggregated(newCategoryPayload);
+                    if (categoryResult.results.some(r => r.type === 'categories' && r.created)) {
+                        categoryId = newCategoryId;
+                        console.log(`Successfully created new category "${categoryName}" with options: ${defaultOptions.join(', ')}`);
+                    } else {
+                        throw new Error(`Failed to create category "${categoryName}"`);
+                    }
                 }
 
                 resolvedCategories.push({ id: categoryId });

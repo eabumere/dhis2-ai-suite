@@ -1501,14 +1501,68 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         level: z.number().int().min(1).max(5).default(1).describe("Administrative level in hierarchy (1=country, 2=province/state, 3=district, 4=sub-district, 5=facility)"),
         openingDate: z.string().optional().describe("Date when the facility opened (ISO format, e.g., '2024-06-01')"),
         path: z.string().optional().describe("Full hierarchical path (auto-generated from parent if not provided)"),
-        parentId: z.string().optional().describe("ID of the parent organisation unit (used to build hierarchy)")
+        parentId: z.string().optional().describe("ID of the parent organisation unit (used to build hierarchy)"),
+        parentName: z.string().optional().describe("Name of the parent organisation unit to search and link to")
     }),
     metadataType: "organisationUnits",
     dhis2SchemaName: "OrganisationUnit", // Validates against actual DHIS2 OrganisationUnit schema
-    preparePayload: (input) => ({
-        ...input,
-        openingDate: input.openingDate || new Date().toISOString().split('T')[0]
-    })
+    preparePayload: async (input) => {
+        let { openingDate, parentId, parentName, path: inputPath, ...otherInputs } = input;
+
+        // Auto-generate opening date if not provided
+        openingDate = openingDate || new Date().toISOString().split('T')[0];
+
+        // If no parent specified, try to find a suitable parent based on level
+        if (!parentId && !parentName && input.level > 1) {
+            try {
+                // Search for parent organisations at level-1 (e.g., if creating level 4 district clinic, look for level 3 districts)
+                const parentLevel = input.level - 1;
+                const searchResults = await searchDhis2Metadata('organisationUnits', '', 20);
+
+                // Filter results to find organisations at the correct parent level
+                const potentialParents = searchResults.filter((org: any) => org.level === parentLevel);
+
+                if (potentialParents.length > 0) {
+                    // Use the first available parent (or intelligently choose based on context)
+                    const selectedParent = potentialParents[0];
+                    parentId = selectedParent.id;
+
+                    // If we have the parent's path, build the child's path from it
+                    const path = selectedParent.path ? `${selectedParent.path}/${await generateDhis2Id()}` : `/${selectedParent.id}/${await generateDhis2Id()}`;
+
+                    console.log(`Auto-selected parent organisation: ${selectedParent.name} (${selectedParent.id}) at level ${parentLevel} for child at level ${input.level}`);
+                    return { ...otherInputs, openingDate, parentId, path };
+                } else {
+                    console.warn(`No parent organisations found at level ${parentLevel} for creating child at level ${input.level}`);
+                }
+            } catch (error) {
+                console.warn('Failed to search for parent organisation units:', error);
+            }
+        }
+
+        // If we have parent name but not ID, search for it
+        if (!parentId && parentName) {
+            try {
+                const searchResults = await searchDhis2Metadata('organisationUnits', parentName, 10);
+                const matchingParent = searchResults.find((org: any) => org.name === parentName);
+                if (matchingParent) {
+                    parentId = matchingParent.id;
+
+                    // Build proper path from the parent's path
+                    const path = matchingParent.path ? `${matchingParent.path}/${await generateDhis2Id()}` : `/${matchingParent.id}/${await generateDhis2Id()}`;
+
+                    return { ...otherInputs, openingDate, parentId, path };
+                }
+            } catch (error) {
+                console.warn(`Failed to find parent organisation "${parentName}":`, error);
+            }
+        }
+
+        // Build path from parent ID if we have one, otherwise use provided path
+        const path = parentId ? `/${parentId}/${await generateDhis2Id()}` : inputPath || `/${await generateDhis2Id()}`;
+
+        return { ...otherInputs, openingDate, parentId, path };
+    }
 });
 
 export const createDhis2OrganisationUnitGroup = createLLMFirstTool({

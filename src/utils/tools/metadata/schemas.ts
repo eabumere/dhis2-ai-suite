@@ -51,6 +51,7 @@ export const OrganisationUnitSchema = z.object({
   code: z.string().optional(),
   level: z.number().int().min(1),
   path: z.string().min(1),
+  openingDate: z.string().optional(),
 });
 
 // Category Schema

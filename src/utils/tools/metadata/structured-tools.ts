@@ -43,7 +43,7 @@ export const createDhis2Category = tool(
                 categoryOptions.map(async () => await generateDhis2Id())
             );
 
-            // Build aggregated payload for both categories and options
+            // Build aggregated payload for both categories and category options
             const aggregatedPayload = {
                 categories: [{
                     id: categoryId,
@@ -55,10 +55,11 @@ export const createDhis2Category = tool(
                     dataDimensionType: dataDimensionType,
                     categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
                 }],
-                options: categoryOptions.map((optionName: string, index: number) => ({
+                categoryOptions: categoryOptions.map((optionName: string, index: number) => ({
                     id: optionIds[index],
                     name: optionName,
                     displayName: optionName,
+                    shortName: optionName.length > 50 ? optionName.substring(0, 47) + '...' : optionName,
                     code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
                     sortOrder: index + 1
                 }))
@@ -170,7 +171,7 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
                         defaultOptions.map(async () => await generateDhis2Id())
                     );
 
-                    // Build aggregated payload for the new category and options
+                    // Build aggregated payload for the new category and category options
                     const newCategoryPayload = {
                         categories: [{
                             id: newCategoryId,  // UID for ID field
@@ -182,10 +183,11 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
                             dataDimensionType: 'DISAGGREGATION',
                             categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
                         }],
-                        options: defaultOptions.map((optionName: string, index: number) => ({
+                        categoryOptions: defaultOptions.map((optionName: string, index: number) => ({
                             id: optionIds[index],  // UID for ID field
                             name: optionName,       // User-provided option name for name field
                             displayName: optionName,
+                            shortName: optionName.length > 50 ? optionName.substring(0, 47) + '...' : optionName,
                             code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
                             sortOrder: index + 1
                         }))
@@ -432,7 +434,7 @@ export const createDhis2IndicatorLegacy = tool(
             description: z.string().describe("Natural language description of the indicator, including the expression with data element references"),
             name: z.string().optional().describe("Override for the indicator name"),
             shortName: z.string().optional().describe("Override for the short name"),
-            annualized: z.boolean().optional().default(false).describe("Whether the indicator is annualized"),
+            annualized: z.boolean().optional().default(false).desrcribe("Whether the indicator is annualized"),
             numerator: z.string().optional().describe("Custom numerator expression"),
             denominator: z.string().optional().describe("Custom denominator expression"),
             indicatorType: z.string().optional().describe("Indicator type to use (defaults to auto-created type)"),

@@ -1507,8 +1507,6 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
     metadataType: "organisationUnits",
     dhis2SchemaName: "OrganisationUnit", // Validates against actual DHIS2 OrganisationUnit schema
     preparePayload: async (input) => {
-        console.log('DEBUG: preparePayload input:', JSON.stringify(input, null, 2));
-
         // Start with all original input - comprehensive copy
         let result = { ...input };
 
@@ -1522,13 +1520,9 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
             try {
                 const level = result.level || 1;
                 const parentLevel = level - 1;
-                console.log(`DEBUG: Searching for parent at level ${parentLevel} for child at level ${level}`);
 
                 const searchResults = await searchDhis2Metadata('organisationUnits', '', 20);
-                console.log(`DEBUG: Found ${searchResults.length} organisation units in search`);
-
                 const potentialParents = searchResults.filter((org: any) => org.level === parentLevel);
-                console.log(`DEBUG: Found ${potentialParents.length} potential parents at level ${parentLevel}`);
 
                 if (potentialParents.length > 0) {
                     const selectedParent = potentialParents[0];
@@ -1547,15 +1541,11 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         // Try to resolve parent by name if specified
         if (!result.parentId && result.parentName) {
             try {
-                console.log(`DEBUG: Searching for parent by name: ${result.parentName}`);
                 const searchResults = await searchDhis2Metadata('organisationUnits', result.parentName, 10);
                 const matchingParent = searchResults.find((org: any) => org.name === result.parentName);
                 if (matchingParent) {
                     result.parentId = matchingParent.id;
                     result.path = matchingParent.path ? `${matchingParent.path}/${await generateDhis2Id()}` : `/${matchingParent.id}/${await generateDhis2Id()}`;
-                    console.log(`Found parent by name: ${matchingParent.name} (${matchingParent.id})`);
-                } else {
-                    console.log(`No parent found with name: ${result.parentName}`);
                 }
             } catch (error) {
                 console.warn(`Failed to find parent organisation "${result.parentName}":`, error);
@@ -1565,10 +1555,8 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         // Generate path if still not set
         if (!result.path) {
             result.path = result.parentId ? `/${result.parentId}/${await generateDhis2Id()}` : `/${await generateDhis2Id()}`;
-            console.log(`Generated path: ${result.path}`);
         }
 
-        console.log('DEBUG: preparePayload result:', JSON.stringify(result, null, 2));
         return result;
     }
 });

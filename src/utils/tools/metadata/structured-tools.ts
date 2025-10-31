@@ -8,7 +8,8 @@ import {
     generateDataElementFromExpression,
     generateDhis2Id,
     parseExpressionForDataElements,
-    parseNaturalLanguageDescription
+    parseNaturalLanguageDescription,
+    searchDhis2Metadata
 } from './helpers';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
@@ -21,30 +22,99 @@ import { z } from 'zod';
 // Pure tool calling: LLM selects tool + extracts parameters from schema
 // =============================================================================
 
-// Category Tools - LLM-first versions
-export const createDhis2Category = createLLMFirstTool({
-    name: "create_dhis2_category",
-    description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option.",
-    schema: z.object({
-        name: z.string().min(1).describe("The name of the data disaggregation category"),
-        categoryOptions: z.array(z.string()).min(1).describe("List of category options like ['Male', 'Female'] or ['Urban', 'Rural']")
-    }),
-    metadataType: "categories",
-    dhis2SchemaName: "Category",
-    dependencies: [
-        {
-            type: "categoryOptions",
-            name: "default",
-            createIfNotFound: true,
-            createParams: {
-                name: "Default",
-                displayName: "Default",
-                shortName: "Default",
-                code: "DEFAULT"
+// Category Tools - Aggregated creation (creates category + options)
+export const createDhis2Category = tool(
+    async ({
+        name,
+        categoryOptions,
+        dataDimension = true,
+        dataDimensionType = 'DISAGGREGATION'
+    }: {
+        name: string;
+        categoryOptions: string[];
+        dataDimension?: boolean;
+        dataDimensionType?: 'DISAGGREGATION' | 'ATTRIBUTE';
+    }) => {
+        try {
+            const categoryId = await generateDhis2Id();
+
+            // Generate option IDs and create option entities
+            const optionIds = await Promise.all(
+                categoryOptions.map(async () => await generateDhis2Id())
+            );
+
+            // Build aggregated payload for both categories and options
+            const aggregatedPayload = {
+                categories: [{
+                    id: categoryId,
+                    name: name,
+                    displayName: name,
+                    shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+                    code: name.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+                    dataDimension: dataDimension,
+                    dataDimensionType: dataDimensionType,
+                    categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
+                }],
+                options: categoryOptions.map((optionName: string, index: number) => ({
+                    id: optionIds[index],
+                    name: optionName,
+                    displayName: optionName,
+                    code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
+                    sortOrder: index + 1
+                }))
+            };
+
+            console.log('Creating Gender category with options:', JSON.stringify(aggregatedPayload, null, 2));
+
+            const result = await createDhis2MetadataAggregated(aggregatedPayload);
+
+            // Add successfully created resources to context
+            for (const r of result.results) {
+                if (r.created) {
+                    const resourceType = r.type;
+                    const resource = aggregatedPayload[resourceType]?.find((res: any) => res.id === r.id);
+                    if (resource) {
+                        addResourceToContext(r.id!, resourceType, resource.name || `Unnamed ${resourceType}`, 'created');
+                    }
+                }
             }
+
+            const createdCount = result.results.filter(r => r.created).length;
+            const existingCount = result.results.filter(r => !r.created).length;
+
+            return JSON.stringify({
+                success: true,
+                message: `Successfully created category "${name}" with ${categoryOptions.length} options`,
+                categoryId,
+                categoryName: name,
+                optionIds,
+                optionsCreated: categoryOptions.length,
+                created: createdCount,
+                existing: existingCount,
+                total: result.results.length,
+                results: result.results,
+                apiResponse: result.response,
+            });
+
+        } catch (error) {
+            console.error('Error creating category with options:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to create category: ${error.message}`,
+            });
         }
-    ]
-});
+    },
+    {
+        name: "create_dhis2_category",
+        description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option and are created with separate option entities.",
+        schema: z.object({
+            name: z.string().min(1).describe("The name of the data disaggregation category"),
+            categoryOptions: z.array(z.string()).min(1).describe("List of category options like ['Male', 'Female'] or ['Urban', 'Rural']"),
+            dataDimension: z.boolean().default(true).describe("Whether this category can be used in data analysis"),
+            dataDimensionType: z.enum(['DISAGGREGATION', 'ATTRIBUTE']).default('DISAGGREGATION').describe("Whether this category is for data disaggregation or attribute-based categorization")
+        }),
+    }
+);
 
 export const createDhis2CategoryCombo = createLLMFirstTool({
     name: "create_dhis2_category_combo",
@@ -1521,7 +1591,16 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
                 const level = result.level || 1;
                 const parentLevel = level - 1;
 
-                const searchResults = await searchDhis2Metadata('organisationUnits', '', 20);
+                const searchResults = await fetch(
+                    `${process.env.DHIS2_API_BASE_URL}/organisationUnits?fields=id,name,code,displayName,path,level&paging=false`,
+                    {
+                        method: "GET",
+                        headers: {
+                            'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
+                            'Content-Type': 'application/json',
+                        },
+                    }
+                ).then(res => res.json()).then(data => data.organisationUnits || []);
                 const potentialParents = searchResults.filter((org: any) => org.level === parentLevel);
 
                 if (potentialParents.length > 0) {
@@ -1541,8 +1620,17 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         // Try to resolve parent by name if specified
         if (!result.parentId && result.parentName) {
             try {
-                const searchResults = await searchDhis2Metadata('organisationUnits', result.parentName, 10);
-                const matchingParent = searchResults.find((org: any) => org.name === result.parentName);
+                const searchResults = await fetch(
+                    `${process.env.DHIS2_API_BASE_URL}/organisationUnits?filter=name:ilike:${encodeURIComponent(result.parentName)}&fields=id,name,code,displayName,path,level&paging=false`,
+                    {
+                        method: "GET",
+                        headers: {
+                            'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
+                            'Content-Type': 'application/json',
+                        },
+                    }
+                ).then(res => res.json()).then(data => data.organisationUnits || []);
+                const matchingParent = (searchResults as any[]).find((org: any) => org.name === result.parentName);
                 if (matchingParent) {
                     result.parentId = matchingParent.id;
                     result.path = matchingParent.path ? `${matchingParent.path}/${await generateDhis2Id()}` : `/${matchingParent.id}/${await generateDhis2Id()}`;

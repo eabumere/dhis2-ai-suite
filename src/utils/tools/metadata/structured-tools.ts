@@ -1499,13 +1499,14 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         name: z.string().min(1).describe("The name of the organisation unit"),
         code: z.string().optional().describe("Unique code for the organization unit (e.g., 'SCC_2024', 'HC001')"),
         level: z.number().int().min(1).max(5).default(1).describe("Administrative level in hierarchy (1=country, 2=province/state, 3=district, 4=sub-district, 5=facility)"),
+        openingDate: z.string().optional().describe("Date when the facility opened (ISO format, e.g., '2024-06-01')"),
         path: z.string().optional().describe("Full hierarchical path (auto-generated from parent if not provided)"),
         parentId: z.string().optional().describe("ID of the parent organisation unit (used to build hierarchy)")
     }),
     metadataType: "organisationUnits",
     dhis2SchemaName: "OrganisationUnit", // Validates against actual DHIS2 OrganisationUnit schema
     preparePayload: (params) => {
-        const { name, code, level, path, parentId } = params;
+        const { name, code, level, openingDate, path, parentId } = params;
 
         return {
             name,
@@ -1513,6 +1514,7 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
             shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
             code,
             level,
+            openingDate: openingDate || new Date().toISOString().split('T')[0],
             path: path || `${parentId || ''}/${Math.random().toString(36).substr(2, 9)}`
         };
     }

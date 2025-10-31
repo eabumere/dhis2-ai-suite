@@ -173,8 +173,8 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
                     // Build aggregated payload for the new category and options
                     const newCategoryPayload = {
                         categories: [{
-                            id: newCategoryId,
-                            name: categoryName,
+                            id: newCategoryId,  // UID for ID field
+                            name: categoryName,  // User-provided category name for name field
                             displayName: categoryName,
                             shortName: categoryName.length > 50 ? categoryName.substring(0, 47) + '...' : categoryName,
                             code: categoryName.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
@@ -183,8 +183,8 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
                             categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
                         }],
                         options: defaultOptions.map((optionName: string, index: number) => ({
-                            id: optionIds[index],
-                            name: optionName,
+                            id: optionIds[index],  // UID for ID field
+                            name: optionName,       // User-provided option name for name field
                             displayName: optionName,
                             code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
                             sortOrder: index + 1

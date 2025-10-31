@@ -1,54 +1,37 @@
-import { createDhis2GetByIdTool, createDhis2ResourceTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool, LLMToolConfig } from './base-tool';
+import { createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool } from './base-tool';
 import { Dhis2Schemas } from './schemas';
-import { parseNaturalLanguageDescription, parseExpressionForDataElements, generateDataElementFromExpression } from './helpers';
-import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
 import {
     addResourceToContext,
     createDhis2Metadata,
-    createDhis2MetadataDirect,
     createDhis2MetadataAggregated,
+    createDhis2MetadataDirect,
+    generateDataElementFromExpression,
     generateDhis2Id,
-    searchDhis2Metadata,
+    parseExpressionForDataElements,
+    parseNaturalLanguageDescription
 } from './helpers';
+import { tool } from '@langchain/core/tools';
+import { z } from 'zod';
 
 
+// OrganisationUnit Tool - REMOVED (LLM-first version exists below)
 
+// =============================================================================
+// LLM-FIRST TOOLS - NEW ARCHITECTURE
+// Pure tool calling: LLM selects tool + extracts parameters from schema
+// =============================================================================
 
-// OrganisationUnit Tool
-export const createDhis2OrganisationUnit = createDhis2ResourceTool({
-    name: "create_dhis2_organisation_unit",
-    description: "Create DHIS2 organisation units from natural language descriptions.",
-    schema: Dhis2Schemas.OrganisationUnit,
-    metadataType: "organisationUnits",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Enhanced parsing for organisation units
-        const descLower = description.toLowerCase();
-
-        // Parse level (try to extract from description)
-        const levelMatch = descLower.match(/level\s*(\d+)/i);
-        if (levelMatch) {
-            properties.level = parseInt(levelMatch[1]);
-        } else {
-            properties.level = 1; // Default to level 1
-        }
-
-        // Generate a simple path (this would need to be enhanced based on parent units)
-        properties.path = `/${properties.level}`;
-
-        return { name, properties };
-    }
-});
-
-// Category and CategoryCombo Tools
-export const createDhis2Category = createDhis2ResourceTool({
+// Category Tools - LLM-first versions
+export const createDhis2Category = createLLMFirstTool({
     name: "create_dhis2_category",
-    description: "Create DHIS2 categories from natural language descriptions.",
-    schema: Dhis2Schemas.Category,
+    description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the data disaggregation category"),
+        categoryOptions: z.array(z.string()).min(1).describe("List of category options like ['Male', 'Female'] or ['Urban', 'Rural']")
+    }),
     metadataType: "categories",
-    defaultDependencies: [
+    dhis2SchemaName: "Category",
+    dependencies: [
         {
             type: "categoryOptions",
             name: "default",
@@ -60,25 +43,19 @@ export const createDhis2Category = createDhis2ResourceTool({
                 code: "DEFAULT"
             }
         }
-    ],
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Set defaults for category
-        properties.dataDimension = true;
-        properties.dataDimensionType = 'DISAGGREGATION';
-        properties.categoryOptions = [];
-
-        return { name, properties };
-    }
+    ]
 });
 
-export const createDhis2CategoryCombo = createDhis2ResourceTool({
+export const createDhis2CategoryCombo = createLLMFirstTool({
     name: "create_dhis2_category_combo",
-    description: "Create DHIS2 category combinations from natural language descriptions.",
-    schema: Dhis2Schemas.CategoryCombo,
+    description: "Create DHIS2 category combinations that combine multiple categories for complex disaggregation. For example, combine Age and Gender categories to get Age x Gender breakdowns. Requires at least one category.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the category combination"),
+        categories: z.array(z.string()).min(1).describe("List of category names to combine")
+    }),
     metadataType: "categoryCombos",
-    defaultDependencies: [
+    dhis2SchemaName: "CategoryCombo",
+    dependencies: [
         {
             type: "categories",
             name: "default",
@@ -92,25 +69,20 @@ export const createDhis2CategoryCombo = createDhis2ResourceTool({
                 categoryOptions: []
             }
         }
-    ],
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Set defaults for category combo
-        properties.dataDimensionType = 'DISAGGREGATION';
-        properties.categories = [];
-
-        return { name, properties };
-    }
+    ]
 });
 
-// DataSet Tool
-export const createDhis2DataSet = createDhis2ResourceTool({
+export const createDhis2DataSet = createLLMFirstTool({
     name: "create_dhis2_data_set",
-    description: "Create DHIS2 data sets from natural language descriptions.",
-    schema: Dhis2Schemas.DataSet,
+    description: "Create DHIS2 data sets that define reporting forms and data collection templates. Data sets specify what indicators are collected, the reporting frequency, and which organisation units submit the data. Examples: 'Monthly Immunization Report', 'Quarterly Financial Summary', 'Weekly Surveillance Data'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the data set/reporting form"),
+        description: z.string().optional().describe("Description of what this data set collects"),
+        periodType: z.enum(['Daily', 'Weekly', 'Monthly', 'Quarterly', 'SixMonthly', 'Yearly', 'FinancialApril', 'FinancialJuly', 'FinancialOct']).default('Monthly').describe("How often data is reported")
+    }),
     metadataType: "dataSets",
-    defaultDependencies: [
+    dhis2SchemaName: "DataSet",
+    dependencies: [
         {
             type: "categoryCombos",
             name: "default",
@@ -123,68 +95,24 @@ export const createDhis2DataSet = createDhis2ResourceTool({
                 categories: []
             }
         }
-    ],
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Enhanced parsing for data sets
-        const descLower = description.toLowerCase();
-
-        // Parse period type
-        if (descLower.includes('daily')) {
-            properties.periodType = 'Daily';
-        } else if (descLower.includes('weekly')) {
-            properties.periodType = 'Weekly';
-        } else if (descLower.includes('monthly')) {
-            properties.periodType = 'Monthly';
-        } else if (descLower.includes('quarterly')) {
-            properties.periodType = 'Quarterly';
-        } else if (descLower.includes('yearly') || descLower.includes('annual')) {
-            properties.periodType = 'Yearly';
-        } else {
-            properties.periodType = 'Monthly'; // Default
-        }
-
-        // Set default values
-        properties.dataSetElements = [];
-        properties.organisationUnits = [];
-
-        return { name, properties };
-    }
+    ]
 });
 
-// Program Tool
-export const createDhis2Program = createDhis2ResourceTool({
+export const createDhis2Program = createLLMFirstTool({
     name: "create_dhis2_program",
-    description: "Create DHIS2 programs from natural language descriptions.",
-    schema: Dhis2Schemas.Program,
+    description: "Create DHIS2 programs that define tracker or event-based data collection workflows. Programs are the top-level containers for tracker entities and their enrollment/enrollment processes. Examples: 'HIV Care Program', 'Tuberculosis Case Surveillance', 'Malaria Elimination Initiative'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the program/workflow"),
+        description: z.string().optional().describe("Description of the program's purpose and scope"),
+        programType: z.enum(['WITH_REGISTRATION', 'WITHOUT_REGISTRATION']).default('WITH_REGISTRATION').describe("WITH_REGISTRATION for tracker programs tracking individual entities over time, WITHOUT_REGISTRATION for event-only programs"),
+        version: z.number().int().min(1).default(1).describe("Version number of the program")
+    }),
     metadataType: "programs",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Enhanced parsing for programs
-        const descLower = description.toLowerCase();
-
-        // Parse program type
-        if (descLower.includes('registration') || descLower.includes('track')) {
-            properties.programType = 'WITH_REGISTRATION';
-        } else {
-            properties.programType = 'WITHOUT_REGISTRATION';
-        }
-
-        // Set defaults
-        properties.programStages = [];
-        properties.organisationUnits = [];
-
-        return { name, properties };
-    }
+    dhis2SchemaName: "Program"
 });
 
-/**
- * Enhanced indicator creation with automatic data element creation
- * Parses expressions and creates required data elements automatically
- */
-export const createDhis2Indicator = tool(
+/** LEGACY INDICATOR TOOL - WILL BE REMOVED */
+export const createDhis2IndicatorLegacy = tool(
     async ({
         description,
         name,
@@ -338,8 +266,8 @@ export const createDhis2Indicator = tool(
         }
     },
     {
-        name: "create_dhis2_indicator",
-        description: "Create DHIS2 indicators from natural language descriptions. Automatically parses expressions and creates any referenced data elements.",
+        name: "create_dhis2_indicator_legacy",
+        description: "LEGACY: Create DHIS2 indicators from natural language descriptions with automatic data element parsing.",
         schema: z.object({
             description: z.string().describe("Natural language description of the indicator, including the expression with data element references"),
             name: z.string().optional().describe("Override for the indicator name"),
@@ -348,72 +276,255 @@ export const createDhis2Indicator = tool(
             numerator: z.string().optional().describe("Custom numerator expression"),
             denominator: z.string().optional().describe("Custom denominator expression"),
             indicatorType: z.string().optional().describe("Indicator type to use (defaults to auto-created type)"),
-        }).describe(`Create DHIS2 indicator with automatic data element creation from expressions like #{DE_Code} / #{DE_Code}`),
+        }),
     }
 );
 
-// Validation Rule Tool
-export const createDhis2ValidationRule = createDhis2ResourceTool({
-    name: "create_dhis2_validation_rule",
-    description: "Create DHIS2 validation rules from natural language descriptions.",
-    schema: Dhis2Schemas.ValidationRule,
-    metadataType: "validationRules",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Set defaults for validation rules
-        properties.importance = 'MEDIUM';
-        properties.operator = 'equal_to';
-        properties.organisationUnitLevels = [1];
-
-        // Default expressions (these would need to be enhanced)
-        properties.leftSide = {
-            expression: "1",
-            missingValueStrategy: "NEVER_SKIP"
-        };
-        properties.rightSide = {
-            expression: "1",
-            missingValueStrategy: "NEVER_SKIP"
-        };
-
-        return { name, properties };
-    }
+export const createDhis2IndicatorAdvanced = createLLMFirstTool({
+    name: "create_dhis2_indicator_simple",
+    description: "Create DHIS2 indicators that calculate performance measures and KPIs from data. Indicators perform mathematical calculations on data values to produce meaningful metrics like coverage rates, completion percentages, or averages. Choose this tool for simple indicators with direct parameter specification. Examples: 'HIV Testing Coverage', 'Vaccination Rate', 'Treatment Success Rate'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the indicator/performance measure"),
+        description: z.string().optional().describe("Description of what this indicator measures"),
+        numeratorExpression: z.string().min(1).describe("Mathematical expression for the numerator (e.g., '#{HIV_Tests_Completed}')"),
+        denominatorExpression: z.string().min(1).describe("Mathematical expression for the denominator (e.g., '#{Target_Population}')"),
+        annualized: z.boolean().default(false).describe("Whether this is an annualized indicator"),
+        indicatorTypeId: z.string().optional().describe("ID of indicator type to use (specifies calculation method like percentage/count/etc)")
+    }),
+    metadataType: "indicators",
+    dhis2SchemaName: "Indicator"
 });
 
-
-
-// Option Set Tool
-export const createDhis2OptionSet = createDhis2ResourceTool({
-    name: "create_dhis2_option_set",
-    description: "Create DHIS2 option sets from natural language descriptions.",
-    schema: Dhis2Schemas.OptionSet,
-    metadataType: "optionSets",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-
-        // Set defaults
-        properties.options = [];
-        properties.valueType = 'TEXT';
-
-        return { name, properties };
+export const createDhis2IndicatorExpert = tool(
+    async ({
+        name,
+        description,
+        numeratorExpression,
+        denominatorExpression,
+        annualized = false,
+        createMissingDataElements = true,
+        indicatorTypeName
+    }: {
+        name: string;
+        description?: string;
+        numeratorExpression: string;
+        denominatorExpression: string;
+        annualized?: boolean;
+        createMissingDataElements?: boolean;
+        indicatorTypeName?: string;
+    }) => {
+        try {
+            return await createDhis2IndicatorExpertImpl({
+                name,
+                description,
+                numeratorExpression,
+                denominatorExpression,
+                annualized,
+                createMissingDataElements,
+                indicatorTypeName
+            });
+        } catch (error) {
+            console.error('Error in expert indicator creation:', error);
+            throw error;
+        }
+    },
+    {
+        name: "create_dhis2_indicator_expert",
+        description: "Create DHIS2 indicators with advanced features including automatic data element creation. This tool creates the required data elements and indicator types as needed. Use this for complex indicators that reference data elements that may not exist yet. Examples: custom KPIs, multi-data-element calculations, complex performance metrics.",
+        schema: z.object({
+            name: z.string().min(1).describe("The name of the indicator/performance measure"),
+            description: z.string().optional().describe("Description of what this indicator measures"),
+            numeratorExpression: z.string().min(1).describe("Mathematical expression for the numerator using #{DataElement_Code} syntax"),
+            denominatorExpression: z.string().min(1).describe("Mathematical expression for the denominator using #{DataElement_Code} syntax"),
+            annualized: z.boolean().default(false).describe("Whether this is an annualized indicator"),
+            createMissingDataElements: z.boolean().default(true).describe("Whether to automatically create data elements referenced in expressions that don't exist"),
+            indicatorTypeName: z.string().optional().describe("Name of indicator type to create/use (default: auto-created percentage type)")
+        })
     }
-});
+);
+
+async function createDhis2IndicatorExpertImpl(params: {
+    name: string;
+    description?: string;
+    numeratorExpression: string;
+    denominatorExpression: string;
+    annualized?: boolean;
+    createMissingDataElements?: boolean;
+    indicatorTypeName?: string;
+}) {
+    const {
+        name,
+        description,
+        numeratorExpression,
+        denominatorExpression,
+        annualized = false,
+        createMissingDataElements = true,
+        indicatorTypeName
+    } = params;
+
+    let dataElements: Array<{ code: string; name: string; inferredValueType: string }> = [];
+
+    if (createMissingDataElements) {
+        // Parse expressions to identify data elements
+        const expressionsToCheck = [numeratorExpression, denominatorExpression].filter(Boolean);
+
+        for (const expr of expressionsToCheck) {
+            if (typeof expr === 'string') {
+                dataElements = dataElements.concat(parseExpressionForDataElements(expr));
+            }
+        }
+
+        // Remove duplicates by code
+        const uniqueDataElements = dataElements.filter((de, index, arr) =>
+            arr.findIndex(d => d.code === de.code) === index
+        );
+
+        dataElements = uniqueDataElements;
+        console.log(`Will create ${dataElements.length} referenced data elements:`, dataElements.map(de => de.code));
+    }
+
+    // Generate IDs and payloads
+    const indicatorTypeId = await generateDhis2Id();
+    const defaultIndicatorTypeData = {
+        id: indicatorTypeId,
+        name: indicatorTypeName || "Default Indicator Type",
+        displayName: indicatorTypeName || "Default Indicator Type",
+        factor: 1,
+        number: false
+    };
+
+    const dataElementIds = await Promise.all(
+        dataElements.map(async () => await generateDhis2Id())
+    );
+
+    const dataElementPayloads = dataElements.map((de, index) => ({
+        ...generateDataElementFromExpression(de.code, de.name, de.inferredValueType),
+        id: dataElementIds[index]
+    }));
+
+    const indicatorId = await generateDhis2Id();
+    const shortName = name.length > 50 ? name.substring(0, 47) + '...' : name;
+
+    const indicatorPayload = {
+        id: indicatorId,
+        name,
+        displayName: name,
+        shortName,
+        description: description || `${name} indicator`,
+        annualized,
+        numerator: numeratorExpression,
+        denominator: denominatorExpression,
+        decimals: 2,
+        indicatorType: { id: indicatorTypeId }
+    };
+
+    // Build aggregated payload
+    const aggregatedPayload: Record<string, any[]> = {
+        indicators: [indicatorPayload]
+    };
+
+    // Add indicator type
+    if (aggregatedPayload.indicatorTypes) {
+        aggregatedPayload.indicatorTypes.push(defaultIndicatorTypeData);
+    } else {
+        aggregatedPayload.indicatorTypes = [defaultIndicatorTypeData];
+    }
+
+    // Add data elements
+    if (dataElementPayloads.length > 0) {
+        aggregatedPayload.dataElements = dataElementPayloads;
+    }
+
+    // Execute creation
+    console.log('Creating expert indicator with dependencies:', JSON.stringify(aggregatedPayload, null, 2));
+
+    const result = await createDhis2MetadataAggregated(aggregatedPayload);
+
+    // Add successfully created resources to context
+    for (const r of result.results) {
+        if (r.created) {
+            const resourceType = r.type;
+            const resource = aggregatedPayload[resourceType]?.find((res: any) => res.id === r.id);
+            if (resource) {
+                addResourceToContext(r.id!, resourceType, resource.name || `Unnamed ${resourceType}`, 'created');
+            }
+        }
+    }
+
+    return JSON.stringify({
+        success: true,
+        message: `Created expert indicator "${name}" with ${dataElementPayloads.length} data elements`,
+        indicatorId,
+        indicatorName: name,
+        indicatorTypeId,
+        dataElementsCreated: dataElementPayloads.length,
+        dataElementCodes: dataElements.map(de => de.code),
+        created: result.results.filter(r => r.created).length,
+        total: result.results.length,
+        results: result.results,
+        apiResponse: result.response,
+    });
+}
+
+export const createDhis2Indicator = createDhis2IndicatorAdvanced; // Main export uses the simple LLM-first version
+
+
+
+
+// REMOVED: Old Option Set Tool - replaced with LLM-first version below
 
 // Search Tools
 export const searchDhis2DataElements = createDhis2SearchTool("dataElements", "Data Elements");
 export const searchDhis2OrganisationUnits = createDhis2SearchTool("organisationUnits", "Organisation Units");
 export const searchDhis2Categories = createDhis2SearchTool("categories", "Categories");
 export const searchDhis2CategoryCombos = createDhis2SearchTool("categoryCombos", "Category Combinations");
+export const searchDhis2CategoryOptions = createDhis2SearchTool("categoryOptions", "Category Options");
+export const searchDhis2OrganisationUnitGroups = createDhis2SearchTool("organisationUnitGroups", "Organisation Unit Groups");
+export const searchDhis2OrganisationUnitGroupSets = createDhis2SearchTool("organisationUnitGroupSets", "Organisation Unit Group Sets");
 export const searchDhis2DataSets = createDhis2SearchTool("dataSets", "Data Sets");
 export const searchDhis2Programs = createDhis2SearchTool("programs", "Programs");
+export const searchDhis2TrackedEntityTypes = createDhis2SearchTool("trackedEntityTypes", "Tracked Entity Types");
+export const searchDhis2TrackedEntityAttributes = createDhis2SearchTool("trackedEntityAttributes", "Tracked Entity Attributes");
+export const searchDhis2Validations = createDhis2SearchTool("validationRules", "Validation Rules");
+export const searchDhis2OptionSets = createDhis2SearchTool("optionSets", "Option Sets");
 export const searchDhis2Indicators = createDhis2SearchTool("indicators", "Indicators");
+export const searchDhis2Visualizations = createDhis2SearchTool("visualizations", "Visualizations");
+export const searchDhis2Dashboards = createDhis2SearchTool("dashboards", "Dashboards");
+export const searchDhis2Users = createDhis2SearchTool("users", "Users");
+export const searchDhis2RelationshipTypes = createDhis2SearchTool("relationshipTypes", "Relationship Types");
+
+// Update Relationship Tools
+export const updateDhis2RelationshipType = createDhis2UpdateTool({
+    name: "update_dhis2_relationship_type",
+    description: "Update DHIS2 relationship types using schema-compliant properties",
+    schema: Dhis2Schemas.RelationshipType,
+    metadataType: "relationshipTypes",
+});
+
+export const updateDhis2Relationship = createDhis2UpdateTool({
+    name: "update_dhis2_relationship",
+    description: "Update DHIS2 relationships using schema-compliant properties",
+    schema: Dhis2Schemas.Relationship,
+    metadataType: "relationships",
+});
 
 // Get by ID Tools
 export const getDhis2DataElementById = createDhis2GetByIdTool("dataElements", "Data Element");
+export const getDhis2RelationshipTypeById = createDhis2GetByIdTool("relationshipTypes", "Relationship Type");
 export const getDhis2OrganisationUnitById = createDhis2GetByIdTool("organisationUnits", "Organisation Unit");
 export const getDhis2CategoryById = createDhis2GetByIdTool("categories", "Category");
+export const getDhis2CategoryOptionById = createDhis2GetByIdTool("categoryOptions", "Category Option");
+export const getDhis2OrganisationUnitGroupById = createDhis2GetByIdTool("organisationUnitGroups", "Organisation Unit Group");
+export const getDhis2OrganisationUnitGroupSetById = createDhis2GetByIdTool("organisationUnitGroupSets", "Organisation Unit Group Set");
 export const getDhis2DataSetById = createDhis2GetByIdTool("dataSets", "Data Set");
 export const getDhis2ProgramById = createDhis2GetByIdTool("programs", "Program");
+export const getDhis2TrackedEntityTypeById = createDhis2GetByIdTool("trackedEntityTypes", "Tracked Entity Type");
+export const getDhis2TrackedEntityAttributeById = createDhis2GetByIdTool("trackedEntityAttributes", "Tracked Entity Attribute");
+export const getDhis2ValidationRuleById = createDhis2GetByIdTool("validationRules", "Validation Rule");
+export const getDhis2OptionSetById = createDhis2GetByIdTool("optionSets", "Option Set");
+export const getDhis2IndicatorById = createDhis2GetByIdTool("indicators", "Indicator");
+export const getDhis2VisualizationById = createDhis2GetByIdTool("visualizations", "Visualization");
+export const getDhis2DashboardById = createDhis2GetByIdTool("dashboards", "Dashboard");
 
 // Track existing tools
 export const existingTools = {
@@ -439,7 +550,12 @@ export const existingTools = {
         'updateDhis2Program',
         'updateDhis2Indicator',
         'updateDhis2ValidationRule',
-        'updateDhis2OptionSet'
+        'updateDhis2Option',
+        'updateDhis2OptionSet',
+        'updateDhis2TrackedEntityInstance',
+        'updateDhis2Enrollment',
+        'updateDhis2Event',
+        'updateDhis2User'
     ],
     search: [
         'searchDhis2DataElements',
@@ -448,7 +564,8 @@ export const existingTools = {
         'searchDhis2CategoryCombos',
         'searchDhis2DataSets',
         'searchDhis2Programs',
-        'searchDhis2Indicators'
+        'searchDhis2Indicators',
+        'searchDhis2Users'
     ],
     getById: [
         'getDhis2DataElementById',
@@ -459,100 +576,34 @@ export const existingTools = {
     ]
 };
 
-// Direct CRUD Tools for Top-level Entities
-export const createDhis2CategoryOption = createDhis2ResourceTool({
-    name: "create_dhis2_category_option",
-    description: "Create DHIS2 category options from schema-compliant objects",
-    schema: Dhis2Schemas.CategoryOption,
-    metadataType: "categoryOptions",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        return { name, properties };
-    }
+// REMOVED: Direct CRUD Tools for Top-level Entities - replaced with LLM-first versions below
+
+export const updateDhis2Option = createDhis2UpdateTool({
+    name: "update_dhis2_option",
+    description: "Update DHIS2 option values using schema-compliant properties",
+    schema: Dhis2Schemas.Option,
+    metadataType: "options",
 });
 
-export const createDhis2OrganisationUnitGroup = createDhis2ResourceTool({
-    name: "create_dhis2_organisation_unit_group",
-    description: "Create DHIS2 organisation unit groups from schema-compliant objects",
-    schema: Dhis2Schemas.OrganisationUnitGroup,
-    metadataType: "organisationUnitGroups",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.organisationUnits = [];
-        return { name, properties };
-    }
+export const updateDhis2TrackedEntityInstance = createDhis2UpdateTool({
+    name: "update_dhis2_tracked_entity_instance",
+    description: "Update DHIS2 tracked entity instances using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityInstance,
+    metadataType: "trackedEntityInstances",
 });
 
-export const createDhis2OrganisationUnitGroupSet = createDhis2ResourceTool({
-    name: "create_dhis2_organisation_unit_group_set",
-    description: "Create DHIS2 organisation unit group sets from schema-compliant objects",
-    schema: Dhis2Schemas.OrganisationUnitGroupSet,
-    metadataType: "organisationUnitGroupSets",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.organisationUnitGroups = [];
-        return { name, properties };
-    }
+export const updateDhis2Enrollment = createDhis2UpdateTool({
+    name: "update_dhis2_enrollment",
+    description: "Update DHIS2 enrollments using schema-compliant properties",
+    schema: Dhis2Schemas.Enrollment,
+    metadataType: "enrollments",
 });
 
-export const createDhis2TrackedEntityAttribute = createDhis2ResourceTool({
-    name: "create_dhis2_tracked_entity_attribute",
-    description: "Create DHIS2 tracked entity attributes from schema-compliant objects",
-    schema: Dhis2Schemas.TrackedEntityAttribute,
-    metadataType: "trackedEntityAttributes",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        // Default to TEXT valueType if not specified
-        properties.valueType = properties.valueType || 'TEXT';
-        properties.unique = properties.unique || false;
-        properties.inherit = properties.inherit || false;
-        return { name, properties };
-    }
-});
-
-export const createDhis2IndicatorType = createDhis2ResourceTool({
-    name: "create_dhis2_indicator_type",
-    description: "Create DHIS2 indicator types from schema-compliant objects",
-    schema: Dhis2Schemas.IndicatorType,
-    metadataType: "indicatorTypes",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.factor = properties.factor || 1;
-        properties.number = properties.number || false;
-        return { name, properties };
-    }
-});
-
-export const createDhis2Visualization = createDhis2ResourceTool({
-    name: "create_dhis2_visualization",
-    description: "Create DHIS2 visualizations (charts/tables) from schema-compliant objects",
-    schema: Dhis2Schemas.Visualization,
-    metadataType: "visualizations",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.type = properties.type || 'COLUMN';
-        properties.dataDimensionItems = properties.dataDimensionItems || [];
-        properties.columns = properties.columns || [];
-        properties.rows = properties.rows || [];
-        properties.filters = properties.filters || [];
-        properties.organisationUnits = [];
-        properties.periods = [];
-        return { name, properties };
-    }
-});
-
-export const createDhis2Dashboard = createDhis2ResourceTool({
-    name: "create_dhis2_dashboard",
-    description: "Create DHIS2 dashboards from schema-compliant objects",
-    schema: Dhis2Schemas.Dashboard,
-    metadataType: "dashboards",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.dashboardItems = [];
-        properties.publicAccess = '--------';
-        properties.externalAccess = false;
-        return { name, properties };
-    }
+export const updateDhis2Event = createDhis2UpdateTool({
+    name: "update_dhis2_event",
+    description: "Update DHIS2 events using schema-compliant properties",
+    schema: Dhis2Schemas.Event,
+    metadataType: "events",
 });
 
 // Update Tools - Direct CRUD
@@ -661,11 +712,86 @@ export const updateDhis2OptionSet = createDhis2UpdateTool({
     metadataType: "optionSets",
 });
 
+export const createDhis2Visualization = createLLMFirstTool({
+    name: "create_dhis2_visualization",
+    description: "Create DHIS2 visualizations (charts and data visualizations) that display data from DHIS2 for analysis and monitoring. Visualizations can show trends, comparisons, and patterns in health data. Examples: 'Monthly Malaria Cases Trend', 'Immunization Coverage by District', 'HIV Testing Monthly Bar Chart'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the visualization/chart"),
+        description: z.string().optional().describe("Description of what this visualization shows"),
+        visualizationType: z.enum(['COLUMN', 'BAR', 'LINE', 'PIE', 'AREA', 'SINGLE_VALUE', 'PIVOT_TABLE']).default('COLUMN').describe("The type of chart or visualization"),
+        dataElementIds: z.array(z.string()).min(1).describe("Array of data element IDs to include in the visualization")
+    }),
+    metadataType: "visualizations",
+    dhis2SchemaName: "Visualization"
+});
+
 export const updateDhis2Visualization = createDhis2UpdateTool({
     name: "update_dhis2_visualization",
     description: "Update DHIS2 visualizations using schema-compliant properties",
     schema: Dhis2Schemas.Visualization,
     metadataType: "visualizations",
+});
+
+export const createDhis2Dashboard = createLLMFirstTool({
+    name: "create_dhis2_dashboard",
+    description: "Create DHIS2 dashboards that organize and display visualizations, charts, reports, and other analytical content for users to monitor health data and KPIs. Dashboards are the main interface for data analysis and decision-making. Examples: 'National Malaria Dashboard', 'Facility Performance Overview', 'COVID-19 Monitoring Board'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the dashboard"),
+        description: z.string().optional().describe("Description of what this dashboard is used for")
+    }),
+    metadataType: "dashboards",
+    dhis2SchemaName: "Dashboard",
+    dependencies: [
+        {
+            type: "users",
+            name: "default",
+            createIfNotFound: true,
+            createParams: {
+                username: "default",
+                firstName: "Default",
+                surname: "User",
+                userCredentials: {
+                    username: "default",
+                    disabled: false
+                }
+            }
+        }
+    ]
+});
+
+export const updateDhis2ProgramStage = createDhis2UpdateTool({
+    name: "update_dhis2_program_stage",
+    description: "Update DHIS2 program stages using schema-compliant properties",
+    schema: Dhis2Schemas.ProgramStage,
+    metadataType: "programStages",
+});
+
+export const updateDhis2ProgramRule = createDhis2UpdateTool({
+    name: "update_dhis2_program_rule",
+    description: "Update DHIS2 program rules using schema-compliant properties",
+    schema: Dhis2Schemas.ProgramRule,
+    metadataType: "programRules",
+});
+
+export const updateDhis2ProgramIndicator = createDhis2UpdateTool({
+    name: "update_dhis2_program_indicator",
+    description: "Update DHIS2 program indicators using schema-compliant properties",
+    schema: Dhis2Schemas.ProgramIndicator,
+    metadataType: "programIndicators",
+});
+
+export const updateDhis2DashboardItem = createDhis2UpdateTool({
+    name: "update_dhis2_dashboard_item",
+    description: "Update DHIS2 dashboard items using schema-compliant properties",
+    schema: Dhis2Schemas.DashboardItem,
+    metadataType: "dashboardItems",
+});
+
+export const updateDhis2User = createDhis2UpdateTool({
+    name: "update_dhis2_user",
+    description: "Update DHIS2 user accounts using schema-compliant properties",
+    schema: Dhis2Schemas.User,
+    metadataType: "users",
 });
 
 export const updateDhis2Dashboard = createDhis2UpdateTool({
@@ -1069,73 +1195,9 @@ async function createDhis2ReportingFormAggregated({
     }
 }
 
-export const createDhis2TrackedEntityType = createDhis2ResourceTool({
-    name: "create_dhis2_tracked_entity_type",
-    description: "Create DHIS2 tracked entity types from schema-compliant objects",
-    schema: Dhis2Schemas.TrackedEntityType,
-    metadataType: "trackedEntityTypes",
-    // Note: trackedEntityTypeAttributes are properties of TrackedEntityType, not separate entities
-    // They cannot be created as standalone dependencies
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.trackedEntityTypeAttributes = []; // Initialize as empty array
-        properties.allowAuditLog = false;
-        return { name, properties };
-    }
-});
+// REMOVED: Migration completed - now using LLM-first version above
 
-// Complex Entity Tools with Dependencies
-export const createDhis2ProgramStage = createDhis2ResourceTool({
-    name: "create_dhis2_program_stage",
-    description: "Create DHIS2 program stages from schema-compliant objects. Requires a parent program.",
-    schema: Dhis2Schemas.ProgramStage,
-    metadataType: "programStages",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.repeatable = false;
-        properties.minDaysFromStart = 0;
-        properties.programStageDataElements = [];
-        properties.validationStrategy = 'ON_COMPLETE';
-        return { name, properties };
-    }
-});
-
-export const createDhis2ProgramRule = createDhis2ResourceTool({
-    name: "create_dhis2_program_rule",
-    description: "Create DHIS2 program rules from schema-compliant objects. Requires a parent program.",
-    schema: Dhis2Schemas.ProgramRule,
-    metadataType: "programRules",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.programRuleActions = [];
-        return { name, properties };
-    }
-});
-
-export const createDhis2ProgramIndicator = createDhis2ResourceTool({
-    name: "create_dhis2_program_indicator",
-    description: "Create DHIS2 program indicators from schema-compliant objects. Requires a parent program.",
-    schema: Dhis2Schemas.ProgramIndicator,
-    metadataType: "programIndicators",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        properties.displayInForm = false;
-        properties.analyticsType = 'EVENT';
-        return { name, properties };
-    }
-});
-
-// Dashboard Items
-export const createDhis2DashboardItem = createDhis2ResourceTool({
-    name: "create_dhis2_dashboard_item",
-    description: "Create DHIS2 dashboard items from schema-compliant objects. Requires a parent dashboard.",
-    schema: Dhis2Schemas.DashboardItem,
-    metadataType: "dashboardItems",
-    parseDescription: (description: string) => {
-        const { name, properties } = parseNaturalLanguageDescription(description);
-        return { name, properties };
-    }
-});
+    // REMOVED: Migration completed - legacy tools replaced with LLM-first versions above
 
 // DataValue Tool (special read-only tool)
 export const getDhis2DataValues = tool(
@@ -1227,6 +1289,128 @@ export const createDhis2Event = tool(
 
 // TODO: Migrate ALL tools to LLM-first architecture (replace all existing tools below)
 
+export const createDhis2User = createLLMFirstTool({
+    name: "create_dhis2_user",
+    description: "Create DHIS2 user accounts with profile information, organisation unit assignments, and role-based access. Users are the primary accounts for accessing and managing DHIS2 systems. Examples: 'Create system administrator user', 'Add data entry clerk', 'Setup regional manager account'.",
+    schema: z.object({
+        username: z.string().min(1).describe("Unique username for login (must be unique across the system)"),
+        firstName: z.string().min(1).describe("User's first name"),
+        surname: z.string().min(1).describe("User's surname/family name"),
+        email: z.string().email().optional().describe("User's email address for notifications"),
+        phoneNumber: z.string().optional().describe("User's phone number (optional)"),
+        organisationUnitIds: z.array(z.string()).min(1).describe("Array of organisation unit IDs where user has access"),
+        userRoleNames: z.array(z.string()).optional().describe("Names of user roles to assign (leave empty for no roles - user will have limited access)")
+    }),
+    metadataType: "users",
+    dhis2SchemaName: "User",
+    dependencies: [
+        {
+            type: "userCredentials",
+            name: "auto_generated",
+            createIfNotFound: false, // UserCredentials are always created with User
+            createParams: {
+                disabled: false,
+                twoFA: false,
+                externalAuth: false,
+                userRoles: []
+            }
+        }
+    ]
+});
+
+// Relationship Type Tool - LLM-first versions
+export const createDhis2RelationshipType = createLLMFirstTool({
+    name: "create_dhis2_relationship_type",
+    description: "Create DHIS2 relationship types that define how tracked entities can be linked together. Relationship types specify directional or bidirectional connections between entities like parent-child, referral-supervision, or treatment-partnership relationships. Examples: 'Mother-Child Referral', 'Household Member', 'Health Facility Referral Network'.",
+    schema: z.object({
+        name: z.string().min(1).describe("Descriptive name for this relationship type"),
+        fromToName: z.string().min(1).describe("Name of the relationship when viewed from source to target (e.g., 'Refers to')"),
+        toFromName: z.string().min(1).describe("Name of the relationship when viewed from target to source (e.g., 'Referred by')"),
+        bidirectional: z.boolean().default(false).describe("Whether this relationship works both directions (true) or only one way (false)")
+    }),
+    metadataType: "relationshipTypes",
+    dhis2SchemaName: "RelationshipType",
+});
+
+// Relationship Tool (uses direct CRUD pattern due to relationship complexity)
+export const createDhis2Relationship = tool(
+    async ({
+        relationshipTypeId,
+        fromEntityId,
+        toEntityId,
+        fromEntityType = "trackedEntityInstance",
+        toEntityType = "trackedEntityInstance",
+        fromEnrollmentId,
+        toEnrollmentId,
+        fromEventId,
+        toEventId
+    }: {
+        relationshipTypeId: string;
+        fromEntityId: string;
+        toEntityId: string;
+        fromEntityType?: string;
+        toEntityType?: string;
+        fromEnrollmentId?: string;
+        toEnrollmentId?: string;
+        fromEventId?: string;
+        toEventId?: string;
+    }) => {
+        try {
+            // Build relationship payload based on entity types
+            const relationshipPayload = {
+                relationshipType: { id: relationshipTypeId },
+                from: {
+                    [fromEntityType]: { id: fromEntityId },
+                    ...(fromEnrollmentId && { enrollment: { id: fromEnrollmentId } }),
+                    ...(fromEventId && { event: { id: fromEventId } })
+                },
+                to: {
+                    [toEntityType]: { id: toEntityId },
+                    ...(toEnrollmentId && { enrollment: { id: toEnrollmentId } }),
+                    ...(toEventId && { event: { id: toEventId } })
+                }
+            };
+
+            const result = await createDhis2Metadata('relationships', [relationshipPayload]);
+
+            if (result.success && result.created?.[0]) {
+                // Add relationship to context
+                addResourceToContext(result.created[0].id!, 'relationships', `Relationship ${relationshipTypeId}`, 'created');
+            }
+
+            return JSON.stringify({
+                success: true,
+                message: `Created relationship between ${fromEntityType}:${fromEntityId} -> ${toEntityType}:${toEntityId}`,
+                relationshipId: result.created?.[0]?.id,
+                relationshipTypeId,
+                fromEntityType,
+                toEntityType
+            });
+        } catch (error) {
+            console.error('Error creating relationship:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to create relationship: ${error.message}`
+            });
+        }
+    },
+    {
+        name: "create_dhis2_relationship",
+        description: "Create DHIS2 relationships between tracked entities, enrollments, or events using predefined relationship types. Links entities in tracker systems for referral networks, family relationships, supervision hierarchies, or multi-entity workflows. Examples: link patient to primary care facility, connect household members, define supervision relationships.",
+        schema: z.object({
+            relationshipTypeId: z.string().describe("ID of the relationship type defining this connection"),
+            fromEntityId: z.string().describe("ID of the source entity (tracked entity, enrollment, or event)"),
+            toEntityId: z.string().describe("ID of the target entity being linked to"),
+            fromEntityType: z.enum(["trackedEntityInstance", "enrollment", "event"]).default("trackedEntityInstance").describe("Type of source entity"),
+            toEntityType: z.enum(["trackedEntityInstance", "enrollment", "event"]).default("trackedEntityInstance").describe("Type of target entity"),
+            fromEnrollmentId: z.string().optional().describe("If fromEntity is enrollment or event, provide enrollment ID"),
+            toEnrollmentId: z.string().optional().describe("If toEntity is enrollment or event, provide enrollment ID"),
+            fromEventId: z.string().optional().describe("If fromEntity is event, provide specific event ID"),
+            toEventId: z.string().optional().describe("If toEntity is event, provide specific event ID")
+        })
+    }
+);
+
 // LLM-First Creation Tools (new standard - LLM handles all NL processing)
 export const createDhis2Option = createLLMFirstTool({
     name: "create_dhis2_option",
@@ -1296,6 +1480,18 @@ export const createDhis2IndicatorType = createLLMFirstTool({
     dhis2SchemaName: "IndicatorType" // Validates against actual DHIS2 IndicatorType schema
 });
 
+export const createDhis2CategoryOption = createLLMFirstTool({
+    name: "create_dhis2_category_option",
+    description: "Create DHIS2 category options that define the individual values within a category. Category options are the actual choices users make when reporting data. Examples: 'Male', 'Female' for Sex category; '0-14', '15-49', '50+' for Age Groups; 'Urban', 'Rural' for Location type.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the category option value"),
+        displayName: z.string().optional().describe("Display name (defaults to name)"),
+        shortName: z.string().optional().describe("Short name (defaults to name, max 50 chars)")
+    }),
+    metadataType: "categoryOptions",
+    dhis2SchemaName: "CategoryOption"
+});
+
 export const createDhis2OrganisationUnit = createLLMFirstTool({
     name: "create_dhis2_organisation_unit",
     description: "Create DHIS2 organisation units for geographic/administrative hierarchy. These represent facilities, regions, and administrative divisions in your health system. Examples: 'Country Hospital', 'Region A', 'District Clinic', 'National Ministry'.",
@@ -1308,31 +1504,166 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
     dhis2SchemaName: "OrganisationUnit" // Validates against actual DHIS2 OrganisationUnit schema
 });
 
-// Export all tools
+export const createDhis2OrganisationUnitGroup = createLLMFirstTool({
+    name: "create_dhis2_organisation_unit_group",
+    description: "Create DHIS2 organisation unit groups to organize facilities into logical collections. These groups are used for reporting, data access control, and analysis. Examples: 'Public Hospitals', 'Rural Clinics', 'Regional Facilities', 'Private Sector'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the organisation unit group"),
+        description: z.string().optional().describe("Description of what this group represents"),
+        shortName: z.string().min(1).describe("Short name for the group (defaults to name if not provided)")
+    }),
+    metadataType: "organisationUnitGroups",
+    dhis2SchemaName: "OrganisationUnitGroup"
+});
+
+export const createDhis2OrganisationUnitGroupSet = createLLMFirstTool({
+    name: "create_dhis2_organisation_unit_group_set",
+    description: "Create DHIS2 organisation unit group sets to categorize different types of facility groupings. Group sets contain multiple groups and are used for complex access control and classification. Examples: 'Ownership Type' (containing Public/Private groups), 'Facility Tier' (Primary/Secondary/Tertiary), 'Service Level'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the organisation unit group set"),
+        description: z.string().optional().describe("Description of the classification system"),
+        compulsory: z.boolean().default(false).describe("Whether every org unit must belong to one of the groups"),
+        dataDimension: z.boolean().default(true).describe("Whether this group set can be used in data analysis")
+    }),
+    metadataType: "organisationUnitGroupSets",
+    dhis2SchemaName: "OrganisationUnitGroupSet"
+});
+
+export const createDhis2TrackedEntityType = createLLMFirstTool({
+    name: "create_dhis2_tracked_entity_type",
+    description: "Create DHIS2 tracked entity types that define the entities being tracked in tracker programs. These represent individuals, patients, assets, or other objects that have attributes and follow enrollment/enrollment workflows. Examples: 'Person', 'Patient', 'Contact Person', 'Equipment'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the tracked entity type"),
+        description: z.string().optional().describe("Description of what this entity represents")
+    }),
+    metadataType: "trackedEntityTypes",
+    dhis2SchemaName: "TrackedEntityType"
+});
+
+export const createDhis2TrackedEntityAttribute = createLLMFirstTool({
+    name: "create_dhis2_tracked_entity_attribute",
+    description: "Create DHIS2 tracked entity attributes that define the properties/fields of tracked entities. These are the characteristics that describe a tracked entity like name, age, phone number, date of birth, etc. Examples: 'First Name', 'Phone Number', 'Date of Birth', 'National ID', 'Blood Type'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the tracked entity attribute"),
+        valueType: z.enum(['TEXT', 'NUMBER', 'INTEGER', 'BOOLEAN', 'DATE', 'DATETIME']).default('TEXT').describe("The data type of the attribute"),
+        description: z.string().optional().describe("Description of what this attribute represents"),
+        mandatory: z.boolean().default(false).describe("Whether this attribute is required"),
+        unique: z.boolean().default(false).describe("Whether values must be unique across all entities")
+    }),
+    metadataType: "trackedEntityAttributes",
+    dhis2SchemaName: "TrackedEntityAttribute"
+});
+
+export const createDhis2ProgramStage = createLLMFirstTool({
+    name: "create_dhis2_program_stage",
+    description: "Create DHIS2 program stages that define the steps/phases within a tracker program. Program stages represent different events or visits in a tracked entity's journey. Examples: 'Initial Assessment', 'Follow-up Visit', 'Treatment Phase', 'Discharge'. Each stage can collect specific data and have its own validation rules.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the program stage/visit type"),
+        description: z.string().optional().describe("Description of this stage's purpose"),
+        programId: z.string().min(1).describe("The ID of the parent program this stage belongs to"),
+        minDaysFromStart: z.number().int().min(0).default(0).describe("Minimum days from program start when this stage can occur"),
+        repeatable: z.boolean().default(false).describe("Whether this stage can be repeated multiple times")
+    }),
+    metadataType: "programStages",
+    dhis2SchemaName: "ProgramStage"
+});
+
+export const createDhis2ProgramRule = createLLMFirstTool({
+    name: "create_dhis2_program_rule",
+    description: "Create DHIS2 program rules that define conditional logic and automated actions within tracker programs. Program rules enable dynamic behavior like skipping questions, showing warnings, or automatically calculating values based on user input. Examples: 'Skip delivery questions if pregnancy test is negative', 'Show HIV test warning for high-risk patients'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the program rule"),
+        description: z.string().optional().describe("Description of the rule's logic and purpose"),
+        programId: z.string().min(1).describe("The ID of the program this rule belongs to"),
+        condition: z.string().min(1).describe("The condition that triggers the rule (e.g., '#{var} == 1')"),
+        priority: z.number().int().min(0).default(0).describe("Rule priority (higher numbers execute first)")
+    }),
+    metadataType: "programRules",
+    dhis2SchemaName: "ProgramRule"
+});
+
+export const createDhis2ProgramIndicator = createLLMFirstTool({
+    name: "create_dhis2_program_indicator",
+    description: "Create DHIS2 program indicators that calculate aggregations and statistics from tracker program data. These indicators perform calculations across enrolled entities, visits, and time periods. Examples: 'Percentage of patients completing treatment', 'Average hospital stay duration', 'Number of high-risk pregnancies this month'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the program indicator"),
+        description: z.string().optional().describe("Description of what this indicator measures"),
+        programId: z.string().min(1).describe("The ID of the program this indicator analyzes"),
+        expression: z.string().min(1).describe("The calculation expression (mathematical formula)"),
+        filter: z.string().optional().describe("Optional filter condition to limit which records are included"),
+        analyticsType: z.enum(['EVENT', 'ENROLLMENT']).default('EVENT').describe("Whether to analyze at event or enrollment level")
+    }),
+    metadataType: "programIndicators",
+    dhis2SchemaName: "ProgramIndicator"
+});
+
+export const createDhis2ValidationRule = createLLMFirstTool({
+    name: "create_dhis2_validation_rule",
+    description: "Create DHIS2 validation rules that enforce data quality and consistency checks on submitted data. Validation rules compare data across multiple fields and flag errors or warnings. Examples: 'Total males + females should equal total population', 'If HIV test positive, CD4 count must be provided', 'Birth date cannot be in the future'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the validation rule"),
+        description: z.string().optional().describe("Description of the data validation logic"),
+        operator: z.enum(['equal_to', 'not_equal_to', 'greater_than', 'greater_than_or_equal_to', 'less_than', 'less_than_or_equal_to']).default('equal_to').describe("The comparison operator"),
+        rightSide: z.object({
+            expression: z.string().min(1).describe("The right side expression to compare"),
+            description: z.string().optional().describe("Description of the right side"),
+            missingValueStrategy: z.enum(['NEVER_SKIP', 'SKIP_IF_ANY_VALUE_MISSING', 'SKIP_IF_ALL_VALUES_MISSING']).default('NEVER_SKIP').describe("How to handle missing values")
+        }).describe("The right side of the comparison"),
+        leftSide: z.object({
+            expression: z.string().min(1).describe("The left side expression to compare"),
+            description: z.string().optional().describe("Description of the left side"),
+            missingValueStrategy: z.enum(['NEVER_SKIP', 'SKIP_IF_ANY_VALUE_MISSING', 'SKIP_IF_ALL_VALUES_MISSING']).default('NEVER_SKIP').describe("How to handle missing values")
+        }).describe("The left side of the comparison"),
+        importance: z.enum(['HIGH', 'MEDIUM', 'LOW']).default('MEDIUM').describe("Severity level of validation failures")
+    }),
+    metadataType: "validationRules",
+    dhis2SchemaName: "ValidationRule"
+});
+
+export const createDhis2DashboardItem = createLLMFirstTool({
+    name: "create_dhis2_dashboard_item",
+    description: "Create DHIS2 dashboard items that display visualizations, charts, tables, or indicators on dashboard screens. Dashboard items are the building blocks of dashboards. Examples: chart showing vaccination coverage by month, table of facility performance, indicator showing % target achievement, map of disease outbreaks.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the dashboard item"),
+        dashboardId: z.string().min(1).describe("The ID of the dashboard this item belongs to"),
+        visualizationId: z.string().optional().describe("ID of visualization/chart to display (if this is a chart item)"),
+        indicatorId: z.string().optional().describe("ID of indicator to display (if this is an indicator item)"),
+        type: z.enum(['CHART', 'REPORT_TABLE', 'INDICATOR', 'MAP', 'CUSTOM']).default('CHART').describe("The type of dashboard item"),
+        shape: z.enum(['NORMAL', 'DOUBLE_WIDTH', 'FULL_WIDTH']).default('NORMAL').describe("The width of the dashboard item")
+    }),
+    metadataType: "dashboardItems",
+    dhis2SchemaName: "DashboardItem"
+});
+
+// Export all tools - TEMPORARY: Only including currently migrated LLM-first tools
 export const Dhis2StructuredTools = {
-    // Creation tools - Core
+    // LLM-First Creation Tools (Migrated)
     createDhis2DataElement,
-    createDhis2OrganisationUnit, // Updated to prioritize LLM-first version
+    createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2CategoryOption,
     createDhis2DataSet,
     createDhis2OrganisationUnitGroup,
     createDhis2OrganisationUnitGroupSet,
-    createDhis2Program,
-    createDhis2TrackedEntityType,
-    createDhis2TrackedEntityAttribute,
-    createDhis2ProgramStage,
-    createDhis2ProgramRule,
-    createDhis2ProgramIndicator,
-    createDhis2Indicator,
-    createDhis2IndicatorType,
-    createDhis2ValidationRule,
+    createDhis2User,
     createDhis2Option,
     createDhis2OptionSet,
-    createDhis2Visualization,
-    createDhis2Dashboard,
-    createDhis2DashboardItem,
+    createDhis2IndicatorType,
+    createDhis2RelationshipType,
+    createDhis2Relationship,
+
+    // Legacy tools (not yet migrated - still available for now)
+    // Program tools (now migrated to LLM-first)
+    // createDhis2Program, // Now migrated
+    // createDhis2TrackedEntityType, // Now migrated
+    // createDhis2TrackedEntityAttribute, // Now migrated
+    // createDhis2ProgramStage, // Now migrated
+    // createDhis2ProgramRule, // Now migrated
+    // createDhis2ProgramIndicator, // Now migrated
+    createDhis2Indicator, // Complex tool with legacy parsing
+    // createDhis2ValidationRule, // Now migrated
+    // createDhis2DashboardItem, // Now migrated
     createDhis2TrackedEntityInstance,
     createDhis2Enrollment,
     createDhis2Event,
@@ -1352,9 +1683,15 @@ export const Dhis2StructuredTools = {
     updateDhis2Indicator,
     updateDhis2IndicatorType,
     updateDhis2ValidationRule,
+    updateDhis2Option,
     updateDhis2OptionSet,
-    updateDhis2Visualization,
     updateDhis2Dashboard,
+    updateDhis2TrackedEntityInstance,
+    updateDhis2Enrollment,
+    updateDhis2Event,
+    updateDhis2User,
+    updateDhis2RelationshipType,
+    updateDhis2Relationship,
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,
@@ -1373,6 +1710,8 @@ export const Dhis2StructuredTools = {
     searchDhis2DataSets,
     searchDhis2Programs,
     searchDhis2Indicators,
+    searchDhis2Users,
+    searchDhis2RelationshipTypes,
 
     // Get by ID tools - Existing
     getDhis2DataElementById,

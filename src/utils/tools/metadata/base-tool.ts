@@ -37,10 +37,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
     config: LLMToolConfig<T> & { dhis2SchemaName?: keyof typeof import('./schemas').Dhis2Schemas }
 ) {
     return tool(
-        async (params: z.infer<T>) => {
+        async ({ resource }: { resource: z.infer<T> }) => {
             try {
                 // LLM provides structured parameters directly
-                const llmInput = params as any;
+                const llmInput = resource as any;
 
                 // 1. Transform LLM input to full DHIS2 object
                 const dhis2Object = {
@@ -118,14 +118,16 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                     success: false,
                     error: `Failed to create resource: ${error.message}`,
                     tool: config.name,
-                    llm_params: params
+                    llm_params: { resource }
                 });
             }
         },
         {
             name: config.name,
             description: config.description,
-            schema: config.schema.describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with these properties`),
+            schema: z.object({
+                resource: config.schema
+            }).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with these properties`),
         }
     );
 }

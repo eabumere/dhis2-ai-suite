@@ -22,6 +22,9 @@ export {
     createDhis2Visualization,
     createDhis2Dashboard,
     createDhis2DashboardItem,
+    createDhis2User,
+    createDhis2RelationshipType,
+    createDhis2Relationship,
     createDhis2TrackedEntityInstance,
     createDhis2Enrollment,
     createDhis2Event,
@@ -38,16 +41,23 @@ export {
     updateDhis2Program,
     updateDhis2TrackedEntityType,
     updateDhis2TrackedEntityAttribute,
-    // updateDhis2ProgramStage, // TODO: Implement
-    // updateDhis2ProgramRule, // TODO: Implement
-    // updateDhis2ProgramIndicator, // TODO: Implement
+    updateDhis2TrackedEntityInstance,
+    updateDhis2ProgramStage,
+    updateDhis2ProgramRule,
+    updateDhis2ProgramIndicator,
     updateDhis2Indicator,
     updateDhis2IndicatorType,
     updateDhis2ValidationRule,
+    updateDhis2Option,
     updateDhis2OptionSet,
     updateDhis2Visualization,
     updateDhis2Dashboard,
-    // updateDhis2DashboardItem, // TODO: Implement
+    updateDhis2DashboardItem,
+    updateDhis2User,
+    updateDhis2RelationshipType,
+    updateDhis2Relationship,
+    updateDhis2Enrollment,
+    updateDhis2Event,
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,
@@ -63,33 +73,36 @@ export {
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
-    // searchDhis2CategoryOptions, // TODO: Implement
-    // searchDhis2OrganisationUnitGroups, // TODO: Implement
-    // searchDhis2OrganisationUnitGroupSets, // TODO: Implement
+    searchDhis2CategoryOptions,
+    searchDhis2OrganisationUnitGroups,
+    searchDhis2OrganisationUnitGroupSets,
     searchDhis2DataSets,
     searchDhis2Programs,
-    // searchDhis2TrackedEntityTypes, // TODO: Implement
-    // searchDhis2TrackedEntityAttributes, // TODO: Implement
-    // searchDhis2Validations, // TODO: Implement
-    // searchDhis2OptionSets, // TODO: Implement
+    searchDhis2TrackedEntityTypes,
+    searchDhis2TrackedEntityAttributes,
+    searchDhis2Validations,
+    searchDhis2OptionSets,
     searchDhis2Indicators,
-    // searchDhis2Visualizations, // TODO: Implement
-    // searchDhis2Dashboards, // TODO: Implement
+    searchDhis2Visualizations,
+    searchDhis2Dashboards,
+    searchDhis2Users,
+    searchDhis2RelationshipTypes,
 
     // Get by ID tools - Extended
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
-    // getDhis2CategoryOptionById, // TODO: Implement
-    // getDhis2OrganisationUnitGroupById, // TODO: Implement
-    // getDhis2OrganisationUnitGroupSetById, // TODO: Implement
+    getDhis2CategoryOptionById,
+    getDhis2OrganisationUnitGroupById,
+    getDhis2OrganisationUnitGroupSetById,
     getDhis2DataSetById,
     getDhis2ProgramById,
-    // getDhis2TrackedEntityTypeById, // TODO: Implement
-    // getDhis2TrackedEntityAttributeById, // TODO: Implement
-    // getDhis2ValidationRuleById, // TODO: Implement
-    // getDhis2OptionSetById, // TODO: Implement
-    // getDhis2IndicatorById, // TODO: Implement
-    // getDhis2VisualizationById, // TODO: Implement
-    // getDhis2DashboardById, // TODO: Implement
+    getDhis2TrackedEntityTypeById,
+    getDhis2TrackedEntityAttributeById,
+    getDhis2ValidationRuleById,
+    getDhis2OptionSetById,
+    getDhis2IndicatorById,
+    getDhis2VisualizationById,
+    getDhis2DashboardById,
+    getDhis2RelationshipTypeById,
 } from './structured-tools';

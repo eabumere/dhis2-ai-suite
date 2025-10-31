@@ -125,6 +125,47 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
     }),
     metadataType: "categoryCombos",
     dhis2SchemaName: "CategoryCombo",
+    preparePayload: async (input) => {
+        const { categories: categoryNames, ...otherInput } = input;
+
+        // Resolve category names to category objects with IDs
+        const resolvedCategories: Array<{ id: string }> = [];
+
+        for (const categoryName of categoryNames) {
+            try {
+                // Search for existing category by name
+                const searchResults = await searchDhis2Metadata('categories', {
+                    filter: `name:ilike:${categoryName}`,
+                    fields: 'id,name,dataDimension,dataDimensionType',
+                    paging: 'false'
+                });
+
+                let categoryId: string;
+
+                if (searchResults.length > 0 && searchResults[0].name === categoryName) {
+                    // Found existing category
+                    categoryId = searchResults[0].id;
+                    console.log(`Found existing category "${categoryName}" with ID: ${categoryId}`);
+                } else {
+                    // Category doesn't exist, try to create it (this should be done by dependencies, but let's ensure it)
+                    // For now, we'll throw an error since we can't create categories without options from this context
+                    throw new Error(`Category "${categoryName}" does not exist. Please create the category first using "Create a category named '${categoryName}' with options".`);
+                }
+
+                resolvedCategories.push({ id: categoryId });
+            } catch (error) {
+                console.error(`Error resolving category "${categoryName}":`, error);
+                throw new Error(`Failed to resolve category "${categoryName}": ${error.message}`);
+            }
+        }
+
+        // Return the transformed payload with categories as objects with IDs
+        return {
+            ...otherInput,
+            categories: resolvedCategories,
+            dataDimensionType: 'DISAGGREGATION' // Ensure proper dataDimensionType
+        };
+    },
     dependencies: [
         {
             type: "categories",

@@ -56,7 +56,12 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                     // Explicitly generate code if not provided
                     code: llmInput.code || (llmInput.name ?
                         llmInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
-                        `CODE_${Date.now()}`)
+                        `CODE_${Date.now()}`),
+
+                    // OrganizationUnit-specific fields - auto-generate openingDate if not provided
+                    ...(config.metadataType === 'organisationUnits' && !llmInput.openingDate && {
+                        openingDate: new Date().toISOString().split('T')[0]
+                    })
                 };
 
                 // 2. Use DLHIS2 schema for validation if provided
@@ -95,7 +100,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
                 // 5. Track in conversation context
                 try {
-                    addResourceToContext(validation.data.id, config.metadataType, validation.data.name, 'created');
+                    addResourceToContext((validation.data as any).id, config.metadataType, (validation.data as any).name, 'created');
                 } catch (contextError) {
                     console.warn('Failed to add resource to context:', contextError);
                 }
@@ -246,7 +251,7 @@ export function createDhis2ResourceTool<
 
                         // Track successful creations in conversation context
                         try {
-                            addResourceToContext(validation.data.id, config.metadataType, validation.data.name, 'created');
+                            addResourceToContext((validation.data as any).id, config.metadataType, (validation.data as any).name, 'created');
                         } catch (contextError) {
                             console.warn('Failed to add resource to context:', contextError);
                         }

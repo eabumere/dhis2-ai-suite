@@ -45,7 +45,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
                 // 1. Run tool-specific payload transformation if provided
                 const transformedInput = config.preparePayload ?
-                    config.preparePayload(llmInput) : llmInput;
+                    await config.preparePayload(llmInput) : llmInput;
 
                 // 2. Transform LLM input to full DHIS2 object
                 const dhis2Object = {

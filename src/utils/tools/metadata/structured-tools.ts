@@ -1505,19 +1505,10 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
     }),
     metadataType: "organisationUnits",
     dhis2SchemaName: "OrganisationUnit", // Validates against actual DHIS2 OrganisationUnit schema
-    preparePayload: (params) => {
-        const { name, code, level, openingDate, path, parentId } = params;
-
-        return {
-            name,
-            displayName: name,
-            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
-            code,
-            level,
-            openingDate: openingDate || new Date().toISOString().split('T')[0],
-            path: path || `${parentId || ''}/${Math.random().toString(36).substr(2, 9)}`
-        };
-    }
+    preparePayload: (input) => ({
+        ...input,
+        openingDate: input.openingDate || new Date().toISOString().split('T')[0]
+    })
 });
 
 export const createDhis2OrganisationUnitGroup = createLLMFirstTool({

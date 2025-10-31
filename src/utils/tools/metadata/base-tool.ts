@@ -27,6 +27,7 @@ export interface LLMToolConfig<T extends z.ZodSchema> {
         createIfNotFound?: boolean;
         createParams?: Record<string, any>;
     }>;
+    preparePayload?: (input: any) => any; // Tool-specific payload transformation
 }
 
 /**
@@ -42,26 +43,25 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 // LLM provides structured parameters directly
                 const llmInput = resource as any;
 
-                // 1. Transform LLM input to full DHIS2 object
+                // 1. Run tool-specific payload transformation if provided
+                const transformedInput = config.preparePayload ?
+                    config.preparePayload(llmInput) : llmInput;
+
+                // 2. Transform LLM input to full DHIS2 object
                 const dhis2Object = {
                     // LLM-provided fields
-                    ...llmInput,
+                    ...transformedInput,
 
                     // Auto-generate required fields if missing
-                    id: llmInput.id || await generateDhis2Id(),
-                    name: llmInput.name,
-                    displayName: llmInput.displayName || llmInput.name,
-                    shortName: llmInput.shortName || generateShortName(llmInput.name || 'Unknown'),
+                    id: transformedInput.id || await generateDhis2Id(),
+                    name: transformedInput.name,
+                    displayName: transformedInput.displayName || transformedInput.name,
+                    shortName: transformedInput.shortName || generateShortName(transformedInput.name || 'Unknown'),
 
                     // Explicitly generate code if not provided
-                    code: llmInput.code || (llmInput.name ?
-                        llmInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
-                        `CODE_${Date.now()}`),
-
-                    // OrganizationUnit-specific fields - auto-generate openingDate if not provided
-                    ...(config.metadataType === 'organisationUnits' && !llmInput.openingDate && {
-                        openingDate: new Date().toISOString().split('T')[0]
-                    })
+                    code: transformedInput.code || (transformedInput.name ?
+                        transformedInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
+                        `CODE_${Date.now()}`)
                 };
 
                 // 2. Use DLHIS2 schema for validation if provided
@@ -397,10 +397,10 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                 // Handle partial updates - merge with existing resource
                 if (resource && Object.keys(resource).length > 0) {
                     try {
-                        const existing = await fetch(`${(import.meta as any).env.DHIS2_API_BASE_URL}/${config.metadataType}/${resourceId}`, {
+                        const existing = await fetch(`${import.meta.env.DHIS2_API_BASE_URL}/${config.metadataType}/${resourceId}`, {
                             method: "GET",
                             headers: {
-                                'Authorization': `Basic ${btoa(`${(import.meta as any).env.DHIS2_USERNAME}:${(import.meta as any).env.DHIS2_PASSWORD}`)}`,
+                                'Authorization': `Basic ${btoa(`${import.meta.env.DHIS2_USERNAME}:${import.meta.env.DHIS2_PASSWORD}`)}`,
                                 'Content-Type': 'application/json',
                             },
                         });

@@ -1,5 +1,13 @@
-/node_modules/
-/.idea/
-/.env
-/.d2/
-/i18n/
+# DHIS2 Platform
+node_modules
+.d2
+src/locales
+build/app
+/i18n
+/.idea
+package-lock.json
+package.json
+yarn.lock
+.vscode/
+
+

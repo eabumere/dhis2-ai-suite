@@ -3,7 +3,7 @@ node_modules
 .d2
 src/locales
 build/app
-/i18n
+/i18n/
 /.idea
 package-lock.json
 package.json

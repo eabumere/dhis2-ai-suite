@@ -12,6 +12,132 @@ import {
 } from './helpers';
 
 /**
+ * New LLM-First Tool Configuration
+ * Pure tool calling: LLM selects tool + extracts parameters from schema
+ * No custom NL processing in tools - let LLM handle everything
+ */
+export interface LLMToolConfig<T extends z.ZodSchema> {
+    name: string;
+    description: string;           // Clear, specific description for LLM tool selection
+    schema: T;                   // Pure Zod schema for LLM parameter extraction
+    metadataType: string;        // DHIS2 API endpoint
+    dependencies?: Array<{       // Optional default dependencies
+        type: string;
+        name: string;
+        createIfNotFound?: boolean;
+        createParams?: Record<string, any>;
+    }>;
+    preparePayload?: (input: any) => any; // Tool-specific payload transformation
+}
+
+/**
+ * LLM-First Tool Factory
+ * Pure tool calling architecture: LLM handles everything, we handle validation & DHIS2 format
+ */
+export function createLLMFirstTool<T extends z.ZodSchema>(
+    config: LLMToolConfig<T> & { dhis2SchemaName?: keyof typeof import('./schemas').Dhis2Schemas }
+) {
+    return tool(
+        async ({ resource }: { resource: z.infer<T> }) => {
+            try {
+                // LLM provides structured parameters directly
+                const llmInput = resource as any;
+
+                // 1. Run tool-specific payload transformation if provided
+                const transformedInput = config.preparePayload ?
+                    await config.preparePayload(llmInput) : llmInput;
+
+                // 2. Transform LLM input to full DHIS2 object
+                const dhis2Object = {
+                    // LLM-provided fields
+                    ...transformedInput,
+
+                    // Auto-generate required fields if missing
+                    id: transformedInput.id || await generateDhis2Id(),
+                    name: transformedInput.name,
+                    displayName: transformedInput.displayName || transformedInput.name,
+                    shortName: transformedInput.shortName || generateShortName(transformedInput.name || 'Unknown'),
+
+                    // Explicitly generate code if not provided
+                    code: transformedInput.code || (transformedInput.name ?
+                        transformedInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
+                        `CODE_${Date.now()}`)
+                };
+
+                // 2. Use DLHIS2 schema for validation if provided
+                const schemaToUse = config.dhis2SchemaName ?
+                    (await import('./schemas')).Dhis2Schemas[config.dhis2SchemaName] :
+                    config.schema;
+
+                // Validate against DHIS2 schema
+                const validation = validateResourceData(schemaToUse, dhis2Object);
+                if (!validation.success) {
+                    return JSON.stringify({
+                        success: false,
+                        error: `Validation failed: ${(validation as any).errors?.join(', ') || 'Unknown validation error'}`,
+                        provided: llmInput,
+                        required: 'Depends on DHIS2 schema requirements'
+                    });
+                }
+
+                // 3. Resolve dependencies (default category combos for data elements, etc.)
+                if (config.dependencies && config.dependencies.length > 0) {
+                    const resolvedDeps = await resolveDependencies(
+                        schemaToUse,
+                        config.dependencies
+                    );
+                    validation.data = {
+                        ...validation.data,
+                        ...resolvedDeps,
+                    };
+                }
+
+                // 4. Create in DHIS2
+                const createResult = await createDhis2Metadata(
+                    config.metadataType,
+                    [validation.data]
+                );
+
+                // 5. Track in conversation context
+                try {
+                    addResourceToContext((validation.data as any).id, config.metadataType, (validation.data as any).name, 'created');
+                } catch (contextError) {
+                    console.warn('Failed to add resource to context:', contextError);
+                }
+
+                // 6. Return success response
+                return JSON.stringify({
+                    success: true,
+                    message: `Successfully created ${config.metadataType.slice(0, -1)}: ${validation.data.name}`,
+                    id: validation.data.id,
+                    name: validation.data.name,
+                    code: validation.data.code,
+                    sortOrder: validation.data.sortOrder,
+                    llm_input: llmInput,
+                    dhis2_object: validation.data
+                });
+
+            } catch (error) {
+                console.error(`Error in ${config.name}:`, error);
+                return JSON.stringify({
+                    success: false,
+                    error: `Failed to create resource: ${error.message}`,
+                    tool: config.name,
+                    llm_params: { resource }
+                });
+            }
+        },
+        {
+            name: config.name,
+            description: config.description,
+            schema: z.object({
+                resource: config.schema
+            }).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with these properties`),
+        }
+    );
+}
+
+/**
  * Configuration for creating a DHIS2 resource tool
  */
 export interface Dhis2ToolConfig<T extends z.ZodSchema> {
@@ -125,7 +251,7 @@ export function createDhis2ResourceTool<
 
                         // Track successful creations in conversation context
                         try {
-                            addResourceToContext(validation.data.id, config.metadataType, validation.data.name, 'created');
+                            addResourceToContext((validation.data as any).id, config.metadataType, (validation.data as any).name, 'created');
                         } catch (contextError) {
                             console.warn('Failed to add resource to context:', contextError);
                         }
@@ -271,10 +397,10 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                 // Handle partial updates - merge with existing resource
                 if (resource && Object.keys(resource).length > 0) {
                     try {
-                        const existing = await fetch(`${(import.meta as any).env.DHIS2_API_BASE_URL}/${config.metadataType}/${resourceId}`, {
+                        const existing = await fetch(`${import.meta.env.DHIS2_API_BASE_URL}/${config.metadataType}/${resourceId}`, {
                             method: "GET",
                             headers: {
-                                'Authorization': `Basic ${btoa(`${(import.meta as any).env.DHIS2_USERNAME}:${(import.meta as any).env.DHIS2_PASSWORD}`)}`,
+                                'Authorization': `Basic ${btoa(`${import.meta.env.DHIS2_USERNAME}:${import.meta.env.DHIS2_PASSWORD}`)}`,
                                 'Content-Type': 'application/json',
                             },
                         });

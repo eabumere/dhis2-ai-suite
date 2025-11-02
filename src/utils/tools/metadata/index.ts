@@ -10,5 +10,5 @@ export * from './batch-manager';
 // Export the complete tools collection
 export { Dhis2StructuredTools } from './structured-tools';
 
-// Export unified metadata manager
+export { createDhis2Option, createDhis2DataElement } from './structured-tools';
 export { getUnifiedMetadataManager, batchCreateMetadata, batchUpdateMetadata } from './batch-manager';

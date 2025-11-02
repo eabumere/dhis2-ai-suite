@@ -1,9 +1,11 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { AzureChatOpenAI } from '@langchain/openai';
 import {
+    createDhis2DataElement, // LLM-FIRST: Pure tool calling architecture
+    createDhis2Option, // LLM-FIRST: Fixed option routing (the key fix!)
+    // LEGACY TOOLS (will be migrated) - Keeping them for now
     createDhis2Category,
     createDhis2CategoryCombo,
-    createDhis2DataElement,
     createDhis2DataSet,
     createDhis2Indicator,
     createDhis2OptionSet,
@@ -54,8 +56,11 @@ const model = new AzureChatOpenAI({
 export const metadataAgent = createReactAgent({
   llm: model,
   tools: [
-    // Creation tools for all resource types
-    createDhis2DataElement,
+    // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
+    createDhis2DataElement, // LLM-FIRST: Pure tool calling (replaces ALL custom parsing)
+    createDhis2Option, // LLM-FIRST: FIXED OPTION ROUTING (the key solution!)
+
+    // ████████ LEGACY TOOLS (will be migrated) ████████
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
@@ -112,6 +117,7 @@ export const metadataAgent = createReactAgent({
     - **Programs**: Tracker programs for individual-level data
     - **Indicators**: Calculated indicators with numerators and denominators
     - **Validation Rules**: Data quality checks and constraints
+    - **Options**: Individual options that can belong to option sets or be standalone
     - **Option Sets**: Predefined lists of options for data elements
 
     ### CONVERSATIONAL CONTEXT

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { generateDhis2Id, searchDhis2Metadata, validateResourceData } from './helpers';
-import { dhis2Api } from '../app-runtime/dhis2-api';
+import { dhis2Api } from '../../app-runtime/dhis2-api';
 
 // Note: DHIS2 authentication now handled by app-runtime automatically
 

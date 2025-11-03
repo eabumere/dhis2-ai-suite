@@ -1,4 +1,4 @@
-import React, { createContext, useContext, ReactNode, Component } from 'react';
+import React, { ReactNode, Component } from 'react';
 import { useDataEngine } from '@dhis2/app-runtime';
 
 // Types for API operations

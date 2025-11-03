@@ -10,7 +10,7 @@ import {
     addResourceToContext,
     updateDhis2Metadata,
 } from './helpers';
-import { dhis2Api } from '../app-runtime/dhis2-api';
+import { dhis2Api } from '../../app-runtime/dhis2-api';
 
 /**
  * New LLM-First Tool Configuration

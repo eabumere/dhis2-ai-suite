@@ -9,7 +9,7 @@ import {
     checkResourceExists as checkResourceExistsAppRuntime,
     createDhis2MetadataAggregated as createDhis2MetadataAggregatedAppRuntime,
     createDhis2MetadataDirect as createDhis2MetadataDirectAppRuntime,
-} from '../app-runtime/dhis2-api';
+} from '../../app-runtime/dhis2-api';
 
 /**
  * Resolve conversational references to resource IDs

@@ -137,8 +137,6 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
     );
 }
 
-
-
 /**
  * Create a search tool for DHIS2 resources
  */

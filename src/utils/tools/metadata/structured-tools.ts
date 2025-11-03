@@ -1314,16 +1314,7 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
                 const level = result.level || 1;
                 const parentLevel = level - 1;
 
-                const searchResults = await fetch(
-                    `${process.env.DHIS2_API_BASE_URL}/organisationUnits?fields=id,name,code,displayName,path,level&paging=false`,
-                    {
-                        method: "GET",
-                        headers: {
-                            'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
-                            'Content-Type': 'application/json',
-                        },
-                    }
-                ).then(res => res.json()).then(data => data.organisationUnits || []);
+                const searchResults = await searchDhis2Metadata('organisationUnits', '', 100);
                 const potentialParents = searchResults.filter((org: any) => org.level === parentLevel);
 
                 if (potentialParents.length > 0) {
@@ -1343,17 +1334,8 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         // Try to resolve parent by name if specified
         if (!result.parentId && result.parentName) {
             try {
-                const searchResults = await fetch(
-                    `${process.env.DHIS2_API_BASE_URL}/organisationUnits?filter=name:ilike:${encodeURIComponent(result.parentName)}&fields=id,name,code,displayName,path,level&paging=false`,
-                    {
-                        method: "GET",
-                        headers: {
-                            'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
-                            'Content-Type': 'application/json',
-                        },
-                    }
-                ).then(res => res.json()).then(data => data.organisationUnits || []);
-                const matchingParent = (searchResults as any[]).find((org: any) => org.name === result.parentName);
+                const searchResults = await searchDhis2Metadata('organisationUnits', result.parentName, 10);
+                const matchingParent = searchResults.find((org: any) => org.name === result.parentName);
                 if (matchingParent) {
                     result.parentId = matchingParent.id;
                     result.path = matchingParent.path ? `${matchingParent.path}/${await generateDhis2Id()}` : `/${matchingParent.id}/${await generateDhis2Id()}`;

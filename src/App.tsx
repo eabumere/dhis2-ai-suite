@@ -3,6 +3,7 @@ import i18n from '@dhis2/d2-i18n'
 import React, { FC, useState } from 'react'
 import classes from './App.module.css'
 import { metadataAgent } from './agent'
+import { DataEngineProvider } from './utils/app-runtime/dhis2-api'
 
 interface QueryResults {
     me: {
@@ -538,4 +539,8 @@ const MyApp: FC = () => {
     )
 }
 
-export default MyApp
+export default (props: any) => (
+    <DataEngineProvider>
+        <MyApp {...props} />
+    </DataEngineProvider>
+)

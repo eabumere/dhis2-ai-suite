@@ -10,6 +10,7 @@ import {
     addResourceToContext,
     updateDhis2Metadata,
 } from './helpers';
+import { dhis2Api } from '../app-runtime/dhis2-api';
 
 /**
  * New LLM-First Tool Configuration
@@ -211,16 +212,14 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                 // Handle partial updates - merge with existing resource
                 if (resource && Object.keys(resource).length > 0) {
                     try {
-                        const existing = await fetch(`${process.env.DHIS2_API_BASE_URL}/${config.metadataType}/${resourceId}`, {
-                            method: "GET",
-                            headers: {
-                                'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
-                                'Content-Type': 'application/json',
-                            },
+                        const existingResult = await dhis2Api.query({
+                            resource: config.metadataType,
+                            id: resourceId,
+                            type: 'read'
                         });
 
-                        if (existing.ok) {
-                            const existingData = await existing.json();
+                        if (existingResult.success) {
+                            const existingData = existingResult.data;
                             // Merge existing data with updates
                             updatedResource = {
                                 ...existingData,
@@ -339,23 +338,19 @@ export function createDhis2GetByIdTool(metadataType: string, displayName: string
     return tool(
         async ({ id }: { id: string }) => {
             try {
-                const result = await fetch(`${process.env.DHIS2_API_BASE_URL}/${metadataType}/${id}`, {
-                    method: "GET",
-                    headers: {
-                        'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
-                        'Content-Type': 'application/json',
-                    },
+                const result = await dhis2Api.query({
+                    resource: metadataType,
+                    id: id,
+                    type: 'read'
                 });
 
-                if (!result.ok) {
-                    throw new Error(`DHIS2 API error: ${result.status} ${result.statusText}`);
+                if (!result.success) {
+                    throw new Error(`DHIS2 API error: ${result.error}`);
                 }
-
-                const data = await result.json();
 
                 return JSON.stringify({
                     success: true,
-                    [metadataType]: data
+                    [metadataType]: result.data
                 });
             } catch (error) {
                 console.error(`Error getting ${metadataType} by ID:`, error);

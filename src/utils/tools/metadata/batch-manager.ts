@@ -1,19 +1,8 @@
 import { z } from 'zod';
 import { generateDhis2Id, searchDhis2Metadata, validateResourceData } from './helpers';
+import { dhis2Api } from '../app-runtime/dhis2-api';
 
-// DHIS2 environment variables
-const dhis2BaseUrl = (import.meta as any).env.DHIS2_API_BASE_URL;
-const username = (import.meta as any).env.DHIS2_USERNAME;
-const password = (import.meta as any).env.DHIS2_PASSWORD;
-
-const auth = `${username}:${password}`;
-
-function authHeaders(): HeadersInit {
-    return {
-        'Authorization': `Basic ${btoa(auth)}`,
-        'Content-Type': 'application/json',
-    };
-}
+// Note: DHIS2 authentication now handled by app-runtime automatically
 
 /**
  * Metadata operation types
@@ -303,7 +292,7 @@ export class UnifiedMetadataManager {
     }
 
     /**
-     * Execute the unified metadata API call
+     * Execute the unified metadata API call using app-runtime
      */
     private async executeMetadataAPI(
         payload: Record<string, any[]>,
@@ -311,21 +300,23 @@ export class UnifiedMetadataManager {
     ): Promise<any> {
         console.log('Executing unified metadata API:', JSON.stringify(payload, null, 2));
 
-        const response = await fetch(`${dhis2BaseUrl}/metadata?importStrategy=${importStrategy}`, {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify(payload)
+        const result = await dhis2Api.mutate({
+            resource: 'metadata',
+            type: 'create',
+            data: payload,
+            params: {
+                importStrategy: importStrategy as any,
+                atomic: false
+            }
         });
 
-        if (!response.ok) {
-            const responseText = await response.text();
-            console.error('Unified metadata API Error:', response.status, responseText);
-            throw new Error(`HTTP error! status: ${response.status}, response: ${responseText}`);
+        if (!result.success) {
+            console.error('Unified metadata API Error:', result);
+            throw new Error(`App-runtime metadata API error: ${result.error}`);
         }
 
-        const data = await response.json();
-        console.log('Unified metadata API Response:', data);
-        return data;
+        console.log('Unified metadata API Response:', result.data);
+        return result.data;
     }
 
     /**

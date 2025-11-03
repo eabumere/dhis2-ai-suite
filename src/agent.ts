@@ -1,38 +1,123 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { AzureChatOpenAI } from '@langchain/openai';
 import {
-    createDhis2DataElement, // LLM-FIRST: Pure tool calling architecture
-    createDhis2Option, // LLM-FIRST: Fixed option routing (the key fix!)
-    // LEGACY TOOLS (will be migrated) - Keeping them for now
+    // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
+    createDhis2DataElement, // Pure tool calling (replaces ALL custom parsing)
+    createDhis2Option, // Fixed option routing (the key solution!)
+
+    // ████████ ALL CREATION TOOLS ████████
+    // Core Metadata (15 tools)
+    createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2DataSet,
     createDhis2Indicator,
     createDhis2OptionSet,
-    createDhis2OrganisationUnit,
-    createDhis2Program, createDhis2ReportingForm,
     createDhis2ValidationRule,
-    getDhis2CategoryById,
-    getDhis2DataElementById,
-    getDhis2DataSetById,
-    getDhis2OrganisationUnitById,
-    getDhis2ProgramById,
-    searchDhis2Categories,
-    searchDhis2CategoryCombos,
-    searchDhis2DataElements,
-    searchDhis2DataSets,
-    searchDhis2Indicators,
-    searchDhis2OrganisationUnits,
-    searchDhis2Programs,
+    createDhis2ReportingForm,
+
+    // Extended Metadata (15 tools)
+    createDhis2CategoryOption,
+    createDhis2OrganisationUnitGroup,
+    createDhis2OrganisationUnitGroupSet,
+    createDhis2Program,
+    createDhis2TrackedEntityType,
+    createDhis2TrackedEntityAttribute,
+    createDhis2ProgramStage,
+    createDhis2ProgramRule,
+    createDhis2ProgramIndicator,
+    createDhis2IndicatorType,
+    createDhis2Visualization,
+    createDhis2Dashboard,
+    createDhis2DashboardItem,
+    createDhis2User,
+    createDhis2RelationshipType,
+
+    // Entity & Data Management (5 tools)
+    createDhis2Relationship,
+    createDhis2TrackedEntityInstance,
+    createDhis2Enrollment,
+    createDhis2Event,
+    createDhis2AggregatedMetadata,
+
+    // ████████ ALL UPDATE TOOLS ████████
+    // Core Updates (12 tools)
+    updateDhis2DataElement,
+    updateDhis2OrganisationUnit,
     updateDhis2Category,
     updateDhis2CategoryCombo,
-    updateDhis2DataElement,
     updateDhis2DataSet,
     updateDhis2Indicator,
     updateDhis2OptionSet,
-    updateDhis2OrganisationUnit,
-    updateDhis2Program,
     updateDhis2ValidationRule,
+    updateDhis2Program,
+    updateDhis2CategoryOption,
+    updateDhis2OrganisationUnitGroup,
+    updateDhis2OrganisationUnitGroupSet,
+
+    // Advanced Updates (16 tools)
+    updateDhis2ProgramStage,
+    updateDhis2ProgramRule,
+    updateDhis2ProgramIndicator,
+    updateDhis2IndicatorType,
+    updateDhis2TrackedEntityType,
+    updateDhis2TrackedEntityAttribute,
+    updateDhis2TrackedEntityInstance,
+    updateDhis2Visualization,
+    updateDhis2Dashboard,
+    updateDhis2DashboardItem,
+    updateDhis2User,
+    updateDhis2RelationshipType,
+    updateDhis2Relationship,
+    updateDhis2Enrollment,
+    updateDhis2Event,
+
+    // ████████ ALL SEARCH TOOLS ████████
+    // Core Searches (7 tools)
+    searchDhis2DataElements,
+    searchDhis2OrganisationUnits,
+    searchDhis2Categories,
+    searchDhis2CategoryCombos,
+    searchDhis2DataSets,
+    searchDhis2Programs,
+    searchDhis2Indicators,
+
+    // Extended Searches (10 tools)
+    searchDhis2CategoryOptions,
+    searchDhis2OrganisationUnitGroups,
+    searchDhis2OrganisationUnitGroupSets,
+    searchDhis2TrackedEntityTypes,
+    searchDhis2TrackedEntityAttributes,
+    searchDhis2Validations,
+    searchDhis2OptionSets,
+    searchDhis2Visualizations,
+    searchDhis2Dashboards,
+    searchDhis2Users,
+    searchDhis2RelationshipTypes,
+
+    // ████████ ALL GET-BY-ID TOOLS ████████
+    // Core Get-by-ID (5 tools)
+    getDhis2DataElementById,
+    getDhis2OrganisationUnitById,
+    getDhis2CategoryById,
+    getDhis2DataSetById,
+    getDhis2ProgramById,
+
+    // Extended Get-by-ID (8 tools)
+    getDhis2CategoryOptionById,
+    getDhis2OrganisationUnitGroupById,
+    getDhis2OrganisationUnitGroupSetById,
+    getDhis2TrackedEntityTypeById,
+    getDhis2TrackedEntityAttributeById,
+    getDhis2ValidationRuleById,
+    getDhis2OptionSetById,
+    getDhis2IndicatorById,
+    getDhis2VisualizationById,
+    getDhis2DashboardById,
+    getDhis2RelationshipTypeById,
+
+    // ████████ SPECIALIZED TOOLS ████████
+    getDhis2DataValues,
 } from './utils/tools/metadata';
 import {
     resolveResourceReference,
@@ -57,20 +142,78 @@ export const metadataAgent = createReactAgent({
   llm: model,
   tools: [
     // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
-    createDhis2DataElement, // LLM-FIRST: Pure tool calling (replaces ALL custom parsing)
-    createDhis2Option, // LLM-FIRST: FIXED OPTION ROUTING (the key solution!)
+    createDhis2DataElement, // Pure tool calling (replaces ALL custom parsing)
+    createDhis2Option, // FIXED OPTION ROUTING (the key solution!)
 
-    // ████████ LEGACY TOOLS (will be migrated) ████████
+    // ████████ ALL CREATION TOOLS ████████
+    // Core Metadata Creation (8 tools)
     createDhis2OrganisationUnit,
     createDhis2Category,
     createDhis2CategoryCombo,
     createDhis2DataSet,
-    createDhis2Program,
     createDhis2Indicator,
     createDhis2ValidationRule,
     createDhis2OptionSet,
+    createDhis2ReportingForm,
 
-    // Search tools
+    // Extended Metadata Creation (15 tools)
+    createDhis2CategoryOption,
+    createDhis2OrganisationUnitGroup,
+    createDhis2OrganisationUnitGroupSet,
+    createDhis2Program,
+    createDhis2TrackedEntityType,
+    createDhis2TrackedEntityAttribute,
+    createDhis2ProgramStage,
+    createDhis2ProgramRule,
+    createDhis2ProgramIndicator,
+    createDhis2IndicatorType,
+    createDhis2Visualization,
+    createDhis2Dashboard,
+    createDhis2DashboardItem,
+    createDhis2User,
+    createDhis2RelationshipType,
+
+    // Tracker & Data Management Creation (5 tools)
+    createDhis2Relationship,
+    createDhis2TrackedEntityInstance,
+    createDhis2Enrollment,
+    createDhis2Event,
+    createDhis2AggregatedMetadata,
+
+    // ████████ ALL UPDATE TOOLS ████████
+    // Core Metadata Updates (11 tools)
+    updateDhis2DataElement,
+    updateDhis2OrganisationUnit,
+    updateDhis2Category,
+    updateDhis2CategoryCombo,
+    updateDhis2DataSet,
+    updateDhis2Indicator,
+    updateDhis2ValidationRule,
+    updateDhis2OptionSet,
+    updateDhis2Program,
+    updateDhis2CategoryOption,
+    updateDhis2OrganisationUnitGroup,
+    updateDhis2OrganisationUnitGroupSet,
+
+    // Advanced Metadata Updates (13 tools)
+    updateDhis2ProgramStage,
+    updateDhis2ProgramRule,
+    updateDhis2ProgramIndicator,
+    updateDhis2IndicatorType,
+    updateDhis2TrackedEntityType,
+    updateDhis2TrackedEntityAttribute,
+    updateDhis2TrackedEntityInstance,
+    updateDhis2Visualization,
+    updateDhis2Dashboard,
+    updateDhis2DashboardItem,
+    updateDhis2User,
+    updateDhis2RelationshipType,
+    updateDhis2Relationship,
+    updateDhis2Enrollment,
+    updateDhis2Event,
+
+    // ████████ ALL SEARCH TOOLS ████████
+    // Core Metadata Searches (7 tools)
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
@@ -79,28 +222,44 @@ export const metadataAgent = createReactAgent({
     searchDhis2Programs,
     searchDhis2Indicators,
 
-    // Get by ID tools
+    // Extended Metadata Searches (10 tools)
+    searchDhis2CategoryOptions,
+    searchDhis2OrganisationUnitGroups,
+    searchDhis2OrganisationUnitGroupSets,
+    searchDhis2TrackedEntityTypes,
+    searchDhis2TrackedEntityAttributes,
+    searchDhis2Validations,
+    searchDhis2OptionSets,
+    searchDhis2Visualizations,
+    searchDhis2Dashboards,
+    searchDhis2Users,
+    searchDhis2RelationshipTypes,
+
+    // ████████ ALL GET-BY-ID TOOLS ████████
+    // Core Metadata Get-by-ID (5 tools)
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
     getDhis2DataSetById,
     getDhis2ProgramById,
 
-    // Update tools for all resource types
-    updateDhis2DataElement,
-    updateDhis2OrganisationUnit,
-    updateDhis2Category,
-    updateDhis2CategoryCombo,
-    updateDhis2DataSet,
-    updateDhis2Program,
-    updateDhis2Indicator,
-    updateDhis2ValidationRule,
-    updateDhis2OptionSet,
+    // Extended Metadata Get-by-ID (8 tools)
+    getDhis2CategoryOptionById,
+    getDhis2OrganisationUnitGroupById,
+    getDhis2OrganisationUnitGroupSetById,
+    getDhis2TrackedEntityTypeById,
+    getDhis2TrackedEntityAttributeById,
+    getDhis2ValidationRuleById,
+    getDhis2OptionSetById,
+    getDhis2IndicatorById,
+    getDhis2VisualizationById,
+    getDhis2DashboardById,
+    getDhis2RelationshipTypeById,
 
-    // Complex form creation tool
-    createDhis2ReportingForm,
+    // ████████ SPECIALIZED TOOLS ████████
+    getDhis2DataValues,
 
-    // Reference resolution tool
+    // ████████ UTILITY TOOLS ████████
     resolveResourceReference,
   ],
   prompt: `
@@ -109,16 +268,31 @@ export const metadataAgent = createReactAgent({
     ## CORE CAPABILITIES
 
     ### CREATION & UPDATE TOOLS
-    You can create any DHIS2 metadata resource type as well as UPDATE existing resources:
-    - **Data Elements**: Numeric, text, boolean, date, and other value types with appropriate aggregation
-    - **Organisation Units**: Administrative units with proper hierarchy levels
-    - **Categories & Category Combinations**: For data disaggregation and analysis
-    - **Data Sets**: Collections of data elements with period types and forms
-    - **Programs**: Tracker programs for individual-level data
-    - **Indicators**: Calculated indicators with numerators and denominators
-    - **Validation Rules**: Data quality checks and constraints
-    - **Options**: Individual options that can belong to option sets or be standalone
-    - **Option Sets**: Predefined lists of options for data elements
+    You can create and UPDATE ALL DHIS2 metadata resource types (~28 creation tools + ~28 update tools):
+
+    **CORE METADATA:**
+    - **Data Elements**: All value types (numeric, text, boolean, date, etc.) with proper aggregation
+    - **Organisation Units**: Hierarchical administrative units with levels and groups
+    - **Categories & Category Combinations**: Complete data disaggregation systems
+    - **Category Options**: Individual category values
+    - **Data Sets**: Collections with data elements, period types, and reporting forms
+    - **Indicators**: Calculated metrics with numerators/denominators and indicator types
+    - **Validation Rules**: Quality checks with expressions and constraints
+    - **Option Sets & Options**: Predefined choice lists
+
+    **PROGRAMS & TRACKER SYSTEMS:**
+    - **Programs**: Complete tracker/event program configurations
+    - **Tracked Entity Types**: Person/entity definitions
+    - **Tracked Entity Attributes**: Individual-level data fields
+    - **Program Stages**: Workflow steps with data elements
+    - **Program Rules**: Automated data processing logic
+    - **Program Indicators**: Program-specific calculations
+
+    **ADVANCED FEATURES:**
+    - **Dashboards & Visualizations**: Complete analytics interfaces
+    - **Users & Access Control**: User management and permissions
+    - **Relationships**: Entity associations and linkages
+    - **Tracker Instances & Enrollments**: Individual record management
 
     ### CONVERSATIONAL CONTEXT
     You maintain memory of resources created/accessed during our conversation:

@@ -3,7 +3,7 @@ import i18n from '@dhis2/d2-i18n'
 import React, { FC, useState } from 'react'
 import classes from './App.module.css'
 import { metadataAgent } from './agent'
-import { DataEngineProvider } from './utils/app-runtime/dhis2-api'
+import { DataEngineProvider } from './utils/app-runtime/data-engine.provider'
 
 interface QueryResults {
     me: {
@@ -168,7 +168,7 @@ const MyApp: FC = () => {
 
         try {
             const result = await metadataAgent.invoke({
-                messages: [{role: 'user', content: `Create data element: ${createQuery}`}]
+                messages: [{role: 'user', content: `Create metadata: ${createQuery}`}]
             })
             const lastMessage = result.messages[result.messages.length - 1]
 
@@ -197,8 +197,8 @@ const MyApp: FC = () => {
                 }
             }
         } catch (error) {
-            console.error('Error creating data element:', error)
-            setCreateErrorMessage(`Error creating data element: ${error.message}`)
+            console.error('Error creating metadata:', error)
+            setCreateErrorMessage(`Error creating metadata: ${error.message}`)
         } finally {
             setIsCreating(false)
         }
@@ -226,7 +226,7 @@ const MyApp: FC = () => {
             {/* Creation Section */}
             <div style={{marginTop: '40px', maxWidth: '600px', width: '100%'}}>
                 <h3 style={{color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px'}}>
-                    {i18n.t('Create Data Element')}
+                    {i18n.t('Create metadata')}
                 </h3>
                 <div style={{display: 'flex', gap: '10px', marginBottom: '10px', marginTop: '15px'}}>
                     <input
@@ -234,7 +234,7 @@ const MyApp: FC = () => {
                         value={createQuery}
                         onChange={(e) => setCreateQuery(e.target.value)}
                         onKeyPress={handleCreateKeyPress}
-                        placeholder={i18n.t('Describe the data element to create (e.g., "Create a numeric data element called Patient Age that aggregates by sum")')}
+                        placeholder={i18n.t('Describe the metadata to create (e.g., "Create a numeric metadata called Patient Age that aggregates by sum")')}
                         disabled={isCreating}
                         style={{
                             flex: 1,
@@ -283,7 +283,7 @@ const MyApp: FC = () => {
                             borderBottom: '1px solid #e0e0e0',
                             paddingBottom: '5px'
                         }}>
-                            {createResults.success ? 'Data Element Created Successfully' : 'Creation Failed'}
+                            {createResults.success ? 'metadata Created Successfully' : 'Creation Failed'}
                         </h4>
 
                         {createResults.success && createResults.dataElements && createResults.dataElements.length > 0 ? (
@@ -295,7 +295,7 @@ const MyApp: FC = () => {
                                 marginTop: '10px'
                             }}>
                                 <div style={{marginBottom: '15px'}}>
-                                    <strong>Data Element{createResults.count > 1 ? 's' : ''} Created
+                                    <strong>metadata{createResults.count > 1 ? 's' : ''} Created
                                         ({createResults.count} total):</strong>
                                     {createResults.dataElements?.map((element: any, index: number) => (
                                         <div key={index} style={{
@@ -306,7 +306,7 @@ const MyApp: FC = () => {
                                             padding: '10px',
                                             borderRadius: '4px'
                                         }}>
-                                            <div><strong>Data Element {index + 1}:</strong></div>
+                                            <div><strong>metadata {index + 1}:</strong></div>
                                             <div>ID: {element.id}</div>
                                             <div>Name: {element.name}</div>
                                             <div>Type: {element.valueType}</div>
@@ -327,9 +327,9 @@ const MyApp: FC = () => {
                                 marginTop: '10px'
                             }}>
                                 <div>
-                                    <strong>Data Element Creation Reported as Successful</strong>
+                                    <strong>Metadata Creation Reported as Successful</strong>
                                     <div style={{marginTop: '10px'}}>
-                                        <p>No data elements details returned in the response. The creation may have succeeded, but response format might be incomplete.</p>
+                                        <p>No metadatas details returned in the response. The creation may have succeeded, but response format might be incomplete.</p>
                                         {createResults.count && <p>Total elements reported: {createResults.count}</p>}
                                     </div>
                                 </div>

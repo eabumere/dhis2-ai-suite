@@ -397,7 +397,7 @@ export const DEPENDENCY_ORDER = [
 
 /**
  * Resolve dependencies for a resource
- * Creates dependencies in sequential order to respect dependency chains
+ * Creates dependencies in aggregated batches to minimize API calls
  */
 export async function resolveDependencies<T extends z.ZodSchema>(
     schema: T,
@@ -416,6 +416,9 @@ export async function resolveDependencies<T extends z.ZodSchema>(
         const orderB = DEPENDENCY_ORDER.indexOf(b.type);
         return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
     });
+
+    // Collect all resources that need to be created in batches
+    const resourcesToCreate: Record<string, Array<{ name: string; data: any; dep: any }>> = {};
 
     for (const dep of orderedDeps) {
         // Search for existing resource
@@ -499,7 +502,7 @@ export async function resolveDependencies<T extends z.ZodSchema>(
                 }
             }
 
-            // Create the dependency if it doesn't exist
+            // Prepare the resource for batch creation
             const id = await generateDhis2Id();
             let newResource = {
                 id,
@@ -536,17 +539,63 @@ export async function resolveDependencies<T extends z.ZodSchema>(
                 }
             }
 
-            try {
-                // Use direct creation to avoid batch issues with sequential dependencies
-                await createDhis2MetadataDirect(dep.type, validation.data);
-                resolved[dep.name] = { id, name: dep.createParams.name };
-                console.log(`✅ Created ${dep.type} '${dep.name}' with ID: ${id}`);
-            } catch (error) {
-                console.error(`❌ Failed to create dependency ${dep.name}:`, error);
-                throw new Error(`Failed to create dependency ${dep.name}: ${error.message}`);
+            // Collect for batch creation instead of creating immediately
+            if (!resourcesToCreate[dep.type]) {
+                resourcesToCreate[dep.type] = [];
             }
+            resourcesToCreate[dep.type].push({
+                name: dep.name,
+                data: validation.data,
+                dep: dep
+            });
+
+            // Store the resolved reference (will be updated with actual ID after batch creation)
+            resolved[dep.name] = { id, name: dep.createParams.name };
         } else {
             throw new Error(`Dependency not found: ${dep.name} (${dep.type})`);
+        }
+    }
+
+    // Create all collected resources in aggregated batches
+    if (Object.keys(resourcesToCreate).length > 0) {
+        console.log(`📦 Creating dependencies in aggregated batches: ${Object.entries(resourcesToCreate).map(([type, resources]) => `${resources.length} ${type}`).join(', ')}`);
+
+        // Convert to aggregated payload format
+        const aggregatedPayload: Record<string, any[]> = {};
+        for (const [resourceType, resources] of Object.entries(resourcesToCreate)) {
+            aggregatedPayload[resourceType] = resources.map(r => r.data);
+        }
+
+        try {
+            const batchResult = await createDhis2MetadataAggregated(aggregatedPayload);
+
+            if (!batchResult.success) {
+                throw new Error(`Batch creation failed: ${batchResult.httpStatus}`);
+            }
+
+            // Update resolved references with actual results
+            let resourceIndex = 0;
+            for (const [resourceType, resources] of Object.entries(resourcesToCreate)) {
+                const typeResults = batchResult.results.filter(r => r.type === resourceType);
+
+                for (let i = 0; i < resources.length; i++) {
+                    const resource = resources[i];
+                    const result = typeResults[i];
+
+                    if (result && result.created && result.id) {
+                        // Update the resolved reference with the actual created ID
+                        resolved[resource.name] = { id: result.id, name: resource.dep.createParams.name };
+                        console.log(`✅ Created ${resourceType} '${resource.name}' with ID: ${result.id}`);
+                    } else {
+                        console.warn(`⚠ Could not confirm creation of ${resourceType} '${resource.name}'`);
+                    }
+                }
+            }
+
+            console.log(`📦 Successfully created ${batchResult.results.filter(r => r.created).length} dependencies in 1 API call`);
+        } catch (error) {
+            console.error('❌ Batch dependency creation failed:', error);
+            throw new Error(`Failed to create dependencies in batch: ${error.message}`);
         }
     }
 
@@ -930,7 +979,7 @@ function getDefaultCreateParamsForReference(referenceType: string, name: string)
             shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
             dataDimension: true,
             dataDimensionType: 'DISAGGREGATION',
-            categoryOptions: []
+            categoryOptions: inferCategoryOptionsFromName(name)
         },
         'categoryOptions': {
             name,
@@ -974,6 +1023,98 @@ function getDefaultCreateParamsForReference(referenceType: string, name: string)
     };
 
     return defaults[referenceType] || { name };
+}
+
+/**
+ * Infer appropriate category options based on category name
+ */
+function inferCategoryOptionsFromName(categoryName: string): Array<{ name: string }> {
+    const name = categoryName.toLowerCase();
+
+    // Common health data category patterns
+    if (name.includes('satisfaction') || name.includes('satisfied')) {
+        return [
+            { name: 'Satisfied' },
+            { name: 'Not Satisfied' }
+        ];
+    }
+
+    if (name.includes('gender') || name.includes('sex')) {
+        return [
+            { name: 'Male' },
+            { name: 'Female' }
+        ];
+    }
+
+    if (name.includes('age') || name.includes('age group')) {
+        return [
+            { name: '<5 years' },
+            { name: '5-14 years' },
+            { name: '15-49 years' },
+            { name: '50+ years' }
+        ];
+    }
+
+    if (name.includes('yes') || name.includes('no') || name.includes('boolean')) {
+        return [
+            { name: 'Yes' },
+            { name: 'No' }
+        ];
+    }
+
+    if (name.includes('positive') || name.includes('negative')) {
+        return [
+            { name: 'Positive' },
+            { name: 'Negative' }
+        ];
+    }
+
+    if (name.includes('result') || name.includes('outcome')) {
+        return [
+            { name: 'Positive' },
+            { name: 'Negative' },
+            { name: 'Inconclusive' }
+        ];
+    }
+
+    if (name.includes('status')) {
+        return [
+            { name: 'Active' },
+            { name: 'Inactive' }
+        ];
+    }
+
+    if (name.includes('level') || name.includes('tier')) {
+        return [
+            { name: 'Low' },
+            { name: 'Medium' },
+            { name: 'High' }
+        ];
+    }
+
+    if (name.includes('priority')) {
+        return [
+            { name: 'Low' },
+            { name: 'Medium' },
+            { name: 'High' },
+            { name: 'Critical' }
+        ];
+    }
+
+    if (name.includes('quality')) {
+        return [
+            { name: 'Poor' },
+            { name: 'Fair' },
+            { name: 'Good' },
+            { name: 'Excellent' }
+        ];
+    }
+
+    // Default fallback for unknown categories
+    return [
+        { name: 'Option A' },
+        { name: 'Option B' }
+    ];
 }
 
 /**

@@ -1228,24 +1228,13 @@ export const createDhis2DataElement = createLLMFirstTool({
         domainType: z.enum(['AGGREGATE', 'TRACKER']).default('AGGREGATE').describe("Domain type"),
         aggregationType: z.enum(['SUM', 'AVERAGE', 'COUNT', 'NONE']).optional().describe("How values are aggregated"),
         description: z.string().optional().describe("Description of the data element"),
-        zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant")
+        zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant"),
+        categoryCombo: z.object({
+            id: z.string()
+        }).optional().describe("Category combination reference for disaggregation. Specify as { id: 'category-combo-uid' }")
     }),
     metadataType: "dataElements",
-    dhis2SchemaName: "DataElement", // Validates against actual DHIS2 DataElement schema
-    dependencies: [
-        {
-            type: "categoryCombos",
-            name: "default",
-            createIfNotFound: true,
-            createParams: {
-                name: "Default",
-                displayName: "Default",
-                shortName: "Default",
-                dataDimensionType: "DISAGGREGATION",
-                categories: []
-            }
-        }
-    ]
+    dhis2SchemaName: "DataElement" // Validates against actual DHIS2 DataElement schema
 });
 
 export const createDhis2OptionSet = createLLMFirstTool({
@@ -1314,7 +1303,7 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
                 const level = result.level || 1;
                 const parentLevel = level - 1;
 
-                const searchResults = await searchDhis2Metadata('organisationUnits', '', 100);
+                const searchResults = await searchDhis2Metadata('organisationUnits', '', 100) as any[];
                 const potentialParents = searchResults.filter((org: any) => org.level === parentLevel);
 
                 if (potentialParents.length > 0) {
@@ -1334,7 +1323,7 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         // Try to resolve parent by name if specified
         if (!result.parentId && result.parentName) {
             try {
-                const searchResults = await searchDhis2Metadata('organisationUnits', result.parentName, 10);
+                const searchResults = await searchDhis2Metadata('organisationUnits', result.parentName, 10) as any[];
                 const matchingParent = searchResults.find((org: any) => org.name === result.parentName);
                 if (matchingParent) {
                     result.parentId = matchingParent.id;

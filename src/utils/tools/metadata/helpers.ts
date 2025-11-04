@@ -377,8 +377,20 @@ export const TOOL_DEFAULT_DEPENDENCIES: Record<string, Array<{
 /**
  * Dependency creation order (from most fundamental to complex)
  * This ensures dependencies are created in the correct sequence
+ * Based on DHIS2 schema analysis and resource relationships
  */
 export const DEPENDENCY_ORDER = [
+    // User management (no dependencies)
+    'userRoles',
+    'userCredentials',
+    'users',
+
+    // Organisation units and groups
+    'organisationUnits',
+    'organisationUnitGroups',
+    'organisationUnitGroupSets',
+
+    // Core metadata types
     'indicatorTypes',
     'categoryOptions',
     'categories',
@@ -386,13 +398,36 @@ export const DEPENDENCY_ORDER = [
     'categoryOptionCombos',
     'optionSets',
     'dataElements',
-    'organisationUnits',
+
+    // Data sets and forms
+    'dataSets',
+    'dataEntryForms',
+
+    // Tracker program components
     'trackedEntityTypes',
     'trackedEntityAttributes',
     'programStages',
     'programs',
+    'programIndicators',
+    'programRules',
+    'programRuleVariables',
+
+    // Indicators and validation
     'indicators',
-    'validationRules'
+    'validationRules',
+
+    // Analytics and reporting
+    'visualizations',
+    'maps',
+    'charts',
+    'reportTables',
+    'reports',
+    'dashboards',
+
+    // Additional metadata types
+    'relationshipTypes',
+    'periods',
+    'analyticsQueries'
 ];
 
 /**
@@ -421,11 +456,11 @@ export async function resolveDependencies<T extends z.ZodSchema>(
     const resourcesToCreate: Record<string, Array<{ name: string; data: any; dep: any }>> = {};
 
     for (const dep of orderedDeps) {
-        // Search for existing resource
-        const existing = await searchDhis2Metadata(dep.type, dep.name, 1);
+        // Check if resource exists using comprehensive existence check
+        const existing = await checkResourceExists(dep.type, dep.name);
 
-        if (existing.length > 0) {
-            resolved[dep.name] = { id: existing[0].id, name: existing[0].name };
+        if (existing && existing.exists && existing.id) {
+            resolved[dep.name] = { id: existing.id, name: dep.name };
         } else if (dep.createIfNotFound && dep.createParams) {
             // CRITICAL STEP: Recursively resolve THIS DEPENDENCY'S nested dependencies first
             // This applies to EVERY resource type - not just categories/categoryCombos
@@ -569,8 +604,8 @@ export async function resolveDependencies<T extends z.ZodSchema>(
         try {
             const batchResult = await createDhis2MetadataAggregated(aggregatedPayload);
 
-            if (!batchResult.success) {
-                throw new Error(`Batch creation failed: ${batchResult.httpStatus}`);
+            if (batchResult.httpStatus < 200 || batchResult.httpStatus >= 300) {
+                throw new Error(`Batch creation failed: HTTP ${batchResult.httpStatus}`);
             }
 
             // Update resolved references with actual results

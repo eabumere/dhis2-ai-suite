@@ -3,7 +3,7 @@ import i18n from '@dhis2/d2-i18n'
 import React, { FC, useState } from 'react'
 import classes from './App.module.css'
 import { routerAgent } from './agents'
-import { DataEngineProvider } from './utils/app-runtime/dhis2-api'
+import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 
 interface QueryResults {
     me: {

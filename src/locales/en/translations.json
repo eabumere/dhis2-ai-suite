@@ -2,7 +2,14 @@
     "ERROR": "ERROR",
     "Loading...": "Loading...",
     "Hello {{name}}": "Hello {{name}}",
-    "Welcome to DHIS2 with TypeScript!": "Welcome to DHIS2 with TypeScript!",
-    "Getting Date...": "Getting Date...",
-    "Get Today's Date": "Get Today's Date"
+    "DHIS2 Metadata Search": "DHIS2 Metadata Search",
+    "Create Data Element": "Create Data Element",
+    "Describe the data element to create (e.g., \"Create a numeric data element called Patient Age that aggregates by sum\")": "Describe the data element to create (e.g., \"Create a numeric data element called Patient Age that aggregates by sum\")",
+    "Creating...": "Creating...",
+    "Create": "Create",
+    "Search Metadata": "Search Metadata",
+    "Enter metadata search query...": "Enter metadata search query...",
+    "Searching...": "Searching...",
+    "Search": "Search",
+    "No results found for \"{{query}}\"": "No results found for \"{{query}}\""
 }

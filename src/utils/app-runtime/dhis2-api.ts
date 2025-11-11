@@ -1,5 +1,4 @@
-import React, { ReactNode, Component } from 'react';
-import { useDataEngine } from '@dhis2/app-runtime';
+import { getDataEngine } from './dhis2-provider';
 
 // Types for API operations
 export type Dhis2ApiResult<T = any> = {
@@ -9,54 +8,13 @@ export type Dhis2ApiResult<T = any> = {
     httpStatus?: number;
 };
 
-// Global variable to hold the data engine
-let globalDataEngine: any = null;
-
-/**
- * Internal component that initializes the global data engine
- * This is a side-effect component that doesn't render anything visible
- */
-class DataEngineInitializer extends Component<{ engine: any }, {}> {
-    componentDidMount() {
-        globalDataEngine = this.props.engine;
-    }
-
-    componentDidUpdate(prevProps: { engine: any }) {
-        if (prevProps.engine !== this.props.engine) {
-            globalDataEngine = this.props.engine;
-        }
-    }
-
-    render() {
-        return null;
-    }
-}
-
-/**
- * React provider component that initializes the global data engine
- * Must be wrapped around the app
- */
-export const DataEngineProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const engine = useDataEngine();
-
-    return (
-        <>
-            <DataEngineInitializer engine={engine} />
-            {children}
-        </>
-    );
-};
-
 // Simple API class that uses the global engine
 export class Dhis2Api {
     /**
      * Get the global data engine
      */
-    private static getEngine(): any {
-        if (!globalDataEngine) {
-            throw new Error('DHIS2 app-runtime data engine not available. Make sure DataEngineProvider is wrapped around your app.');
-        }
-        return globalDataEngine;
+    private static getEngine() {
+        return getDataEngine();
     }
 
     /**

@@ -6,6 +6,7 @@ import {
     createDhis2MetadataAggregated,
     createDhis2MetadataDirect,
     generateDataElementFromExpression,
+    generateDhis2Code,
     generateDhis2Id,
     parseExpressionForDataElements,
     parseNaturalLanguageDescription,
@@ -22,100 +23,51 @@ import { z } from 'zod';
 // Pure tool calling: LLM selects tool + extracts parameters from schema
 // =============================================================================
 
-// Category Tools - Aggregated creation (creates category + options)
-export const createDhis2Category = tool(
-    async ({
-        name,
-        categoryOptions,
-        dataDimension = true,
-        dataDimensionType = 'DISAGGREGATION'
-    }: {
-        name: string;
-        categoryOptions: string[];
-        dataDimension?: boolean;
-        dataDimensionType?: 'DISAGGREGATION' | 'ATTRIBUTE';
-    }) => {
-        try {
-            const categoryId = await generateDhis2Id();
+export const createDhis2Category = createLLMFirstTool({
+    name: "create_dhis2_category",
+    description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option and are created with separate option entities.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the data disaggregation category"),
+        categoryOptions: z.array(z.string()).min(1).describe("List of category options like ['Male', 'Female'] or ['Urban', 'Rural']"),
+        dataDimension: z.boolean().default(true).describe("Whether this category can be used in data analysis"),
+        dataDimensionType: z.enum(['DISAGGREGATION', 'ATTRIBUTE']).default('DISAGGREGATION').describe("Whether this category is for data disaggregation or attribute-based categorization")
+    }),
+    metadataType: "categories",
+    dhis2SchemaName: "Category",
+    preparePayload: async (input) => {
+        const { name, categoryOptions, dataDimension = true, dataDimensionType = 'DISAGGREGATION' } = input;
 
-            // Generate option IDs and create option entities
-            const optionIds = await Promise.all(
-                categoryOptions.map(async () => await generateDhis2Id())
-            );
+        // Generate category ID
+        const categoryId = await generateDhis2Id();
 
-            // Build aggregated payload for both categories and category options
-            const aggregatedPayload = {
-                categories: [{
-                    id: categoryId,
-                    name: name,
-                    displayName: name,
-                    shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
-                    code: name.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
-                    dataDimension: dataDimension,
-                    dataDimensionType: dataDimensionType,
-                    categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
-                }],
-                categoryOptions: categoryOptions.map((optionName: string, index: number) => ({
-                    id: optionIds[index],
-                    name: optionName,
-                    displayName: optionName,
-                    shortName: optionName.length > 50 ? optionName.substring(0, 47) + '...' : optionName,
-                    code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
-                    sortOrder: index + 1
-                }))
-            };
+        // Generate option IDs and create option entities
+        const optionIds = await Promise.all(
+            categoryOptions.map(async () => await generateDhis2Id())
+        );
 
-            console.log('Creating Gender category with options:', JSON.stringify(aggregatedPayload, null, 2));
-
-            const result = await createDhis2MetadataAggregated(aggregatedPayload);
-
-            // Add successfully created resources to context
-            for (const r of result.results) {
-                if (r.created) {
-                    const resourceType = r.type;
-                    const resource = aggregatedPayload[resourceType]?.find((res: any) => res.id === r.id);
-                    if (resource) {
-                        addResourceToContext(r.id!, resourceType, resource.name || `Unnamed ${resourceType}`, 'created');
-                    }
-                }
-            }
-
-            const createdCount = result.results.filter(r => r.created).length;
-            const existingCount = result.results.filter(r => !r.created).length;
-
-            return JSON.stringify({
-                success: true,
-                message: `Successfully created category "${name}" with ${categoryOptions.length} options`,
-                categoryId,
-                categoryName: name,
-                optionIds,
-                optionsCreated: categoryOptions.length,
-                created: createdCount,
-                existing: existingCount,
-                total: result.results.length,
-                results: result.results,
-                apiResponse: result.response,
-            });
-
-        } catch (error) {
-            console.error('Error creating category with options:', error);
-            return JSON.stringify({
-                success: false,
-                error: `Failed to create category: ${error.message}`,
-            });
-        }
-    },
-    {
-        name: "create_dhis2_category",
-        description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option and are created with separate option entities.",
-        schema: z.object({
-            name: z.string().min(1).describe("The name of the data disaggregation category"),
-            categoryOptions: z.array(z.string()).min(1).describe("List of category options like ['Male', 'Female'] or ['Urban', 'Rural']"),
-            dataDimension: z.boolean().default(true).describe("Whether this category can be used in data analysis"),
-            dataDimensionType: z.enum(['DISAGGREGATION', 'ATTRIBUTE']).default('DISAGGREGATION').describe("Whether this category is for data disaggregation or attribute-based categorization")
-        }),
+        // Build aggregated payload for both categories and category options
+        return {
+            categories: [{
+                id: categoryId,
+                name: name,
+                displayName: name,
+                shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+                code: generateDhis2Code(name),
+                dataDimension: dataDimension,
+                dataDimensionType: dataDimensionType,
+                categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
+            }],
+            categoryOptions: categoryOptions.map((optionName: string, index: number) => ({
+                id: optionIds[index],
+                name: optionName,
+                displayName: optionName,
+                shortName: optionName.length > 50 ? optionName.substring(0, 47) + '...' : optionName,
+                code: generateDhis2Code(optionName),
+                sortOrder: index + 1
+            }))
+        };
     }
-);
+});
 
 export const createDhis2CategoryCombo = createLLMFirstTool({
     name: "create_dhis2_category_combo",
@@ -174,7 +126,7 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
                             name: categoryName,  // User-provided category name for name field
                             displayName: categoryName,
                             shortName: categoryName.length > 50 ? categoryName.substring(0, 47) + '...' : categoryName,
-                            code: categoryName.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+                            code: generateDhis2Code(categoryName),
                             dataDimension: true,
                             dataDimensionType: 'DISAGGREGATION',
                             categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
@@ -184,7 +136,7 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
                             name: optionName,       // User-provided option name for name field
                             displayName: optionName,
                             shortName: optionName.length > 50 ? optionName.substring(0, 47) + '...' : optionName,
-                            code: optionName.toUpperCase().replace(/[^A-Z0-9_]/g, '_'),
+                            code: generateDhis2Code(optionName),
                             sortOrder: index + 1
                         }))
                     };
@@ -295,174 +247,7 @@ export const createDhis2Program = createLLMFirstTool({
     dhis2SchemaName: "Program"
 });
 
-/** LEGACY INDICATOR TOOL - WILL BE REMOVED */
-export const createDhis2IndicatorLegacy = tool(
-    async ({
-        description,
-        name,
-        shortName,
-        annualized,
-        numerator,
-        denominator,
-        indicatorType
-    }: {
-        description: string;
-        name?: string;
-        shortName?: string;
-        annualized?: boolean;
-        numerator?: string;
-        denominator?: string;
-        indicatorType?: string;
-    }) => {
-        try {
-            // Parse the description to extract properties
-            const { name: parsedName, properties } = parseNaturalLanguageDescription(description);
 
-            // Override with explicit parameters if provided
-            const finalName = name || parsedName;
-            const finalShortName = shortName || (finalName.length > 50 ? finalName.substring(0, 47) + '...' : finalName);
-            const finalAnnualized = annualized !== undefined ? annualized : properties.annualized || false;
-
-            // Parse expression to identify data elements
-            let dataElements: Array<{ code: string; name: string; inferredValueType: string }> = [];
-
-            // Check both provided expressions and those parsed from description
-            const expressionsToCheck = [
-                numerator || properties.numerator,
-                denominator || properties.denominator,
-                properties.numerator === "1" ? null : properties.numerator,
-                properties.denominator === "1" ? null : properties.denominator
-            ].filter(Boolean);
-
-            // Additionally, parse expressions directly from the description text
-            const descriptionExpressions = parseExpressionForDataElements(description);
-            expressionsToCheck.push(...descriptionExpressions.map(de => `#{${de.code}}`));
-
-            for (const expr of expressionsToCheck) {
-                if (typeof expr === 'string') {
-                    dataElements = dataElements.concat(parseExpressionForDataElements(expr));
-                }
-            }
-
-            // Remove duplicates by code
-            const uniqueDataElements = dataElements.filter((de, index, arr) =>
-                arr.findIndex(d => d.code === de.code) === index
-            );
-
-            console.log(`Found ${uniqueDataElements.length} referenced data elements:`, uniqueDataElements.map(de => de.code));
-
-            // Generate indicator properties
-            const indicatorProps = {
-                name: finalName,
-                displayName: finalName,
-                shortName: finalShortName,
-                description: description,
-                annualized: finalAnnualized,
-                numerator: numerator || properties.numerator || '#{DE_Default_Num}',
-                denominator: denominator || properties.denominator || '#{DE_Default_Den}',
-                decimals: 2 // Default
-            };
-
-            // Create default indicator type if not specified
-            const defaultIndicatorType = await generateDhis2Id();
-            const defaultIndicatorTypeData = {
-                id: defaultIndicatorType,
-                name: "Default Indicator Type",
-                displayName: "Default Indicator Type",
-                factor: 1,
-                number: false
-            };
-
-            // Generate data elements (ensure they don't already exist)
-            const dataElementPayloads = [];
-            for (const de of uniqueDataElements) {
-                const id = await generateDhis2Id();
-                dataElementPayloads.push({
-                    ...generateDataElementFromExpression(de.code, de.name, de.inferredValueType),
-                    id
-                });
-            }
-
-            // Create indicator payload
-            const indicatorId = await generateDhis2Id();
-            const indicatorPayload = {
-                id: indicatorId,
-                ...indicatorProps,
-                indicatorType: { id: defaultIndicatorType }
-            };
-
-            // Build aggregated payload
-            const aggregatedPayload: Record<string, any[]> = {};
-
-            // Add indicator type if needed
-            aggregatedPayload.indicatorTypes = [defaultIndicatorTypeData];
-
-            // Add data elements
-            if (dataElementPayloads.length > 0) {
-                aggregatedPayload.dataElements = dataElementPayloads;
-            }
-
-            // Add indicator
-            aggregatedPayload.indicators = [indicatorPayload];
-
-            // Execute batch creation
-            console.log('Creating indicator with referenced data elements:', JSON.stringify(aggregatedPayload, null, 2));
-
-            const result = await createDhis2MetadataAggregated(aggregatedPayload);
-
-            // Add successfully created resources to context
-            for (const r of result.results) {
-                if (r.created) {
-                    const resourceType = r.type;
-                    const resource = aggregatedPayload[resourceType]?.find((res: any) => res.id === r.id);
-                    if (resource) {
-                        addResourceToContext(r.id!, resourceType, resource.name || `Unnamed ${resourceType}`, 'created');
-                    }
-                }
-            }
-
-            const createdItems = result.results.filter(r => r.created);
-            const totalItems = result.results.length;
-
-            // Check if creation was successful
-            const indicatorCreated = createdItems.some(r => r.type === 'indicators');
-
-            return JSON.stringify({
-                success: true,
-                message: `Created indicator "${finalName}" with ${dataElementPayloads.length} referenced data elements`,
-                indicatorId,
-                indicatorName: finalName,
-                dataElementsCreated: dataElementPayloads.length,
-                dataElementCodes: uniqueDataElements.map(de => de.code),
-                created: createdItems.length,
-                total: totalItems,
-                results: result.results,
-                apiResponse: result.response,
-            });
-
-        } catch (error) {
-            console.error('Error creating indicator with data elements:', error);
-            return JSON.stringify({
-                success: false,
-                error: `Failed to create indicator: ${error.message}`,
-                description
-            });
-        }
-    },
-    {
-        name: "create_dhis2_indicator_legacy",
-        description: "LEGACY: Create DHIS2 indicators from natural language descriptions with automatic data element parsing.",
-        schema: z.object({
-            description: z.string().describe("Natural language description of the indicator, including the expression with data element references"),
-            name: z.string().optional().describe("Override for the indicator name"),
-            shortName: z.string().optional().describe("Override for the short name"),
-            annualized: z.boolean().optional().default(false).describe("Whether the indicator is annualized"),
-            numerator: z.string().optional().describe("Custom numerator expression"),
-            denominator: z.string().optional().describe("Custom denominator expression"),
-            indicatorType: z.string().optional().describe("Indicator type to use (defaults to auto-created type)"),
-        }),
-    }
-);
 
 export const createDhis2IndicatorAdvanced = createLLMFirstTool({
     name: "create_dhis2_indicator_simple",
@@ -479,183 +264,7 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
     dhis2SchemaName: "Indicator"
 });
 
-export const createDhis2IndicatorExpert = tool(
-    async ({
-        name,
-        description,
-        numeratorExpression,
-        denominatorExpression,
-        annualized = false,
-        createMissingDataElements = true,
-        indicatorTypeName
-    }: {
-        name: string;
-        description?: string;
-        numeratorExpression: string;
-        denominatorExpression: string;
-        annualized?: boolean;
-        createMissingDataElements?: boolean;
-        indicatorTypeName?: string;
-    }) => {
-        try {
-            return await createDhis2IndicatorExpertImpl({
-                name,
-                description,
-                numeratorExpression,
-                denominatorExpression,
-                annualized,
-                createMissingDataElements,
-                indicatorTypeName
-            });
-        } catch (error) {
-            console.error('Error in expert indicator creation:', error);
-            throw error;
-        }
-    },
-    {
-        name: "create_dhis2_indicator_expert",
-        description: "Create DHIS2 indicators with advanced features including automatic data element creation. This tool creates the required data elements and indicator types as needed. Use this for complex indicators that reference data elements that may not exist yet. Examples: custom KPIs, multi-data-element calculations, complex performance metrics.",
-        schema: z.object({
-            name: z.string().min(1).describe("The name of the indicator/performance measure"),
-            description: z.string().optional().describe("Description of what this indicator measures"),
-            numeratorExpression: z.string().min(1).describe("Mathematical expression for the numerator using #{DataElement_Code} syntax"),
-            denominatorExpression: z.string().min(1).describe("Mathematical expression for the denominator using #{DataElement_Code} syntax"),
-            annualized: z.boolean().default(false).describe("Whether this is an annualized indicator"),
-            createMissingDataElements: z.boolean().default(true).describe("Whether to automatically create data elements referenced in expressions that don't exist"),
-            indicatorTypeName: z.string().optional().describe("Name of indicator type to create/use (default: auto-created percentage type)")
-        })
-    }
-);
-
-async function createDhis2IndicatorExpertImpl(params: {
-    name: string;
-    description?: string;
-    numeratorExpression: string;
-    denominatorExpression: string;
-    annualized?: boolean;
-    createMissingDataElements?: boolean;
-    indicatorTypeName?: string;
-}) {
-    const {
-        name,
-        description,
-        numeratorExpression,
-        denominatorExpression,
-        annualized = false,
-        createMissingDataElements = true,
-        indicatorTypeName
-    } = params;
-
-    let dataElements: Array<{ code: string; name: string; inferredValueType: string }> = [];
-
-    if (createMissingDataElements) {
-        // Parse expressions to identify data elements
-        const expressionsToCheck = [numeratorExpression, denominatorExpression].filter(Boolean);
-
-        for (const expr of expressionsToCheck) {
-            if (typeof expr === 'string') {
-                dataElements = dataElements.concat(parseExpressionForDataElements(expr));
-            }
-        }
-
-        // Remove duplicates by code
-        const uniqueDataElements = dataElements.filter((de, index, arr) =>
-            arr.findIndex(d => d.code === de.code) === index
-        );
-
-        dataElements = uniqueDataElements;
-        console.log(`Will create ${dataElements.length} referenced data elements:`, dataElements.map(de => de.code));
-    }
-
-    // Generate IDs and payloads
-    const indicatorTypeId = await generateDhis2Id();
-    const defaultIndicatorTypeData = {
-        id: indicatorTypeId,
-        name: indicatorTypeName || "Default Indicator Type",
-        displayName: indicatorTypeName || "Default Indicator Type",
-        factor: 1,
-        number: false
-    };
-
-    const dataElementIds = await Promise.all(
-        dataElements.map(async () => await generateDhis2Id())
-    );
-
-    const dataElementPayloads = dataElements.map((de, index) => ({
-        ...generateDataElementFromExpression(de.code, de.name, de.inferredValueType),
-        id: dataElementIds[index]
-    }));
-
-    const indicatorId = await generateDhis2Id();
-    const shortName = name.length > 50 ? name.substring(0, 47) + '...' : name;
-
-    const indicatorPayload = {
-        id: indicatorId,
-        name,
-        displayName: name,
-        shortName,
-        description: description || `${name} indicator`,
-        annualized,
-        numerator: numeratorExpression,
-        denominator: denominatorExpression,
-        decimals: 2,
-        indicatorType: { id: indicatorTypeId }
-    };
-
-    // Build aggregated payload
-    const aggregatedPayload: Record<string, any[]> = {
-        indicators: [indicatorPayload]
-    };
-
-    // Add indicator type
-    if (aggregatedPayload.indicatorTypes) {
-        aggregatedPayload.indicatorTypes.push(defaultIndicatorTypeData);
-    } else {
-        aggregatedPayload.indicatorTypes = [defaultIndicatorTypeData];
-    }
-
-    // Add data elements
-    if (dataElementPayloads.length > 0) {
-        aggregatedPayload.dataElements = dataElementPayloads;
-    }
-
-    // Execute creation
-    console.log('Creating expert indicator with dependencies:', JSON.stringify(aggregatedPayload, null, 2));
-
-    const result = await createDhis2MetadataAggregated(aggregatedPayload);
-
-    // Add successfully created resources to context
-    for (const r of result.results) {
-        if (r.created) {
-            const resourceType = r.type;
-            const resource = aggregatedPayload[resourceType]?.find((res: any) => res.id === r.id);
-            if (resource) {
-                addResourceToContext(r.id!, resourceType, resource.name || `Unnamed ${resourceType}`, 'created');
-            }
-        }
-    }
-
-    return JSON.stringify({
-        success: true,
-        message: `Created expert indicator "${name}" with ${dataElementPayloads.length} data elements`,
-        indicatorId,
-        indicatorName: name,
-        indicatorTypeId,
-        dataElementsCreated: dataElementPayloads.length,
-        dataElementCodes: dataElements.map(de => de.code),
-        created: result.results.filter(r => r.created).length,
-        total: result.results.length,
-        results: result.results,
-        apiResponse: result.response,
-    });
-}
-
 export const createDhis2Indicator = createDhis2IndicatorAdvanced; // Main export uses the simple LLM-first version
-
-
-
-
-// REMOVED: Old Option Set Tool - replaced with LLM-first version below
 
 // Search Tools
 export const searchDhis2DataElements = createDhis2SearchTool("dataElements", "Data Elements");
@@ -1144,7 +753,7 @@ async function createDhis2ReportingFormSequential({
                 name: option,
                 displayName: option,
                 shortName: option.length > 50 ? option.substring(0, 47) + '...' : option,
-                code: option.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+                code: generateDhis2Code(option),
                 sortOrder: categoryOptionIds.length + 1,
             };
 
@@ -1291,7 +900,7 @@ async function createDhis2ReportingFormAggregated({
                 name: option,
                 displayName: option,
                 shortName: option.length > 50 ? option.substring(0, 47) + '...' : option,
-                code: option.toUpperCase().replace(/[^A-Z0-9]/g, '_'),
+                code: generateDhis2Code(option),
                 sortOrder: index + 1,
             })),
             categories: [{
@@ -1619,24 +1228,13 @@ export const createDhis2DataElement = createLLMFirstTool({
         domainType: z.enum(['AGGREGATE', 'TRACKER']).default('AGGREGATE').describe("Domain type"),
         aggregationType: z.enum(['SUM', 'AVERAGE', 'COUNT', 'NONE']).optional().describe("How values are aggregated"),
         description: z.string().optional().describe("Description of the data element"),
-        zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant")
+        zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant"),
+        categoryCombo: z.object({
+            id: z.string()
+        }).optional().describe("Category combination reference for disaggregation. Specify as { id: 'category-combo-uid' }")
     }),
     metadataType: "dataElements",
-    dhis2SchemaName: "DataElement", // Validates against actual DHIS2 DataElement schema
-    dependencies: [
-        {
-            type: "categoryCombos",
-            name: "default",
-            createIfNotFound: true,
-            createParams: {
-                name: "Default",
-                displayName: "Default",
-                shortName: "Default",
-                dataDimensionType: "DISAGGREGATION",
-                categories: []
-            }
-        }
-    ]
+    dhis2SchemaName: "DataElement" // Validates against actual DHIS2 DataElement schema
 });
 
 export const createDhis2OptionSet = createLLMFirstTool({
@@ -1705,16 +1303,7 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
                 const level = result.level || 1;
                 const parentLevel = level - 1;
 
-                const searchResults = await fetch(
-                    `${process.env.DHIS2_API_BASE_URL}/organisationUnits?fields=id,name,code,displayName,path,level&paging=false`,
-                    {
-                        method: "GET",
-                        headers: {
-                            'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
-                            'Content-Type': 'application/json',
-                        },
-                    }
-                ).then(res => res.json()).then(data => data.organisationUnits || []);
+                const searchResults = await searchDhis2Metadata('organisationUnits', '', 100) as any[];
                 const potentialParents = searchResults.filter((org: any) => org.level === parentLevel);
 
                 if (potentialParents.length > 0) {
@@ -1734,17 +1323,8 @@ export const createDhis2OrganisationUnit = createLLMFirstTool({
         // Try to resolve parent by name if specified
         if (!result.parentId && result.parentName) {
             try {
-                const searchResults = await fetch(
-                    `${process.env.DHIS2_API_BASE_URL}/organisationUnits?filter=name:ilike:${encodeURIComponent(result.parentName)}&fields=id,name,code,displayName,path,level&paging=false`,
-                    {
-                        method: "GET",
-                        headers: {
-                            'Authorization': `Basic ${btoa(`${process.env.DHIS2_USERNAME}:${process.env.DHIS2_PASSWORD}`)}`,
-                            'Content-Type': 'application/json',
-                        },
-                    }
-                ).then(res => res.json()).then(data => data.organisationUnits || []);
-                const matchingParent = (searchResults as any[]).find((org: any) => org.name === result.parentName);
+                const searchResults = await searchDhis2Metadata('organisationUnits', result.parentName, 10) as any[];
+                const matchingParent = searchResults.find((org: any) => org.name === result.parentName);
                 if (matchingParent) {
                     result.parentId = matchingParent.id;
                     result.path = matchingParent.path ? `${matchingParent.path}/${await generateDhis2Id()}` : `/${matchingParent.id}/${await generateDhis2Id()}`;

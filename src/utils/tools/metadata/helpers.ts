@@ -2,6 +2,15 @@ import { z } from 'zod';
 import { tool } from '@langchain/core/tools';
 import { Dhis2Schemas } from './schemas';
 
+// Import app-runtime functions instead of fetch-based ones
+import {
+    generateDhis2Id as generateDhis2IdAppRuntime,
+    searchDhis2Metadata as searchDhis2MetadataAppRuntime,
+    checkResourceExists as checkResourceExistsAppRuntime,
+    createDhis2MetadataAggregated as createDhis2MetadataAggregatedAppRuntime,
+    createDhis2MetadataDirect as createDhis2MetadataDirectAppRuntime,
+} from '../../app-runtime/dhis2-api';
+
 /**
  * Resolve conversational references to resource IDs
  */
@@ -105,10 +114,7 @@ export function getContextReferenceExamples(): string[] {
     ];
 }
 
-// DHIS2 environment variables - configured for build environments
-const DHIS2_API_BASE_URL = process.env.DHIS2_API_BASE_URL || 'http://localhost:8080';
-const DHIS2_USERNAME = process.env.DHIS2_USERNAME || 'admin';
-const DHIS2_PASSWORD = process.env.DHIS2_PASSWORD || 'district';
+// DHIS2 authentication now handled by app-runtime - no more manual environment variables needed
 
 /**
  * Simulate conversation context for reference resolution
@@ -185,31 +191,10 @@ export function getContextInfo(): {
  * Generate a unique ID from DHIS2 API
  */
 export async function generateDhis2Id(): Promise<string> {
-    try {
-        const response = await fetch(`${DHIS2_API_BASE_URL}/system/id?limit=1`, {
-            method: "GET",
-            headers: authHeaders(),
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to generate ID: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        return data.codes?.[0] || `generated_${Date.now()}`;
-    } catch (error) {
-        console.error('Error generating DHIS2 ID:', error);
-        // Fallback to timestamp-based ID
-        return `generated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    }
+    return await generateDhis2IdAppRuntime();
 }
 
-function authHeaders(): HeadersInit {
-    return {
-        'Authorization': `Basic ${btoa(`${DHIS2_USERNAME}:${DHIS2_PASSWORD}`)}`,
-        'Content-Type': 'application/json',
-    };
-}
+
 
 /**
  * Search for existing DHIS2 metadata by name or code
@@ -219,25 +204,7 @@ export async function searchDhis2Metadata(
     query: string,
     limit: number = 10
 ): Promise<Array<{ id: string; name: string; code?: string; displayName: string }>> {
-    try {
-        const response = await fetch(
-            `${DHIS2_API_BASE_URL}/${metadataType}?filter=name:ilike:${encodeURIComponent(query)}&fields=id,name,code,displayName&paging=false`,
-            {
-                method: "GET",
-                headers: authHeaders(),
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`DHIS2 API error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        return (data[metadataType] || []).slice(0, limit);
-    } catch (error) {
-        console.error('Error searching DHIS2 metadata:', error);
-        return [];
-    }
+    return await searchDhis2MetadataAppRuntime(metadataType, query, limit);
 }
 
 /**
@@ -250,64 +217,7 @@ export async function checkResourceExists(
     id?: string,
     code?: string
 ): Promise<{ exists: boolean; id?: string; data?: any } | null> {
-    try {
-        let url: string;
-        if (id) {
-            url = `${DHIS2_API_BASE_URL}/${metadataType}/${id}?fields=id,name,code,displayName`;
-        } else if (name) {
-            // First try exact name match
-            const exactMatch = await searchDhis2Metadata(metadataType, name, 5);
-            const match = exactMatch.find(item =>
-                item.name.toLowerCase() === name.toLowerCase() ||
-                (item.code && item.code.toLowerCase() === name.toLowerCase())
-            );
-            if (match) {
-                return { exists: true, id: match.id, data: match };
-            }
-
-            // For data elements, also try searching by code if name search failed
-            if (metadataType === 'dataElements' && code) {
-                // Search by code directly using API filter
-                const response = await fetch(
-                    `${DHIS2_API_BASE_URL}/${metadataType}?filter=code:eq:${encodeURIComponent(code)}&fields=id,name,code,displayName&paging=false`,
-                    {
-                        method: "GET",
-                        headers: authHeaders(),
-                    }
-                );
-
-                if (response.ok) {
-                    const data = await response.json();
-                    const items = data[metadataType] || [];
-                    if (items.length > 0) {
-                        return { exists: true, id: items[0].id, data: items[0] };
-                    }
-                }
-            }
-
-            // No match found
-            return { exists: false };
-        } else {
-            return null;
-        }
-
-        const response = await fetch(url, {
-            method: "GET",
-            headers: authHeaders(),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            return { exists: true, id: data.id, data };
-        } else if (response.status === 404) {
-            return { exists: false };
-        } else {
-            throw new Error(`DHIS2 API error: ${response.status} ${response.statusText}`);
-        }
-    } catch (error) {
-        console.error('Error checking resource existence:', error);
-        return null;
-    }
+    return await checkResourceExistsAppRuntime(metadataType, name, id, code);
 }
 
 /**
@@ -318,80 +228,7 @@ export async function checkResourceExists(
 export async function createDhis2MetadataAggregated(
     aggregatedPayload: Record<string, Record<string, any>[]>
 ): Promise<{ response: any; httpStatus: number; results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> }> {
-    const results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> = [];
-
-    // Process each resource type
-    for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
-        for (const resource of resources) {
-            // Check if resource already exists (for data elements, also check by code)
-            const existsCheck = await checkResourceExists(
-                metadataType,
-                resource.name,
-                resource.id,
-                metadataType === 'dataElements' ? resource.code : undefined
-            );
-            if (existsCheck?.exists) {
-                console.log(`✅ Resource already exists: ${metadataType} '${resource.name}' with ID: ${existsCheck.id}`);
-                results.push({ type: metadataType, id: existsCheck.id, exists: true, created: false });
-                // Skip this resource but continue with others
-                continue;
-            }
-
-            // Mark as will be created
-            results.push({ type: metadataType, id: resource.id, exists: false, created: true });
-        }
-    }
-
-    // Filter the payload to only include resources that don't exist
-    const filteredPayload: Record<string, Record<string, any>[]> = {};
-    let hasNewResources = false;
-
-    for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
-        const newResources = resources.filter(resource => {
-            const result = results.find(r => r.type === metadataType && r.id === resource.id);
-            return !result?.exists;
-        });
-
-        if (newResources.length > 0) {
-            filteredPayload[metadataType] = newResources;
-            hasNewResources = true;
-        }
-    }
-
-    if (!hasNewResources) {
-        console.log('All resources already exist, no creation needed');
-        return {
-            response: { status: 'OK', message: 'All resources already exist' },
-            httpStatus: 200,
-            results
-        };
-    }
-
-    console.log('Creating aggregated metadata:', JSON.stringify(filteredPayload, null, 2));
-
-    const response = await fetch(`${DHIS2_API_BASE_URL}/metadata?importStrategy=CREATE_UPDATE`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify(filteredPayload)
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-        console.error('Aggregated metadata creation failed:', {
-            status: response.status,
-            statusText: response.statusText,
-            data
-        });
-        throw new Error(`Aggregated metadata API error: ${response.status} ${response.statusText} - ${JSON.stringify(data)}`);
-    }
-
-    console.log('Aggregated metadata creation success:', data);
-    return {
-        response: data,
-        httpStatus: response.status,
-        results
-    };
+    return await createDhis2MetadataAggregatedAppRuntime(aggregatedPayload);
 }
 
 /**
@@ -403,65 +240,7 @@ export async function createDhis2MetadataDirect(
     metadataType: string,
     payload: Record<string, any>
 ): Promise<{ response: any; httpStatus: number; uid?: string; exists?: boolean }> {
-    if (Array.isArray(payload)) {
-        throw new Error('createDhis2MetadataDirect only supports single objects, not arrays');
-    }
-
-    // Check if resource already exists
-    const existsCheck = await checkResourceExists(metadataType, payload.name, payload.id);
-    if (existsCheck?.exists) {
-        console.log(`✅ Resource already exists: ${metadataType} '${payload.name}' with ID: ${existsCheck.id}`);
-        return {
-            response: existsCheck.data,
-            httpStatus: 200, // Pretend it's a successful creation
-            uid: existsCheck.id,
-            exists: true
-        };
-    }
-
-    const metadataPayload = { [metadataType]: [payload] };
-
-    console.log('Creating metadata directly:', JSON.stringify(metadataPayload, null, 2));
-
-    const response = await fetch(`${DHIS2_API_BASE_URL}/metadata?importStrategy=CREATE_UPDATE`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify(metadataPayload)
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-        // If 409 conflict (resource exists), try to get the existing ID
-        if (response.status === 409) {
-            console.log('Resource conflicts (409), checking if it actually exists:');
-            const existsAfterConflict = await checkResourceExists(metadataType, payload.name, payload.id);
-            if (existsAfterConflict?.exists) {
-                console.log(`✅ Resource existed after 409: ${metadataType} '${payload.name}' with ID: ${existsAfterConflict.id}`);
-                return {
-                    response: existsAfterConflict.data,
-                    httpStatus: 200,
-                    uid: existsAfterConflict.id,
-                    exists: true
-                };
-            }
-        }
-
-        console.error('Metadata creation failed:', {
-            status: response.status,
-            statusText: response.statusText,
-            data
-        });
-        throw new Error(`Metadata API error: ${response.status} ${response.statusText} - ${JSON.stringify(data)}`);
-    }
-
-    console.log('Metadata creation success:', data);
-    return {
-        response: data,
-        httpStatus: response.status,
-        uid: payload.id, // Return the ID that was used
-        exists: false
-    };
+    return await createDhis2MetadataDirectAppRuntime(metadataType, payload);
 }
 
 /**
@@ -598,8 +377,20 @@ export const TOOL_DEFAULT_DEPENDENCIES: Record<string, Array<{
 /**
  * Dependency creation order (from most fundamental to complex)
  * This ensures dependencies are created in the correct sequence
+ * Based on DHIS2 schema analysis and resource relationships
  */
 export const DEPENDENCY_ORDER = [
+    // User management (no dependencies)
+    'userRoles',
+    'userCredentials',
+    'users',
+
+    // Organisation units and groups
+    'organisationUnits',
+    'organisationUnitGroups',
+    'organisationUnitGroupSets',
+
+    // Core metadata types
     'indicatorTypes',
     'categoryOptions',
     'categories',
@@ -607,18 +398,41 @@ export const DEPENDENCY_ORDER = [
     'categoryOptionCombos',
     'optionSets',
     'dataElements',
-    'organisationUnits',
+
+    // Data sets and forms
+    'dataSets',
+    'dataEntryForms',
+
+    // Tracker program components
     'trackedEntityTypes',
     'trackedEntityAttributes',
     'programStages',
     'programs',
+    'programIndicators',
+    'programRules',
+    'programRuleVariables',
+
+    // Indicators and validation
     'indicators',
-    'validationRules'
+    'validationRules',
+
+    // Analytics and reporting
+    'visualizations',
+    'maps',
+    'charts',
+    'reportTables',
+    'reports',
+    'dashboards',
+
+    // Additional metadata types
+    'relationshipTypes',
+    'periods',
+    'analyticsQueries'
 ];
 
 /**
  * Resolve dependencies for a resource
- * Creates dependencies in sequential order to respect dependency chains
+ * Creates dependencies in aggregated batches to minimize API calls
  */
 export async function resolveDependencies<T extends z.ZodSchema>(
     schema: T,
@@ -638,28 +452,94 @@ export async function resolveDependencies<T extends z.ZodSchema>(
         return (orderA === -1 ? 999 : orderA) - (orderB === -1 ? 999 : orderB);
     });
 
-    for (const dep of orderedDeps) {
-        // Search for existing resource
-        const existing = await searchDhis2Metadata(dep.type, dep.name, 1);
+    // Collect all resources that need to be created in batches
+    const resourcesToCreate: Record<string, Array<{ name: string; data: any; dep: any }>> = {};
 
-        if (existing.length > 0) {
-            resolved[dep.name] = { id: existing[0].id, name: existing[0].name };
+    for (const dep of orderedDeps) {
+        // Check if resource exists using comprehensive existence check
+        const existing = await checkResourceExists(dep.type, dep.name);
+
+        if (existing && existing.exists && existing.id) {
+            resolved[dep.name] = { id: existing.id, name: dep.name };
         } else if (dep.createIfNotFound && dep.createParams) {
             // CRITICAL STEP: Recursively resolve THIS DEPENDENCY'S nested dependencies first
-            // This ensures CategoryCombos resolve their Category dependencies,
-            // and Categories resolve their CategoryOption dependencies
+            // This applies to EVERY resource type - not just categories/categoryCombos
+            // The recursive resolution works by detecting reference fields in createParams and resolving them
             const nestedDeps = TOOL_DEFAULT_DEPENDENCIES[dep.type] || [];
-            if (nestedDeps.length > 0) {
-                console.log(`🔄 Resolving nested dependencies for ${dep.type} '${dep.name}' - needs: ${nestedDeps.map(nd => nd.type).join(', ')}`);
-                await resolveDependencies(schema, nestedDeps.map(nd => ({
+            const referenceFields = getReferenceFields(dep.type, dep.createParams);
+
+            // Collect all dependencies to resolve (both predefined and dynamically detected)
+            const allNestedDeps: Array<{
+                type: string;
+                name: string;
+                createIfNotFound?: boolean;
+                createParams?: Record<string, any>;
+            }> = [...nestedDeps];
+
+            // Add dynamically detected reference dependencies
+            for (const [fieldName, references] of Object.entries(referenceFields)) {
+                if (Array.isArray(references)) {
+                    for (const ref of references) {
+                        if (typeof ref === 'object' && 'name' in ref) {
+                            // This is an object reference with a name to resolve
+                            const refType = getReferenceType(dep.type, fieldName);
+                            if (refType) {
+                                allNestedDeps.push({
+                                    type: refType,
+                                    name: ref.name,
+                                    createIfNotFound: true,
+                                    createParams: ref.createParams || getDefaultCreateParamsForReference(refType, ref.name)
+                                });
+                            }
+                        }
+                    }
+                } else if (typeof references === 'object' && 'name' in references) {
+                    // Single object reference
+                    const refType = getReferenceType(dep.type, fieldName);
+                    if (refType) {
+                        allNestedDeps.push({
+                            type: refType,
+                            name: references.name,
+                            createIfNotFound: true,
+                            createParams: references.createParams || getDefaultCreateParamsForReference(refType, references.name)
+                        });
+                    }
+                }
+            }
+
+            if (allNestedDeps.length > 0) {
+                const dedupedDeps = allNestedDeps.filter((item, index, arr) =>
+                    arr.findIndex(d => d.type === item.type && d.name === item.name) === index
+                );
+
+                console.log(`🔄 Resolving nested dependencies for ${dep.type} '${dep.name}' - needs: ${dedupedDeps.map(nd => `${nd.type}:${nd.name}`).join(', ')}`);
+
+                const nestedResolved = await resolveDependencies(schema, dedupedDeps.map(nd => ({
                     ...nd,
                     name: `${dep.name}-${nd.name}` // Make nested dep names unique
                 })));
+
+                // Link the resolved nested dependencies to the parent resource
+                for (const [nestedName, nestedResource] of Object.entries(nestedResolved)) {
+                    const depInfo = dedupedDeps.find(nd => nd.name === nestedName?.split('-').pop());
+                    if (depInfo) {
+                        const parentDependencyField = await getParentDependencyField(dep.type, depInfo.type);
+                        if (parentDependencyField) {
+                            // Handle both single references and array references
+                            const currentValue = dep.createParams[parentDependencyField];
+                            if (Array.isArray(currentValue)) {
+                                dep.createParams[parentDependencyField] = [...currentValue, { id: nestedResource.id }];
+                            } else {
+                                dep.createParams[parentDependencyField] = { id: nestedResource.id };
+                            }
+                        }
+                    }
+                }
             }
 
-            // Create the dependency if it doesn't exist
+            // Prepare the resource for batch creation
             const id = await generateDhis2Id();
-            const newResource = {
+            let newResource = {
                 id,
                 ...dep.createParams,
             };
@@ -675,28 +555,646 @@ export async function resolveDependencies<T extends z.ZodSchema>(
             } else {
                 // Fallback to validating against the provided schema (less accurate but better than nothing)
                 validation = validateResourceData(schema, newResource);
-                console.log(`⚠ Fallback validated ${dep.type} '${dep.name}'`);
+                console.log(`⚠ Fallback validated ${dep.type} '${dep.name}' - using fallback schema`);
             }
 
             if (!validation.success) {
-                throw new Error(`❌ Failed to create dependency ${dep.name}: Validation failed - ${validation.errors?.join(', ') || 'Unknown validation error'}`);
+                console.error(`❌ Validation failed for ${dep.type} '${dep.name}':`, validation.errors);
+                // Don't throw immediately - try to create with minimal valid object and warn
+                const minimalValidObject = await createMinimalValidObject(dep.type, newResource);
+                if (minimalValidObject) {
+                    console.log(`⚠ Using minimal valid object for ${dep.type} '${dep.name}'`);
+                    newResource = minimalValidObject;
+                    validation = validateResourceData(depSchema || schema, newResource);
+                    if (!validation.success) {
+                        throw new Error(`❌ Failed to create dependency ${dep.name}: Even minimal validation failed - ${validation.errors?.join(', ') || 'Unknown validation error'}`);
+                    }
+                } else {
+                    throw new Error(`❌ Failed to create dependency ${dep.name}: Validation failed - ${validation.errors?.join(', ') || 'Unknown validation error'}`);
+                }
             }
 
-            try {
-                // Use direct creation to avoid batch issues with sequential dependencies
-                await createDhis2MetadataDirect(dep.type, validation.data);
-                resolved[dep.name] = { id, name: dep.createParams.name };
-                console.log(`✅ Created ${dep.type} '${dep.name}'`);
-            } catch (error) {
-                console.error(`❌ Failed to create dependency ${dep.name}:`, error);
-                throw new Error(`Failed to create dependency ${dep.name}: ${error.message}`);
+            // Collect for batch creation instead of creating immediately
+            if (!resourcesToCreate[dep.type]) {
+                resourcesToCreate[dep.type] = [];
             }
+            resourcesToCreate[dep.type].push({
+                name: dep.name,
+                data: validation.data,
+                dep: dep
+            });
+
+            // Store the resolved reference (will be updated with actual ID after batch creation)
+            resolved[dep.name] = { id, name: dep.createParams.name };
         } else {
             throw new Error(`Dependency not found: ${dep.name} (${dep.type})`);
         }
     }
 
+    // Create all collected resources in aggregated batches
+    if (Object.keys(resourcesToCreate).length > 0) {
+        console.log(`📦 Creating dependencies in aggregated batches: ${Object.entries(resourcesToCreate).map(([type, resources]) => `${resources.length} ${type}`).join(', ')}`);
+
+        // Convert to aggregated payload format
+        const aggregatedPayload: Record<string, any[]> = {};
+        for (const [resourceType, resources] of Object.entries(resourcesToCreate)) {
+            aggregatedPayload[resourceType] = resources.map(r => r.data);
+        }
+
+        try {
+            const batchResult = await createDhis2MetadataAggregated(aggregatedPayload);
+
+            if (batchResult.httpStatus < 200 || batchResult.httpStatus >= 300) {
+                throw new Error(`Batch creation failed: HTTP ${batchResult.httpStatus}`);
+            }
+
+            // Update resolved references with actual results
+            let resourceIndex = 0;
+            for (const [resourceType, resources] of Object.entries(resourcesToCreate)) {
+                const typeResults = batchResult.results.filter(r => r.type === resourceType);
+
+                for (let i = 0; i < resources.length; i++) {
+                    const resource = resources[i];
+                    const result = typeResults[i];
+
+                    if (result && result.created && result.id) {
+                        // Update the resolved reference with the actual created ID
+                        resolved[resource.name] = { id: result.id, name: resource.dep.createParams.name };
+                        console.log(`✅ Created ${resourceType} '${resource.name}' with ID: ${result.id}`);
+                    } else {
+                        console.warn(`⚠ Could not confirm creation of ${resourceType} '${resource.name}'`);
+                    }
+                }
+            }
+
+            console.log(`📦 Successfully created ${batchResult.results.filter(r => r.created).length} dependencies in 1 API call`);
+        } catch (error) {
+            console.error('❌ Batch dependency creation failed:', error);
+            throw new Error(`Failed to create dependencies in batch: ${error.message}`);
+        }
+    }
+
     return resolved;
+}
+
+/**
+ * Build comprehensive parent-child dependency mapping from schemas
+ */
+async function buildSchemaReferenceMapping(): Promise<Record<string, Record<string, string>>> {
+    const mapping: Record<string, Record<string, string>> = {};
+    const schemas = (await import('./schemas')).Dhis2Schemas;
+
+    // Resource type name mappings (plural vs singular)
+    const pluralToSingular: Record<string, string> = {
+        'categories': 'category',
+        'categoryOptions': 'categoryOption',
+        'organisationUnits': 'organisationUnit',
+        'programStages': 'programStage',
+        'programIndicators': 'programIndicator',
+        'trackedEntityAttributes': 'trackedEntityAttribute',
+        'trackedEntityTypeAttributes': 'trackedEntityTypeAttribute',
+        'programRuleActions': 'programRuleAction',
+        'programRuleVariables': 'programRuleVariable',
+        'dataSetElements': 'dataSetElement',
+        'programStageDataElements': 'programStageDataElement',
+        'programStageSections': 'programStageSection',
+        'dataElementOperands': 'dataElementOperand',
+        'sections': 'section',
+        'dashboardItems': 'dashboardItem',
+        'dataDimensionItems': 'dataDimensionItem',
+        'columns': 'dimensionItem',
+        'rows': 'dimensionItem',
+        'filters': 'dimensionItem',
+        'mapViews': 'mapView',
+        'organisationUnitGroups': 'organisationUnitGroup',
+        'validationResults': 'validationResult',
+        'dataValues': 'dataValue',
+        'notes': 'note',
+        'relationships': 'relationship',
+        'enrollments': 'enrollment',
+        'events': 'event',
+        'options': 'option',
+        'userCredentials': 'userCredentials',
+        'userRoles': 'userRole',
+        'userAccesses': 'userAccess',
+        'userGroupAccesses': 'userGroupAccess',
+        'periods': 'period'
+    };
+
+    for (const [schemaName, schema] of Object.entries(schemas)) {
+        try {
+            // Convert schema name to resource type (e.g., "DataElement" -> "dataElements")
+            const resourceType = schemaName.charAt(0).toLowerCase() +
+                               schemaName.slice(1).replace(/Schema$/, '') + 's';
+            const correctedResourceType = resourceType.replace(/ss$/, 's'); // Fix double 's'
+
+            // Analyze the schema's shape to find reference fields
+            const referenceFields = analyzeSchemaForReferences(schema);
+            if (referenceFields.length > 0) {
+                mapping[correctedResourceType] = {};
+                for (const [fieldName, refInfo] of referenceFields) {
+                    mapping[correctedResourceType][refInfo.type] = fieldName;
+                }
+            }
+        } catch (error) {
+            console.warn(`Failed to analyze schema ${schemaName}:`, error);
+        }
+    }
+
+    return mapping;
+}
+
+/**
+ * Analyze a Zod schema to find reference fields and their target types
+ */
+function analyzeSchemaForReferences(schema: any): Array<[string, { type: string; isArray: boolean }]> {
+    const references: Array<[string, { type: string; isArray: boolean }]> = [];
+
+    try {
+        // Access the schema's shape if available (Zod object schemas have _def.shape)
+        const shape = schema._def?.shape;
+        if (!shape) return references;
+
+        for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+            const ref = analyzeFieldForReference(fieldName, fieldSchema);
+            if (ref) {
+                references.push([fieldName, ref]);
+            }
+        }
+    } catch (error) {
+        // Schema analysis failed, return empty array
+    }
+
+    return references;
+}
+
+/**
+ * Analyze a single field schema to determine if it contains references
+ */
+function analyzeFieldForReference(fieldName: string, fieldSchema: any): { type: string; isArray: boolean } | null {
+    try {
+        // Check if it's an array schema
+        if (fieldSchema._def?.typeName === 'ZodArray') {
+            const elementSchema = fieldSchema._def.element;
+            const elementRef = analyzeObjectFieldForReference(elementSchema);
+            if (elementRef) {
+                return { type: elementRef.type, isArray: true };
+            }
+        }
+
+        // Check if it's a direct object schema with references
+        const directRef = analyzeObjectFieldForReference(fieldSchema);
+        if (directRef) {
+            return { type: directRef.type, isArray: false };
+        }
+
+        // Check for optional schemas
+        if (fieldSchema._def?.typeName === 'ZodOptional' ||
+            fieldSchema._def?.typeName === 'ZodNullable') {
+            return analyzeFieldForReference(fieldName, fieldSchema._def.innerType);
+        }
+
+        return null;
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * Analyze an object field to find if it has an id field (indicating a reference)
+ */
+function analyzeObjectFieldForReference(fieldSchema: any): { type: string } | null {
+    try {
+        if (fieldSchema._def?.typeName === 'ZodObject') {
+            const shape = fieldSchema._def.shape;
+
+            // Look for an 'id' field which indicates a DHIS2 resource reference
+            if (shape && 'id' in shape) {
+                // Try to infer the type from the field name
+                const fieldName = Object.keys(shape).find(key => key === 'id');
+                if (fieldName) {
+                    // Map common field patterns to resource types
+                    const fieldToTypeMapping: Record<string, string> = {
+                        'categoryCombo': 'categoryCombos',
+                        'categoryOption': 'categoryOptions',
+                        'category': 'categories',
+                        'organisationUnit': 'organisationUnits',
+                        'programStage': 'programStages',
+                        'trackedEntityType': 'trackedEntityTypes',
+                        'trackedEntityAttribute': 'trackedEntityAttributes',
+                        'dataElement': 'dataElements',
+                        'indicatorType': 'indicatorTypes',
+                        'optionSet': 'optionSets',
+                        'program': 'programs',
+                        'indicator': 'indicators',
+                        'user': 'users',
+                        'relationshipType': 'relationshipTypes',
+                        'relationship': 'relationships',
+                        'enrollment': 'enrollments',
+                        'event': 'events'
+                    };
+
+                    // Try field-specific mapping first
+                    for (const [pattern, type] of Object.entries(fieldToTypeMapping)) {
+                        if (pattern + 'Id' in shape || pattern + '_id' in shape) {
+                            return { type };
+                        }
+                    }
+
+                    // Fallback: singular to plural conversion
+                    let inferredType = fieldName.replace(/Id$/, '');
+                    if (!inferredType.endsWith('s')) {
+                        inferredType += 's'; // Simple pluralization
+                    }
+
+                    return { type: inferredType };
+                }
+            }
+        }
+
+        // Check for union types that might include objects
+        if (fieldSchema._def?.typeName === 'ZodUnion') {
+            const options = fieldSchema._def.options || [];
+            for (const option of options) {
+                const ref = analyzeObjectFieldForReference(option);
+                if (ref) return ref;
+            }
+        }
+
+        return null;
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * Get the field name that links parent resources to child dependencies
+ * Uses the actual schema definitions to build comprehensive mappings
+ */
+async function getParentDependencyField(parentType: string, childType: string): Promise<string | null> {
+    // Build dynamic mapping from schemas
+    const schemaMapping = await buildSchemaReferenceMapping();
+
+    // First try the dynamic schema-based mapping
+    if (schemaMapping[parentType]?.[childType]) {
+        return schemaMapping[parentType][childType];
+    }
+
+    // Fallback to hardcoded mappings for complex relationships not easily parsed from schemas
+    const fallbackMapping: Record<string, Record<string, string>> = {
+        // Complex array relationships that contain multiple reference types
+        'dataSets': {
+            // dataSetElements array contains both dataElement and categoryCombo references
+            'dataElements': 'dataSetElements', // Via dataSetElements[].dataElement
+            'categoryCombos': 'dataSetElements'  // Via dataSetElements[].categoryCombo
+        },
+        'programStages': {
+            // programStageDataElements array contains dataElement references
+            'dataElements': 'programStageDataElements', // Via programStageDataElements[].dataElement
+            'trackedEntityAttributes': 'programStageDataElements' // ProgramStage may also reference attributes indirectly
+        },
+        'trackedEntityTypes': {
+            // trackedEntityTypeAttributes array contains attribute references
+            'trackedEntityAttributes': 'trackedEntityTypeAttributes'
+        },
+        'programRules': {
+            // programRuleActions may reference various resources
+            'dataElements': 'programRuleActions',
+            'trackedEntityAttributes': 'programRuleActions',
+            'programStages': 'programRuleActions'
+        },
+        'dashboards': {
+            // dashboardItems may reference visualizations, maps, charts, etc.
+            'visualizations': 'dashboardItems',
+            'charts': 'dashboardItems',
+            'maps': 'dashboardItems',
+            'reportTables': 'dashboardItems'
+        },
+        'visualizations': {
+            // dataDimensionItems may reference dataElements, indicators, etc.
+            'dataElements': 'dataDimensionItems',
+            'indicators': 'dataDimensionItems',
+            'dataSets': 'dataDimensionItems'
+        }
+    };
+
+    return fallbackMapping[parentType]?.[childType] || null;
+}
+
+/**
+ * Cache for schema reference mapping to avoid rebuilding it multiple times
+ */
+let schemaReferenceCache: Record<string, Record<string, string>> | null = null;
+
+/**
+ * Get cached schema reference mapping
+ */
+async function getSchemaReferenceMapping(): Promise<Record<string, Record<string, string>>> {
+    if (!schemaReferenceCache) {
+        schemaReferenceCache = await buildSchemaReferenceMapping();
+    }
+    return schemaReferenceCache;
+}
+
+/**
+ * Detect reference fields that need to be resolved from createParams
+ */
+function getReferenceFields(resourceType: string, createParams: Record<string, any>): Record<string, any> {
+    const references: Record<string, any> = {};
+
+    // Common reference field patterns across DHIS2 resource types
+    const referenceFieldPatterns = {
+        // Object references (single)
+        categoryCombo: 'categoryCombos',
+        optionSet: 'optionSets',
+        indicatorType: 'indicatorTypes',
+        trackedEntityType: 'trackedEntityTypes',
+        program: 'programs',
+        organisationUnit: 'organisationUnits',
+
+        // Array references
+        categories: 'categories',
+        categoryOptions: 'categoryOptions',
+        organisationUnits: 'organisationUnits',
+        dataElements: 'dataElements',
+        programStages: 'programStages',
+        programStageDataElements: 'dataElements',
+        programIndicators: 'indicators',
+        validationRules: 'validationRules',
+        trackedEntityAttributes: 'trackedEntityAttributes'
+    };
+
+    for (const [fieldName, fieldValue] of Object.entries(createParams)) {
+        if (fieldValue === null || fieldValue === undefined) continue;
+
+        // Check for object references with { name: ... } pattern
+        if (typeof fieldValue === 'object' && !Array.isArray(fieldValue) && 'name' in fieldValue) {
+            references[fieldName] = fieldValue;
+        }
+        // Check for array references where items have { name: ... }
+        else if (Array.isArray(fieldValue) && fieldValue.length > 0) {
+            const namedReferences = fieldValue.filter(item =>
+                typeof item === 'object' && item !== null && 'name' in item
+            );
+            if (namedReferences.length > 0) {
+                references[fieldName] = fieldValue; // Keep the whole array but flag for processing
+            }
+        }
+    }
+
+    return references;
+}
+
+/**
+ * Determine the resource type for a reference field within a parent resource
+ */
+function getReferenceType(parentType: string, fieldName: string): string | null {
+    const referenceTypeMapping: Record<string, Record<string, string>> = {
+        // Data element references
+        'dataElements': {
+            'categoryCombo': 'categoryCombos'
+        },
+        // Data set references
+        'dataSets': {
+            'categoryCombo': 'categoryCombos',
+            'organisationUnits': 'organisationUnits',
+            'dataSetElements': 'dataElements'
+        },
+        // Category combo references
+        'categoryCombos': {
+            'categories': 'categories'
+        },
+        // Category references
+        'categories': {
+            'categoryOptions': 'categoryOptions'
+        },
+        // Program references
+        'programs': {
+            'trackedEntityType': 'trackedEntityTypes',
+            'programStages': 'programStages',
+            'organisationUnits': 'organisationUnits'
+        },
+        // Program stage references
+        'programStages': {
+            'programStageDataElements': 'dataElements',
+            'program Indicators': 'indicators'
+        },
+        // Indicator references
+        'indicators': {
+            'indicatorType': 'indicatorTypes'
+        },
+        // Tracked entity type references
+        'trackedEntityTypes': {
+            'trackedEntityAttributes': 'trackedEntityAttributes'
+        },
+        // Option set references (can be used by dataElements, attributes, etc.)
+        'optionSets': {
+            'options': 'options'
+        }
+    };
+
+    return referenceTypeMapping[parentType]?.[fieldName] || null;
+}
+
+/**
+ * Generate default creation parameters for a reference
+ */
+function getDefaultCreateParamsForReference(referenceType: string, name: string): Record<string, any> {
+    const defaults: Record<string, Record<string, any>> = {
+        'categoryCombos': {
+            name,
+            displayName: name,
+            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+            dataDimensionType: 'DISAGGREGATION',
+            categories: []
+        },
+        'categories': {
+            name,
+            displayName: name,
+            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+            dataDimension: true,
+            dataDimensionType: 'DISAGGREGATION',
+            categoryOptions: inferCategoryOptionsFromName(name)
+        },
+        'categoryOptions': {
+            name,
+            displayName: name,
+            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+            code: name.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+        },
+        'organisationUnits': {
+            name,
+            displayName: name,
+            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+            level: 1,
+            path: `/${Date.now()}`,  // Use timestamp for uniqueness (will be replaced if exists)
+            openingDate: new Date().toISOString().split('T')[0]
+        },
+        'indicatorTypes': {
+            name,
+            displayName: name,
+            factor: 1,
+            number: false
+        },
+        'optionSets': {
+            name,
+            displayName: name,
+            valueType: 'TEXT'
+        },
+        'trackedEntityTypes': {
+            name,
+            displayName: name,
+            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+            description: `${name} tracked entity type`
+        },
+        'trackedEntityAttributes': {
+            name,
+            displayName: name,
+            shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
+            valueType: 'TEXT',
+            unique: false,
+            mandatory: false
+        }
+    };
+
+    return defaults[referenceType] || { name };
+}
+
+/**
+ * Infer appropriate category options based on category name
+ */
+function inferCategoryOptionsFromName(categoryName: string): Array<{ name: string }> {
+    const name = categoryName.toLowerCase();
+
+    // Common health data category patterns
+    if (name.includes('satisfaction') || name.includes('satisfied')) {
+        return [
+            { name: 'Satisfied' },
+            { name: 'Not Satisfied' }
+        ];
+    }
+
+    if (name.includes('gender') || name.includes('sex')) {
+        return [
+            { name: 'Male' },
+            { name: 'Female' }
+        ];
+    }
+
+    if (name.includes('age') || name.includes('age group')) {
+        return [
+            { name: '<5 years' },
+            { name: '5-14 years' },
+            { name: '15-49 years' },
+            { name: '50+ years' }
+        ];
+    }
+
+    if (name.includes('yes') || name.includes('no') || name.includes('boolean')) {
+        return [
+            { name: 'Yes' },
+            { name: 'No' }
+        ];
+    }
+
+    if (name.includes('positive') || name.includes('negative')) {
+        return [
+            { name: 'Positive' },
+            { name: 'Negative' }
+        ];
+    }
+
+    if (name.includes('result') || name.includes('outcome')) {
+        return [
+            { name: 'Positive' },
+            { name: 'Negative' },
+            { name: 'Inconclusive' }
+        ];
+    }
+
+    if (name.includes('status')) {
+        return [
+            { name: 'Active' },
+            { name: 'Inactive' }
+        ];
+    }
+
+    if (name.includes('level') || name.includes('tier')) {
+        return [
+            { name: 'Low' },
+            { name: 'Medium' },
+            { name: 'High' }
+        ];
+    }
+
+    if (name.includes('priority')) {
+        return [
+            { name: 'Low' },
+            { name: 'Medium' },
+            { name: 'High' },
+            { name: 'Critical' }
+        ];
+    }
+
+    if (name.includes('quality')) {
+        return [
+            { name: 'Poor' },
+            { name: 'Fair' },
+            { name: 'Good' },
+            { name: 'Excellent' }
+        ];
+    }
+
+    // Default fallback for unknown categories
+    return [
+        { name: 'Option A' },
+        { name: 'Option B' }
+    ];
+}
+
+/**
+ * Create a minimal valid object for schema compliance when validation fails
+ */
+async function createMinimalValidObject(type: string, baseObject: any): Promise<any | null> {
+    switch (type) {
+        case 'categoryCombos':
+            // If we have an empty categories array, we need a valid category
+            if (!baseObject.categories || baseObject.categories.length === 0) {
+                // Create a minimal category first
+                try {
+                    const categoryId = await generateDhis2Id();
+                    const categoryData = {
+                        id: categoryId,
+                        name: "Minimal Category",
+                        displayName: "Minimal Category",
+                        shortName: "Min Cat",
+                        dataDimension: true,
+                        dataDimensionType: 'DISAGGREGATION',
+                        categoryOptions: []
+                    };
+                    await createDhis2MetadataDirect('categories', categoryData);
+                    baseObject.categories = [{ id: categoryId }];
+                    console.log(`✓ Created fallback category for category combo with ID: ${categoryId}`);
+                } catch (error) {
+                    console.error('Failed to create minimal category:', error);
+                    return null;
+                }
+            }
+            return {
+                ...baseObject,
+                categories: baseObject.categories,
+                dataDimensionType: baseObject.dataDimensionType || 'DISAGGREGATION'
+            };
+        case 'categories':
+            return {
+                ...baseObject,
+                categoryOptions: baseObject.categoryOptions || [],
+                dataDimension: baseObject.dataDimension ?? true,
+                dataDimensionType: baseObject.dataDimensionType || 'DISAGGREGATION'
+            };
+        default:
+            return null;
+    }
 }
 
 /**
@@ -767,6 +1265,26 @@ export function generateShortName(name: string, maxLength: number = 50): string 
 
     // Fall back to truncation with ellipses
     return trimmed.substring(0, maxLength - 3) + '...';
+}
+
+/**
+ * Generate a DHIS2-compliant code from a name (for DHIS2 code field)
+ * Codes must be <= 50 characters and contain only uppercase letters, numbers, and underscores
+ */
+export function generateDhis2Code(name: string): string {
+    if (!name?.trim()) return 'DEFAULT';
+
+    // Clean and truncate (47 max to potentially leave room for uniqueness suffixes if needed)
+    const cleaned = name.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
+    // Remove multiple consecutive underscores
+    const normalized = cleaned.replace(/_+/g, '_');
+
+    // Remove leading/trailing underscores
+    const trimmed = normalized.replace(/^_+|_+$/g, '');
+
+    // Truncate to 47 characters (leaving room for potential uniqueness suffixes)
+    return trimmed.length > 47 ? trimmed.substring(0, 47) : trimmed || 'DEFAULT';
 }
 
 /**

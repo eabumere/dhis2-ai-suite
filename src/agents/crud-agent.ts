@@ -72,59 +72,15 @@ import {
     updateDhis2Enrollment,
     updateDhis2Event,
 
-    // ████████ ALL SEARCH TOOLS ████████
-    // Core Searches (7 tools)
-    searchDhis2DataElements,
-    searchDhis2OrganisationUnits,
-    searchDhis2Categories,
-    searchDhis2CategoryCombos,
-    searchDhis2DataSets,
-    searchDhis2Programs,
-    searchDhis2Indicators,
-
-    // Extended Searches (10 tools)
-    searchDhis2CategoryOptions,
-    searchDhis2OrganisationUnitGroups,
-    searchDhis2OrganisationUnitGroupSets,
-    searchDhis2TrackedEntityTypes,
-    searchDhis2TrackedEntityAttributes,
-    searchDhis2Validations,
-    searchDhis2OptionSets,
-    searchDhis2Visualizations,
-    searchDhis2Dashboards,
-    searchDhis2Users,
-    searchDhis2RelationshipTypes,
-
-    // ████████ ALL GET-BY-ID TOOLS ████████
-    // Core Get-by-ID (5 tools)
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-
-    // Extended Get-by-ID (8 tools)
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
-    getDhis2RelationshipTypeById,
-
-    // ████████ SPECIALIZED TOOLS ████████
-    getDhis2DataValues,
-} from './utils/tools/metadata';
-import {
+    // ████████ UTILITY TOOLS (CONTEXT/HELPERS) ████████
     resolveResourceReference,
+} from '../utils/tools/metadata';
+import {
+    resolveResourceReference as resolveRefHelper,
     addResourceToContext,
     getContextInfo,
-} from './utils/tools/metadata/helpers';
-import { StateAnnotation } from './utils/state';
+} from '../utils/tools/metadata/helpers';
+import { StateAnnotation } from '../utils/state';
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = new AzureChatOpenAI({
@@ -137,8 +93,8 @@ const model = new AzureChatOpenAI({
     azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
 });
 
-// Create the agent with all DHIS2 metadata tools
-export const metadataAgent = createReactAgent({
+// Create the CRUD agent with all creation and update tools
+export const crudAgent = createReactAgent({
   llm: model,
   tools: [
     // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
@@ -212,58 +168,11 @@ export const metadataAgent = createReactAgent({
     updateDhis2Enrollment,
     updateDhis2Event,
 
-    // ████████ ALL SEARCH TOOLS ████████
-    // Core Metadata Searches (7 tools)
-    searchDhis2DataElements,
-    searchDhis2OrganisationUnits,
-    searchDhis2Categories,
-    searchDhis2CategoryCombos,
-    searchDhis2DataSets,
-    searchDhis2Programs,
-    searchDhis2Indicators,
-
-    // Extended Metadata Searches (10 tools)
-    searchDhis2CategoryOptions,
-    searchDhis2OrganisationUnitGroups,
-    searchDhis2OrganisationUnitGroupSets,
-    searchDhis2TrackedEntityTypes,
-    searchDhis2TrackedEntityAttributes,
-    searchDhis2Validations,
-    searchDhis2OptionSets,
-    searchDhis2Visualizations,
-    searchDhis2Dashboards,
-    searchDhis2Users,
-    searchDhis2RelationshipTypes,
-
-    // ████████ ALL GET-BY-ID TOOLS ████████
-    // Core Metadata Get-by-ID (5 tools)
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-
-    // Extended Metadata Get-by-ID (8 tools)
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
-    getDhis2RelationshipTypeById,
-
-    // ████████ SPECIALIZED TOOLS ████████
-    getDhis2DataValues,
-
-    // ████████ UTILITY TOOLS ████████
+    // ████████ UTILITY TOOLS (CONTEXT/HELPERS) ████████
     resolveResourceReference,
   ],
   prompt: `
-    You are an expert DHIS2 metadata management assistant with comprehensive capabilities for creating, searching, and managing all types of DHIS2 metadata resources.
+    You are an expert DHIS2 metadata creation and management specialist. Your expertise lies in creating new DHIS2 resources, updating existing ones, and managing complex metadata configurations for health information systems.
 
     ## CORE CAPABILITIES
 
@@ -304,11 +213,6 @@ export const metadataAgent = createReactAgent({
       3. If no reference can be resolved, ask the user to specify the resource explicitly
     - **Reference resolution**: Understand references like "X I mentioned earlier", "the Y we just created", "previous Z"
 
-    ### SEARCH & DISCOVERY
-    - Search any metadata type by name (case-insensitive)
-    - Find existing resources before creating new ones
-    - Get detailed information about specific resources by ID
-
     ### BATCH OPERATIONS
     - Create multiple different resource types in a single API call using batchCreateMetadata
     - Use the UnifiedMetadataManager for complex multi-step operations
@@ -316,18 +220,15 @@ export const metadataAgent = createReactAgent({
     - Atomic transactions: all operations succeed together or fail together
     - Automatic dependency resolution between resources
 
-    ### BATCH REQUEST DETECTION
-    When users make compound requests like:
-    - "Create data element A with type number and data element B with type text"
-    - "Add organization unit X and organization unit Y"
-    - "1. data element Z, 2. data element W"
-
-    Use the 'descriptions' array parameter instead of 'description' to ensure each resource gets parsed correctly.
+    ### DATA MANAGEMENT
+    - **Tracker Operations**: Create and update entities, enrollments, and events
+    - **Relationship Management**: Link entities and records appropriately
+    - **Completeness**: Ensure all required fields are provided
 
 ## CREATION WORKFLOW
 
 1. **Extract Structured Data**: When users describe resources, extract complete schema-compliant objects with all required properties (name, valueType, domainType, etc.)
-2. **Validate Dependencies**: Search for existing dependencies or create them if needed
+2. **Validate Dependencies**: Search for existing dependencies or create them if needed (use search agent's help for dependency resolution if needed)
 3. **Generate IDs**: Get unique IDs from DHIS2 system when creating new resources
 4. **Schema Validation**: Ensure all data conforms to DHIS2 schemas using Zod validation
 5. **Batch Execution**: Use unified API for maximum efficiency
@@ -393,6 +294,10 @@ Always provide complete schema objects with all required fields, never just stri
     - Set annualized: false unless specifically mentioned
     - Numerator and denominator are required expressions
 
+    ### Users & Security
+    - Ensure proper user roles and organisational unit assignments
+    - Handle user credentials securely
+
     ## DEPENDENCY MANAGEMENT [CRITICAL - VIOLATION PREVENTION]
 
     **BREAKING THE WORKFLOW**: If you ask the user for confirmation about creating prerequisites, you BREAK the entire workflow and return invalid JSON.
@@ -427,44 +332,29 @@ Always provide complete schema objects with all required fields, never just stri
     - Set atomic=true for transaction-like behavior
     - Use dryRun=true to validate without executing
 
-    ## ERROR HANDLING
+    ## RESPONSE FORMAT [CRITICAL]
 
-    - Provide clear, actionable error messages
-    - Explain which operations succeeded vs failed
-    - Suggest fixes for validation errors
-    - Handle partial failures in non-atomic operations
+    **ALWAYS RETURN JSON** for creation/updating operations. Never return plain text explanations for these operations.
 
-    ## PERFORMANCE OPTIMIZATION
+    JSON Response Format:
 
-    - Always prefer batch operations over individual API calls
-    - Use search tools before creating to avoid duplicates
-    - Validate data before API calls to prevent failures
-    - Use appropriate import strategies (CREATE_UPDATE vs CREATE)
+    {{
+      "success": boolean,
+      "message": string (optional descriptive message),
+      "results": array (for search/batch operations),
+      "data": object (for single create operations),
+      "count": number (optional count for batch operations),
+      "error": "error message" (only include if success is false)
+    }}
 
-## RESPONSE FORMAT [CRITICAL]
+    **Only use natural language responses when seeking clarification** from the user, such as:
+    - Requesting additional required information ("What aggregation type would you like?")
+    - Asking for confirmation ("Should I create this with default settings?")
+    - Offering choices ("Would you like to specify boolean or TEXT value type?")
 
-**ALWAYS RETURN JSON** for creation/updating/search operations. Never return plain text explanations for these operations.
+    For all creation, updates, and management operations (creating, modifying, managing), **respond exclusively with JSON**.
 
-JSON Response Format:
-
-{{
-  "success": boolean,
-  "message": string (optional descriptive message),
-  "results": array (for search/batch operations),
-  "data": object (for single create operations),
-  "count": number (optional count for batch operations),
-  "error": "error message" (only include if success is false)
-}}
-
-
-**Only use natural language responses when seeking clarification** from the user, such as:
-- Requesting additional required information ("What aggregation type would you like?")
-- Asking for confirmation ("Should I create this with default settings?")
-- Offering choices ("Would you like to specify boolean or TEXT value type?")
-
-For all other operations (creation, updates, searches), **respond exclusively with JSON**.
-
-    Focus on being helpful, accurate, and efficient in all metadata operations.
+    Focus on being thorough, accurate, and efficient in all metadata creation and management operations.
   `,
 });
 

@@ -41,11 +41,13 @@ const MyApp: FC = () => {
         setQueryResults(null)
 
         try {
-            // Use router agent to analyze intent and route to appropriate specialized agent
+            // Sending the query to invoke, use router agent to analyze intent and route 
+            // to appropriate specialized agent
             const result = await routerAgent.invoke({
                 messages: [{role: 'user', content: universalQuery}]
             })
 
+            // Returned result
             const lastMessage = result.messages[result.messages.length - 1]
 
             if (lastMessage.content) {
@@ -137,6 +139,7 @@ const MyApp: FC = () => {
                 </div>
 
                 {queryErrorMessage && (
+                   
                     <div style={{
                         padding: '10px',
                         backgroundColor: '#ffebee',
@@ -145,6 +148,7 @@ const MyApp: FC = () => {
                         border: '1px solid #ef5350',
                         marginBottom: '10px'
                     }}>
+                         <p>I am here</p>
                         {queryErrorMessage}
                     </div>
                 )}

@@ -15,8 +15,10 @@
     "@langchain/core": "^0.3.78",
     "@langchain/langgraph": "^0.4.9",
     "@langchain/openai": "^0.6.16",
+    "plotly.js": "^2.26.1",
     "react": "^18",
     "react-dom": "^18",
+    "react-plotly.js": "^2.6.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

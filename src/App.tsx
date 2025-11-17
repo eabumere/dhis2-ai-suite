@@ -1,31 +1,65 @@
-import React from 'react';
-import Plot from 'react-plotly.js';
+import React, { useState } from 'react';
+import ReactECharts from 'echarts-for-react';
 
 const MyApp: React.FC = () => {
-    // Mock data for the Plotly chart
-    const data = [
-        {
-            x: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-            y: [5, 20, 36, 10, 10, 20],
-            type: 'scatter',
-            mode: 'lines+markers',
-            marker: {color: 'red'},
-            name: 'Sales Trend'
-        },
-        {
-            x: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
-            y: [2, 13, 30, 8, 15, 18],
-            type: 'bar',
-            name: 'Monthly Sales',
-            marker: {color: 'blue'}
-        }
-    ];
+    const [chartType, setChartType] = useState<string>('combined');
 
-    const layout = {
-        title: 'Simple Plotly.js Chart Demo',
-        xaxis: {title: 'Month'},
-        yaxis: {title: 'Value'},
-        showlegend: true
+    const getChartSeries = () => {
+        const baseSeries = [
+            {
+                name: 'Sales Trend',
+                type: 'line' as const,
+                data: [5, 20, 36, 10, 10, 20],
+                itemStyle: {
+                    color: 'red'
+                },
+                symbol: 'circle',
+                symbolSize: 6
+            },
+            {
+                name: 'Monthly Sales',
+                type: 'bar' as const,
+                data: [2, 13, 30, 8, 15, 18],
+                itemStyle: {
+                    color: 'blue'
+                }
+            }
+        ];
+
+        switch (chartType) {
+            case 'line':
+                return [baseSeries[0]];
+            case 'bar':
+                return [baseSeries[1]];
+            default:
+                return baseSeries;
+        }
+    };
+
+    const option = {
+        title: {
+            text: 'Simple ECharts Chart Demo',
+            left: 'center'
+        },
+        tooltip: {
+            trigger: 'axis'
+        },
+        legend: {
+            data: chartType === 'line' ? ['Sales Trend'] :
+                  chartType === 'bar' ? ['Monthly Sales'] :
+                  ['Sales Trend', 'Monthly Sales'],
+            top: '10%'
+        },
+        xAxis: {
+            type: 'category',
+            data: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+            name: 'Month'
+        },
+        yAxis: {
+            type: 'value',
+            name: 'Value'
+        },
+        series: getChartSeries()
     };
 
     return (
@@ -43,12 +77,34 @@ const MyApp: React.FC = () => {
                 boxShadow: '0 4px 8px rgba(0,0,0,0.1)',
                 padding: '20px'
             }}>
-                <Plot
-                    data={data}
-                    layout={layout}
+                <div style={{
+                    marginBottom: '20px',
+                    display: 'flex',
+                    justifyContent: 'center'
+                }}>
+                    <select
+                        value={chartType}
+                        onChange={(e) => setChartType(e.target.value)}
+                        style={{
+                            padding: '8px 12px',
+                            border: '1px solid #ccc',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                            backgroundColor: 'white',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        <option value="combined">Combined Chart</option>
+                        <option value="line">Line Chart</option>
+                        <option value="bar">Bar Chart</option>
+                    </select>
+                </div>
+                <ReactECharts
+                    option={option}
+                    notMerge={true}
                     style={{
-                        width: '800px',
-                        height: '500px'
+                        height: '500px',
+                        width: '800px'
                     }}
                 />
             </div>

@@ -5,6 +5,19 @@ export * from './base-tool';
 export * from './structured-tools';
 export * from './batch-manager';
 
+// Analytics tools
+export {
+    queryAnalytics,
+    searchAnalyticsMetadata,
+    getAllMetadata,
+    getOrganisationUnits,
+    getDataElements,
+    computeTotal,
+    computeAverage,
+    computeMax,
+    computeMin
+} from './structured-tools';
+
 // No legacy tools - using structured tools only
 
 // Export the complete tools collection

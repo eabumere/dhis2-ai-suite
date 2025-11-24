@@ -4,6 +4,7 @@ import { tool } from '@langchain/core/tools';
 import { StateAnnotation } from '../utils/state';
 import { searchAgent } from './search-agent';
 import { crudAgent } from './crud-agent';
+import { analyticsAgent } from './analytics-agent';
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = new AzureChatOpenAI({
@@ -89,10 +90,46 @@ const routeToCRUDAgent = tool(
     }
 );
 
+const routeToAnalyticsAgent = tool(
+    async ({ userQuery }: { userQuery: string }) => {
+        try {
+            // Actually invoke the analytics agent
+            const result = await analyticsAgent.invoke({
+                messages: [{ role: 'user', content: userQuery }]
+            });
+
+            const lastMessage = result.messages[result.messages.length - 1];
+            return lastMessage.content as string;
+        } catch (error) {
+            console.error('Error routing to analytics agent:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to route to analytics agent: ${error.message}`,
+                routedTo: "analytics",
+                originalQuery: userQuery
+            });
+        }
+    },
+    {
+        name: "route_to_analytics_agent",
+        description: "Route query to the analytics agent for data analysis, querying analytics endpoints, performing calculations, and generating insights from DHIS2 data",
+        schema: JSON.parse(`{
+            "type": "object",
+            "properties": {
+                "userQuery": {
+                    "type": "string",
+                    "description": "The complete user query to route to analytics agent"
+                }
+            },
+            "required": ["userQuery"]
+        }`)
+    }
+);
+
 // Create the router agent with routing tools
 export const routerAgent = createReactAgent({
   llm: model,
-  tools: [routeToSearchAgent, routeToCRUDAgent],
+  tools: [routeToSearchAgent, routeToCRUDAgent, routeToAnalyticsAgent],
   prompt: `
     You are a DHIS2 intelligent routing agent. Your role is to analyze user queries and route them to the most appropriate specialized agent based on intent analysis.
 
@@ -128,16 +165,35 @@ export const routerAgent = createReactAgent({
     - "Set up a new validation rule"
     - "Generate dashboard for COVID reporting"
 
+    ### ANALYTICS AGENT ROUTING
+    Route to ANALYTICS AGENT for operations that involve:
+    - **Data Analysis**: analyze, calculate, compute, aggregate, trend, compare
+    - **Querying Data**: query, extract, retrieve data values, analytics, reporting
+    - **Mathematical Operations**: sum, average, min, max, total, percentage, rate
+    - **Insights & Reporting**: performance, coverage, trends, patterns, insights
+    - **Time Series**: monthly, quarterly, yearly data, time periods, over time
+
+    **Examples of ANALYTICS queries:**
+    - "Show HIV testing coverage for 2023 by district"
+    - "Calculate average vaccination rates across all regions"
+    - "Analyze malaria incidence trends over the last 12 months"
+    - "Query total patient enrollments this quarter"
+    - "Compare Q1 vs Q2 performance indicators"
+    - "Find maximum and minimum values in this dataset"
+    - "Generate coverage analysis for immunization program"
+
     ## INTENT ANALYSIS RULES
 
     ### Primary Keywords (High Priority)
     - SEARCH: find, search, show, list, get, display, view, see, lookup, retrieve, discover, explore, browse, check, verify, examine, details, information
     - CRUD: create, add, make, new, update, change, modify, edit, build, setup, generate, produce, construct, design, save, store
+    - ANALYTICS: analyze, calculate, compute, aggregate, query, extract, sum, average, min, max, total, percentage, rate, coverage, trend, compare, performance, insight
 
     ### Contextual Analysis
     - **Question format** suggests SEARCH: "What are...", "Where is...", "Which...", "How many..."
     - **Imperative format** suggests CRUD: "Create...", "Add...", "Update...", "Make..."
-    - **Object references** can go either way: "the data element" (could be creating or retrieving)
+    - **Mathematical/Data terms** suggest ANALYTICS: "average of", "total from", "trends in", "coverage for"
+    - **Time-period + data terms** strongly suggest ANALYTICS: "monthly data", "quarterly analysis", "year-over-year"
 
     ### Ambiguous Cases
     If intent is unclear, ask user for clarification rather than guessing wrong.
@@ -147,13 +203,13 @@ export const routerAgent = createReactAgent({
     1. **Analyze**: Read the complete user query
     2. **Extract Intent**: Identify primary action keywords
     3. **Context Check**: Consider surrounding words and grammar
-    4. **Route**: Use appropriate routing tool (routeToSearchAgent or routeToCRUDAgent)
+    4. **Route**: Use appropriate routing tool (routeToSearchAgent, routeToCRUDAgent, or routeToAnalyticsAgent)
     5. **Execute**: The tool will handle the delegation
 
     ## IMPORTANT NOTES
 
     - **Always route** - never handle queries directly yourself
-    - **Single routing** - pick exactly one agent (search or crud)
+    - **Single routing** - pick exactly one agent (search, crud, or analytics)
     - **No tool execution** - just analyze and route to the right agent
     - **Preserve context** - pass the entire user query to the agent
     - **No explanation** - don't explain routing decisions, just route
@@ -172,4 +228,4 @@ export const routerAgent = createReactAgent({
 export { StateAnnotation };
 
 // Export the routing functions for use in the main application
-export { routeToSearchAgent, routeToCRUDAgent };
+export { routeToSearchAgent, routeToCRUDAgent, routeToAnalyticsAgent };

@@ -992,6 +992,410 @@ async function createDhis2ReportingFormAggregated({
 
     // REMOVED: Migration completed - legacy tools replaced with LLM-first versions above
 
+// =============================================================================
+// ANALYTICS TOOLS - DATA QUERYING AND COMPUTATION
+// =============================================================================
+
+// Query Analytics Tool - Main analytics data retrieval
+export const queryAnalytics = tool(
+    async ({
+        indicators,
+        doc_type = 'indicator',
+        periods,
+        org_units,
+        disaggregations = [],
+        include_coc_dimension = false,
+        skip_meta = true,
+        display_property = "NAME",
+        include_num_den = false,
+        skip_data = false,
+        output_id_scheme = "NAME"
+    }: {
+        indicators: string[];
+        doc_type?: 'indicator' | 'dataElement';
+        periods: string[];
+        org_units: string[];
+        disaggregations?: string[];
+        include_coc_dimension?: boolean;
+        skip_meta?: boolean;
+        display_property?: string;
+        include_num_den?: boolean;
+        skip_data?: boolean;
+        output_id_scheme?: string;
+    }) => {
+        try {
+            // Import the DHIS2 API query function
+            const Dhis2Api = await import('../../app-runtime/dhis2-api');
+
+            // Build dimension parameters
+            const indicator_string = indicators.join(";");
+            const period_string = periods.join(";");
+            const org_unit_string = org_units.join(";");
+
+            const dimensions = [
+                `dx:${indicator_string}`,
+                `pe:${period_string}`,
+                `ou:${org_unit_string}`
+            ];
+
+            // Add disaggregation dimensions if provided
+            if (disaggregations && disaggregations.length > 0) {
+                for (const cat_id of disaggregations) {
+                    dimensions.push(`${cat_id}`);
+                }
+            }
+
+            const params = {
+                dimension: dimensions,
+                displayProperty: display_property,
+                includeNumDen: include_num_den.toString(),
+                skipMeta: skip_meta.toString(),
+                skipData: skip_data.toString(),
+                outputIdScheme: output_id_scheme
+            };
+
+            // Query the analytics endpoint
+            const response = await Dhis2Api.default.query({
+                resource: 'analytics',
+                params: params
+            });
+
+            return {
+                url: `analytics?${new URLSearchParams(params).toString()}`,
+                data: response,
+                doc_type: doc_type,
+                disaggregations: disaggregations,
+                indicators: indicators,
+                periods: periods,
+                org_units: org_units
+            };
+        } catch (error) {
+            console.error('Error querying analytics:', error);
+            return {
+                error: `Failed to query analytics: ${error.message}`,
+                doc_type: doc_type,
+                indicators: indicators,
+                periods: periods,
+                org_units: org_units
+            };
+        }
+    },
+    {
+        name: "query_analytics",
+        description: "Query analytics data from DHIS2 for indicators or data elements with support for disaggregation, periods, and organization units",
+        schema: z.object({
+            indicators: z.array(z.string()).describe("Array of indicator or data element IDs to query"),
+            doc_type: z.enum(['indicator', 'dataElement']).default('indicator').describe("Type of resource being queried"),
+            periods: z.array(z.string()).describe("Array of period identifiers (e.g., ['202301', '202302'])"),
+            org_units: z.array(z.string()).describe("Array of organization unit IDs"),
+            disaggregations: z.array(z.string()).optional().describe("Array of category IDs for disaggregation (optional)"),
+            include_coc_dimension: z.boolean().optional().describe("Whether to include category option combo dimension"),
+            skip_meta: z.boolean().default(true).describe("Whether to skip metadata in response"),
+            display_property: z.string().default("NAME").describe("Display property format"),
+            include_num_den: z.boolean().default(false).describe("Whether to include numerator/denominator data"),
+            skip_data: z.boolean().default(false).describe("Whether to skip actual data values"),
+            output_id_scheme: z.string().default("NAME").describe("Output ID scheme")
+        })
+    }
+);
+
+// Search Metadata Tool (Analytics-focused)
+export const searchAnalyticsMetadata = tool(
+    async ({ query }: { query: string }) => {
+        try {
+            // Use the existing search functions with focus on analytics-relevant metadata
+            const [indicators, dataElements, orgUnits] = await Promise.all([
+                searchDhis2Metadata('indicators', query, 10),
+                searchDhis2Metadata('dataElements', query, 10),
+                searchDhis2Metadata('organisationUnits', query, 10)
+            ]);
+
+            const results = {
+                indicators: indicators.map(ind => ({ name: ind.name, id: ind.id, type: 'indicator' })),
+                dataElements: dataElements.map(de => ({ name: de.name, id: de.id, type: 'dataElement' })),
+                organisationUnits: orgUnits.map(ou => ({ name: ou.name, id: ou.id, type: 'organisationUnit' }))
+            };
+
+            // Determine best match based on simple heuristic (can be enhanced with ML later)
+            const allMatches = [...results.indicators, ...results.dataElements, ...results.organisationUnits];
+            const bestMatch = allMatches.length > 0 ? allMatches[0] : null;
+
+            if (allMatches.length === 0) {
+                return {
+                    status: "no_match",
+                    message: "No analytics metadata matches found.",
+                    suggestions: [],
+                    query: query
+                };
+            }
+
+            if (allMatches.length === 1) {
+                return {
+                    status: "auto_selected",
+                    selected: bestMatch,
+                    query: query
+                };
+            }
+
+            return {
+                status: "multiple_matches",
+                suggestions: allMatches.slice(0, 10), // Limit to 10 suggestions
+                query: query
+            };
+        } catch (error) {
+            console.error('Error searching analytics metadata:', error);
+            return {
+                status: "error",
+                message: `Search failed: ${error.message}`,
+                query: query
+            };
+        }
+    },
+    {
+        name: "search_analytics_metadata",
+        description: "Search for analytics-relevant metadata including indicators, data elements, and organisation units using semantic similarity",
+        schema: z.object({
+            query: z.string().describe("Search query for finding analytics metadata (e.g., 'HIV testing coverage', 'population under 5')")
+        })
+    }
+);
+
+// Get All Tool - Paginated metadata retrieval
+export const getAllMetadata = tool(
+    async ({
+        endpoint,
+        key,
+        fields = "id,name",
+        filters = {},
+        page_size = 1000
+    }: {
+        endpoint: string;
+        key: string;
+        fields?: string;
+        filters?: Record<string, string>;
+        page_size?: number;
+    }) => {
+        try {
+            const Dhis2Api = await import('../../app-runtime/dhis2-api');
+
+            const all_items = [];
+            let page = 1;
+
+            while (true) {
+                const params: any = {
+                    page: page,
+                    pageSize: page_size,
+                    fields: fields
+                };
+
+                // Add filters
+                if (filters) {
+                    Object.entries(filters).forEach(([field, condition]) => {
+                        params[`filter`] = params[`filter`] || [];
+                        params[`filter`].push(`${field}:${condition}`);
+                    });
+                }
+
+                const response = await Dhis2Api.default.query({
+                    resource: endpoint,
+                    params: params
+                });
+
+                const items = response[key] || [];
+
+                if (!items || items.length === 0) {
+                    break;
+                }
+
+                all_items.push(...items);
+
+                // Check pagination info
+                const pager = response.pager || {};
+                if (pager.page >= pager.pageCount) {
+                    break;
+                }
+
+                page += 1;
+
+                // Safety limit to prevent infinite loops
+                if (all_items.length > 10000) {
+                    console.warn('Reached safety limit of 10,000 items in getAllMetadata');
+                    break;
+                }
+            }
+
+            return {
+                count: all_items.length,
+                data: all_items,
+                endpoint: endpoint,
+                filters: filters
+            };
+        } catch (error) {
+            console.error('Error in getAllMetadata:', error);
+            return {
+                error: `Failed to retrieve metadata from ${endpoint}: ${error.message}`,
+                count: 0,
+                data: [],
+                endpoint: endpoint,
+                filters: filters
+            };
+        }
+    },
+    {
+        name: "get_all_metadata",
+        description: "Retrieve all metadata from a DHIS2 endpoint using pagination, with optional filtering",
+        schema: z.object({
+            endpoint: z.string().describe("API endpoint (e.g., 'indicators.json', 'dataElements.json')"),
+            key: z.string().describe("JSON key containing the data array (e.g., 'indicators', 'dataElements')"),
+            fields: z.string().default("id,name").describe("Comma-separated list of fields to retrieve"),
+            filters: z.record(z.string()).optional().describe("Optional filters as field:condition pairs"),
+            page_size: z.number().int().min(1).max(5000).default(1000).describe("Page size for pagination")
+        })
+    }
+);
+
+// Computation Tools - Data Aggregation Functions
+export const computeTotal = tool(
+    async ({ values }: { values: (string | number | null)[] }) => {
+        try {
+            const numericValues = values
+                .map(v => typeof v === 'string' ? parseFloat(v) : v)
+                .filter(v => v !== null && v !== undefined && !isNaN(v as number));
+
+            if (numericValues.length === 0) return 0;
+
+            return numericValues.reduce((sum, val) => sum + (val as number), 0);
+        } catch (error) {
+            return `Error computing total: ${error.message}`;
+        }
+    },
+    {
+        name: "compute_total",
+        description: "Compute the sum of a list of numeric values, handling strings and null values",
+        schema: z.object({
+            values: z.array(z.union([z.string(), z.number(), z.null()])).describe("Array of values to sum")
+        })
+    }
+);
+
+export const computeAverage = tool(
+    async ({ values }: { values: (string | number | null)[] }) => {
+        try {
+            const numericValues = values
+                .map(v => typeof v === 'string' ? parseFloat(v) : v)
+                .filter(v => v !== null && v !== undefined && !isNaN(v as number));
+
+            if (numericValues.length === 0) return 0;
+
+            return numericValues.reduce((sum, val) => sum + (val as number), 0) / numericValues.length;
+        } catch (error) {
+            return `Error computing average: ${error.message}`;
+        }
+    },
+    {
+        name: "compute_average",
+        description: "Compute the average (mean) of a list of numeric values",
+        schema: z.object({
+            values: z.array(z.union([z.string(), z.number(), z.null()])).describe("Array of values to average")
+        })
+    }
+);
+
+export const computeMax = tool(
+    async ({ values }: { values: (string | number | null)[] }) => {
+        try {
+            const numericValues = values
+                .map(v => typeof v === 'string' ? parseFloat(v) : v)
+                .filter(v => v !== null && v !== undefined && !isNaN(v as number));
+
+            if (numericValues.length === 0) return 0;
+
+            return Math.max(...numericValues);
+        } catch (error) {
+            return `Error computing max: ${error.message}`;
+        }
+    },
+    {
+        name: "compute_max",
+        description: "Find the maximum value in a list of numeric values",
+        schema: z.object({
+            values: z.array(z.union([z.string(), z.number(), z.null()])).describe("Array of values to find maximum")
+        })
+    }
+);
+
+export const computeMin = tool(
+    async ({ values }: { values: (string | number | null)[] }) => {
+        try {
+            const numericValues = values
+                .map(v => typeof v === 'string' ? parseFloat(v) : v)
+                .filter(v => v !== null && v !== undefined && !isNaN(v as number));
+
+            if (numericValues.length === 0) return 0;
+
+            return Math.min(...numericValues);
+        } catch (error) {
+            return `Error computing min: ${error.message}`;
+        }
+    },
+    {
+        name: "compute_min",
+        description: "Find the minimum value in a list of numeric values",
+        schema: z.object({
+            values: z.array(z.union([z.string(), z.number(), z.null()])).describe("Array of values to find minimum")
+        })
+    }
+);
+
+// Specific Metadata Getters
+export const getOrganisationUnits = tool(
+    async ({ filters = {} }: { filters?: Record<string, string> }) => {
+        const result = await getAllMetadata({
+            endpoint: "organisationUnits.json",
+            key: "organisationUnits",
+            fields: "id,name,level",
+            filters: filters
+        });
+
+        return {
+            organisationUnits: result.data,
+            count: result.count,
+            filters: filters
+        };
+    },
+    {
+        name: "get_organisation_units",
+        description: "Retrieve DHIS2 organisation units with optional filtering",
+        schema: z.object({
+            filters: z.record(z.string()).optional().describe("Optional filters (e.g., { 'level': 'eq:2', 'name': 'ilike:Sierra' })")
+        })
+    }
+);
+
+export const getDataElements = tool(
+    async ({ filters = {} }: { filters?: Record<string, string> }) => {
+        const result = await getAllMetadata({
+            endpoint: "dataElements.json",
+            key: "dataElements",
+            fields: "id,name,categoryCombo[id,name,categories[id,name,categoryOptions[id,name]]]",
+            filters: filters
+        });
+
+        return {
+            dataElements: result.data,
+            count: result.count,
+            filters: filters
+        };
+    },
+    {
+        name: "get_data_elements",
+        description: "Retrieve DHIS2 data elements with category information",
+        schema: z.object({
+            filters: z.record(z.string()).optional().describe("Optional filters for data elements")
+        })
+    }
+);
+
 // DataValue Tool (special read-only tool)
 export const getDhis2DataValues = tool(
     async ({ dataElementIds, period, orgUnits }: {
@@ -1531,6 +1935,17 @@ export const Dhis2StructuredTools = {
     updateDhis2User,
     updateDhis2RelationshipType,
     updateDhis2Relationship,
+
+    // 📊 ANALYTICS TOOLS 📊
+    queryAnalytics,
+    searchAnalyticsMetadata,
+    getAllMetadata,
+    getOrganisationUnits,
+    getDataElements,
+    computeTotal,
+    computeAverage,
+    computeMax,
+    computeMin,
 
     // Aggregated metadata creation tool
     createDhis2AggregatedMetadata,

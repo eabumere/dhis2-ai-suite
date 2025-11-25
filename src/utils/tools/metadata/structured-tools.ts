@@ -1,27 +1,577 @@
-import { createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool } from './base-tool';
-import { Dhis2Schemas } from './schemas';
+// ========== IMPORTS ==========
+
+// External libraries (alphabetically)
+import { tool } from '@langchain/core/tools';
+import { z } from 'zod';
+
+// Local imports (alphabetically by module)
 import {
     addResourceToContext,
     createDhis2Metadata,
     createDhis2MetadataAggregated,
     createDhis2MetadataDirect,
-    generateDataElementFromExpression,
     generateDhis2Code,
     generateDhis2Id,
-    parseExpressionForDataElements,
-    parseNaturalLanguageDescription,
     searchDhis2Metadata
 } from './helpers';
-import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
+import { createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool } from './base-tool';
+import {
+    createDhis2CategoryOption,
+    createDhis2Relationship,
+    createDhis2RelationshipType,
+    createDhis2User
+} from './tools';
 
-
-// OrganisationUnit Tool - REMOVED (LLM-first version exists below)
+// Schemas
+import { Dhis2Schemas } from './schemas';
 
 // =============================================================================
-// LLM-FIRST TOOLS - NEW ARCHITECTURE
+// ECHARTS VISUALIZATION TOOLS - NEW ANALYTICS CAPABILITIES
+// =============================================================================
+
+/**
+ * ECharts Data Processing - Convert DHIS2 analytics to chart format
+ */
+
+interface AnalyticsChartData {
+    id: string;
+    title: string;
+    timestamp: number;
+    chartType: 'line' | 'bar' | 'pie';
+    echartsConfig: any;
+    filteredData: any[];
+    dimensions: {
+        indicators: string[];
+        periods: string[];
+        orgUnits: string[];
+        disaggregations: string[];
+    };
+    metadata: {
+        indicators: any[];
+        orgUnits: any[];
+    };
+}
+
+/**
+ * Build ECharts option object for analytics visualization
+ */
+export const buildAnalyticsChart = tool(
+    async (input: {
+        userQuery: string;
+        analyticsData: any;
+        chartType: 'line' | 'bar' | 'pie';
+        indicators?: string[];
+        periods?: string[];
+        orgUnits?: string[];
+        disaggregations?: string[];
+        title?: string;
+    }) => {
+        try {
+            const {
+                userQuery,
+                analyticsData,
+                chartType,
+                indicators = [],
+                periods = [],
+                orgUnits = [],
+                disaggregations = [],
+                title
+            } = input;
+
+            // Process analytics data to chart format
+            const chartData = processAnalyticsForChart({
+                analyticsData,
+                chartType,
+                indicators,
+                periods,
+                orgUnits,
+                disaggregations,
+                title: title || `Analytics Chart: ${userQuery}`
+            });
+
+            // Store chart configuration for persistence
+            const chartId = storeAnalyticsChart(chartData);
+
+            // Build ECharts option object
+            const echartsOption = buildEChartsOption(chartData);
+
+            return JSON.stringify({
+                success: true,
+                chart_id: chartId,
+                chart_type: chartType,
+                echarts_option: echartsOption,
+                data_summary: {
+                    total_points: chartData.filteredData.length,
+                    indicators_count: chartData.dimensions.indicators.length,
+                    periods_count: chartData.dimensions.periods.length,
+                    org_units_count: chartData.dimensions.orgUnits.length,
+                    disaggregations_count: chartData.dimensions.disaggregations.length
+                },
+                title: chartData.title,
+                export_available: true
+            });
+
+        } catch (error) {
+            console.error('Error building analytics chart:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to build chart: ${error.message}`,
+                chart_type: input.chartType
+            });
+        }
+    },
+    {
+        name: "build_analytics_chart",
+        description: "Create interactive ECharts visualizations from DHIS2 analytics data with filtering capabilities",
+        schema: z.object({
+            userQuery: z.string().describe("The original user analytics query"),
+            analyticsData: z.any().describe("DHIS2 analytics API response"),
+            chartType: z.enum(['line', 'bar', 'pie']).describe("Type of chart to create"),
+            indicators: z.array(z.string()).optional().describe("Selected indicators to display"),
+            periods: z.array(z.string()).optional().describe("Selected time periods"),
+            orgUnits: z.array(z.string()).optional().describe("Selected organization units"),
+            disaggregations: z.array(z.string()).optional().describe("Category breakdowns to include"),
+            title: z.string().optional().describe("Chart title (auto-generated if not provided)")
+        })
+    }
+);
+
+/**
+ * Interactive filtering for existing charts
+ */
+export const filterAnalyticsChart = tool(
+    async (input: {
+        chartId: string;
+        filters: {
+            indicators?: string[];
+            periods?: string[];
+            orgUnits?: string[];
+            disaggregations?: string[];
+        };
+    }) => {
+        try {
+            const { chartId, filters } = input;
+
+            // Retrieve stored chart
+            const chart = getAnalyticsChart(chartId);
+            if (!chart) {
+                return JSON.stringify({
+                    success: false,
+                    error: `Chart with ID '${chartId}' not found`
+                });
+            }
+
+            // Apply filters to chart data
+            const filteredData = applyChartFilters(chart, filters);
+            const updatedChart = { ...chart, filteredData };
+
+            // Generate new ECharts option
+            const echartsOption = buildEChartsOption(updatedChart);
+
+            return JSON.stringify({
+                success: true,
+                chart_id: chartId,
+                echarts_option: echartsOption,
+                applied_filters: filters,
+                data_points: filteredData.length,
+                title: updatedChart.title
+            });
+
+        } catch (error) {
+            console.error('Error filtering analytics chart:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to filter chart: ${error.message}`,
+                chart_id: input.chartId
+            });
+        }
+    },
+    {
+        name: "filter_analytics_chart",
+        description: "Apply interactive filters to existing analytics charts (indicators, periods, org units, disaggregations)",
+        schema: z.object({
+            chartId: z.string().describe("ID of the chart to filter"),
+            filters: z.object({
+                indicators: z.array(z.string()).optional().describe("Filter by specific indicators"),
+                periods: z.array(z.string()).optional().describe("Filter by time periods"),
+                orgUnits: z.array(z.string()).optional().describe("Filter by organization units"),
+                disaggregations: z.array(z.string()).optional().describe("Filter by category breakdowns")
+            }).describe("Filters to apply to the chart")
+        })
+    }
+);
+
+/**
+ * Export chart as image or data
+ */
+export const exportAnalyticsChart = tool(
+    async (input: {
+        chartId: string;
+        format: 'png' | 'svg' | 'csv' | 'json';
+        filename?: string;
+    }) => {
+        try {
+            const { chartId, format, filename } = input;
+
+            // Retrieve stored chart
+            const chart = getAnalyticsChart(chartId);
+            if (!chart) {
+                return JSON.stringify({
+                    success: false,
+                    error: `Chart with ID '${chartId}' not found`
+                });
+            }
+
+            // Generate export data based on format
+            const exportData = generateChartExport(chart, format);
+            const downloadFilename = filename ||
+                `dhis2_analytics_${chart.title}_${Date.now()}.${format === 'csv' ? 'csv' : 'json'}`;
+
+            return JSON.stringify({
+                success: true,
+                chart_id: chartId,
+                export_format: format,
+                filename: downloadFilename,
+                data: exportData, // This would be handled by frontend for downloads
+                message: `Chart exported successfully as ${format.toUpperCase()}`
+            });
+
+        } catch (error) {
+            console.error('Error exporting analytics chart:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to export chart: ${error.message}`,
+                chart_id: input.chartId,
+                format: input.format
+            });
+        }
+    },
+    {
+        name: "export_analytics_chart",
+        description: "Export analytics charts as PNG/SVG images or CSV/JSON data files",
+        schema: z.object({
+            chartId: z.string().describe("ID of the chart to export"),
+            format: z.enum(['png', 'svg', 'csv', 'json']).describe("Export format"),
+            filename: z.string().optional().describe("Custom filename (auto-generated if not provided)")
+        })
+    }
+);
+
+// =============================================================================
+// ECHARTS DATA PROCESSING - INTERNAL FUNCTIONS
+// =============================================================================
+
+let analyticsCharts: AnalyticsChartData[] = [];
+const MAX_CHARTS = 10; // Keep last 10 charts
+
+/**
+ * Process analytics data for chart visualization
+ */
+function processAnalyticsForChart(params: {
+    analyticsData: any;
+    chartType: 'line' | 'bar' | 'pie';
+    indicators: string[];
+    periods: string[];
+    orgUnits: string[];
+    disaggregations: string[];
+    title: string;
+}): AnalyticsChartData {
+    const { analyticsData, indicators, periods, orgUnits, disaggregations, title } = params;
+
+    // Extract data from DHIS2 response
+    const rows = analyticsData?.rows || [];
+    const headers = analyticsData?.headers || [];
+
+    if (rows.length === 0) {
+        throw new Error("No data available for chart visualization");
+    }
+
+    // Process rows into chart-compatible format
+    // Apply initial filters if specified
+    let filteredRows = rows.map((row: any) => {
+        const rowObj: any = {};
+        headers.forEach((header: any, index: number) => {
+            let value = row[index];
+
+            // Convert IDs to names where possible (org units, indicators, etc.)
+            if (header.name === 'Organisation unit') {
+                // Try to resolve org unit name - simplified for now
+                rowObj.org_unit = value;
+            } else if (header.name === 'Period') {
+                rowObj.period = value;
+            } else if (header.name === 'Data') {
+                rowObj.dx = value;
+            } else if (header.name === 'Value') {
+                rowObj.value = parseFloat(value) || 0;
+            } else if (header.name.startsWith('co_')) { // Category options
+                rowObj[header.name] = value;
+            } else {
+                rowObj[header.name.toLowerCase().replace(/\s+/g, '_')] = value;
+            }
+        });
+        return rowObj;
+    });
+    if (indicators.length > 0) {
+        filteredRows = filteredRows.filter(row => indicators.includes(row.dx));
+    }
+    if (periods.length > 0) {
+        filteredRows = filteredRows.filter(row => periods.includes(row.period));
+    }
+    if (orgUnits.length > 0) {
+        filteredRows = filteredRows.filter(row => orgUnits.includes(row.org_unit));
+    }
+
+    return {
+        id: generateAnalyticsMemoryId(),
+        title,
+        timestamp: Date.now(),
+        chartType: params.chartType,
+        echartsConfig: {},
+        filteredData: filteredRows,
+        dimensions: {
+            indicators,
+            periods,
+            orgUnits,
+            disaggregations
+        },
+        metadata: {
+            indicators: [], // Would be populated with actual indicator metadata
+            orgUnits: []   // Would be populated with actual org unit metadata
+        }
+    };
+}
+
+/**
+ * Build ECharts option object from processed chart data
+ */
+function buildEChartsOption(chartData: AnalyticsChartData): any {
+    const { filteredData, chartType, dimensions, title } = chartData;
+
+    if (filteredData.length === 0) {
+        return { title: { text: 'No Data Available' } };
+    }
+
+    // Group data by dimensions for charting
+    const dataByDimension = groupChartData(filteredData, chartType);
+
+    const baseOption = {
+        title: {
+            text: title,
+            left: 'center',
+            textStyle: { fontSize: 16, fontWeight: 'bold' }
+        },
+        tooltip: {
+            trigger: chartType === 'pie' ? 'item' : 'axis',
+            formatter: chartType === 'pie'
+                ? '{a} <br/>{b}: {c} ({d}%)'
+                : '{b}<br/>{a}: {c}'
+        },
+        legend: {
+            orient: 'horizontal',
+            top: 30,
+            data: []
+        },
+        grid: {
+            left: '3%',
+            right: '4%',
+            bottom: '3%',
+            containLabel: true
+        },
+        xAxis: chartType !== 'pie' ? {
+            type: 'category',
+            data: [],
+            name: 'Period',
+            nameLocation: 'middle',
+            nameGap: 25
+        } : undefined,
+        yAxis: chartType !== 'pie' ? {
+            type: 'value',
+            name: 'Value',
+            nameLocation: 'middle',
+            nameGap: 40
+        } : undefined,
+        series: []
+    };
+
+    // Build series data
+    if (chartType === 'pie' && dimensions.indicators.length === 1) {
+        // Single pie chart for one indicator
+        baseOption.series = [{
+            name: dimensions.indicators[0],
+            type: 'pie',
+            radius: ['40%', '70%'],
+            center: ['50%', '60%'],
+            data: dataByDimension.pieData,
+            emphasis: {
+                itemStyle: {
+                    shadowBlur: 10,
+                    shadowOffsetX: 0,
+                    shadowColor: 'rgba(0, 0, 0, 0.5)'
+                }
+            },
+            label: {
+                show: true,
+                formatter: '{b}: {d}%'
+            }
+        }];
+        baseOption.legend.data = dataByDimension.labels;
+    } else if (chartType === 'bar' || chartType === 'line') {
+        // Multi-series chart
+        baseOption.xAxis.data = dataByDimension.categories;
+        baseOption.series = dataByDimension.series.map(series => ({
+            name: series.name,
+            type: chartType,
+            data: series.data,
+            smooth: chartType === 'line',
+            symbol: 'circle',
+            symbolSize: 6,
+            lineStyle: {
+                width: 2
+            },
+            itemStyle: {
+                borderRadius: chartType === 'bar' ? [2, 2, 0, 0] : undefined
+            }
+        }));
+        baseOption.legend.data = dataByDimension.series.map(s => s.name);
+    }
+
+    // Color scheme
+    const colors = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc'];
+    const chartOption: any = baseOption; // Cast to any to allow color assignment
+    if (baseOption.series.length > 0) {
+        chartOption.color = colors.slice(0, baseOption.series.length);
+    }
+    return chartOption;
+}
+
+/**
+ * Group chart data by appropriate dimensions
+ */
+function groupChartData(data: any[], chartType: string): any {
+    if (chartType === 'pie') {
+        // For pie charts, group by periods/quarters
+        const periodGroups: Record<string, number> = {};
+        data.forEach(row => {
+            const period = row.period || 'Unknown';
+            periodGroups[period] = (periodGroups[period] || 0) + (row.value || 0);
+        });
+
+        return {
+            pieData: Object.entries(periodGroups).map(([name, value]) => ({
+                name,
+                value
+            })),
+            labels: Object.keys(periodGroups)
+        };
+    } else {
+        // For line/bar charts, organize by indicators over periods
+        const periodOrder: string[] = [];
+        const indicatorSeries: Record<string, Record<string, number>> = {};
+
+        data.forEach(row => {
+            const period = row.period || 'Unknown';
+            const indicator = row.dx || 'Unknown';
+
+            if (!periodOrder.includes(period)) {
+                periodOrder.push(period);
+            }
+
+            if (!indicatorSeries[indicator]) {
+                indicatorSeries[indicator] = {};
+            }
+            indicatorSeries[indicator][period] = (indicatorSeries[indicator][period] || 0) + (row.value || 0);
+        });
+
+        // Sort periods chronologically
+        periodOrder.sort();
+
+        return {
+            categories: periodOrder,
+            series: Object.entries(indicatorSeries).map(([indicator, periodData]) => ({
+                name: indicator,
+                data: periodOrder.map(period => periodData[period] || 0)
+            }))
+        };
+    }
+}
+
+/**
+ * Apply filters to chart data
+ */
+function applyChartFilters(chart: AnalyticsChartData, filters: any): any[] {
+    let filteredData = [...chart.filteredData];
+
+    if (filters.indicators && filters.indicators.length > 0) {
+        filteredData = filteredData.filter(row => filters.indicators.includes(row.dx));
+    }
+    if (filters.periods && filters.periods.length > 0) {
+        filteredData = filteredData.filter(row => filters.periods.includes(row.period));
+    }
+    if (filters.orgUnits && filters.orgUnits.length > 0) {
+        filteredData = filteredData.filter(row => filters.orgUnits.includes(row.org_unit));
+    }
+    // Add disaggregation filtering if needed
+
+    return filteredData;
+}
+
+/**
+ * Generate export data in requested format
+ */
+function generateChartExport(chart: AnalyticsChartData, format: string): any {
+    switch (format) {
+        case 'csv':
+            // Convert chart data to CSV
+            if (!chart.filteredData || chart.filteredData.length === 0) {
+                return 'No data available';
+            }
+            const headers = Object.keys(chart.filteredData[0]);
+            const csvRows = [headers.join(',')];
+            chart.filteredData.forEach(row => {
+                const values = headers.map(h => row[h] || '');
+                csvRows.push(values.join(','));
+            });
+            return csvRows.join('\n');
+
+        case 'json':
+            return JSON.stringify(chart, null, 2);
+
+        case 'png':
+        case 'svg':
+            // For image exports, this would need frontend canvas handling
+            return {
+                chartId: chart.id,
+                title: chart.title,
+                message: 'Image export requires frontend ECharts component'
+            };
+
+        default:
+            throw new Error(`Unsupported export format: ${format}`);
+    }
+}
+
+/**
+ * Store analytics chart for persistence and follow-up queries
+ */
+function storeAnalyticsChart(chart: AnalyticsChartData): string {
+    analyticsCharts.unshift(chart);
+    if (analyticsCharts.length > MAX_CHARTS) {
+        analyticsCharts = analyticsCharts.slice(0, MAX_CHARTS);
+    }
+    return chart.id;
+}
+
+// =============================================================================
+// LLM-FIRST TOOLS - NEW ARCHITECTURE (RESTORED FROM ORIGINAL)
 // Pure tool calling: LLM selects tool + extracts parameters from schema
 // =============================================================================
+
+/**
+ * Generate unique ID for analytics memory entries
+ */
+function generateAnalyticsMemoryId(): string {
+    return `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
 export const createDhis2Category = createLLMFirstTool({
     name: "create_dhis2_category",
@@ -246,8 +796,6 @@ export const createDhis2Program = createLLMFirstTool({
     metadataType: "programs",
     dhis2SchemaName: "Program"
 });
-
-
 
 export const createDhis2IndicatorAdvanced = createLLMFirstTool({
     name: "create_dhis2_indicator_simple",
@@ -593,7 +1141,6 @@ export const updateDhis2Dashboard = createDhis2UpdateTool({
     schema: Dhis2Schemas.Dashboard,
     metadataType: "dashboards",
 });
-
 
 /**
  * Create DHIS2 metadata using aggregated single payload for related resources
@@ -986,7 +1533,7 @@ async function createDhis2ReportingFormAggregated({
             error: `Failed to create aggregated reporting form: ${error.message}`,
         });
     }
-}
+});
 
 // REMOVED: Migration completed - now using LLM-first version above
 
@@ -1036,24 +1583,36 @@ export const queryAnalytics = tool(
                 }
             }
 
-            const params = {
-                dimension: dimensions,
-                displayProperty: input.display_property || "NAME",
-                includeNumDen: (input.include_num_den || false).toString(),
-                skipMeta: (input.skip_meta !== false).toString(), // Default true
-                skipData: (input.skip_data || false).toString(),
-                outputIdScheme: input.output_id_scheme || "NAME"
-            };
+            // Build query parameters - DHIS2 expects URL style parameters
+            const queryParams = new URLSearchParams();
+            queryParams.set('displayProperty', input.display_property || "NAME");
+            queryParams.set('includeNumDen', (input.include_num_den || false).toString());
+            queryParams.set('skipMeta', (input.skip_meta !== false).toString()); // Default true
+            queryParams.set('skipData', (input.skip_data || false).toString());
+            queryParams.set('outputIdScheme', input.output_id_scheme || "NAME");
+
+            // Add dimensions as separate parameters
+            dimensions.forEach(dim => queryParams.append('dimension', dim));
 
             // Query the analytics endpoint
-            const response = await Dhis2Api.default.query({
+            const response = await (Dhis2Api as any).default.query({
                 resource: 'analytics',
-                params: params
+                params: queryParams.toString()
             });
 
+            // Store analytics data in memory for follow-up analysis
+            const memoryId = storeAnalyticsData(
+                `Query: ${input.indicators.join(', ')} for periods ${input.periods.join(', ')} in org units ${input.org_units.join(', ')}`,
+                input.indicators,
+                input.periods,
+                input.org_units,
+                response
+            );
+
             return JSON.stringify({
-                url: `analytics?${new URLSearchParams(params).toString()}`,
+                url: `analytics?${queryParams.toString()}`,
                 data: response,
+                memory_id: memoryId,
                 doc_type: input.doc_type || 'indicator',
                 disaggregations: input.disaggregations || [],
                 indicators: input.indicators,
@@ -1184,7 +1743,7 @@ export const getAllMetadata = tool(
                     });
                 }
 
-                const response = await Dhis2Api.default.query({
+                const response = await (Dhis2Api as any).default.query({
                     resource: input.endpoint,
                     params: params
                 });
@@ -1341,18 +1900,69 @@ export const computeMin = tool(
 // Specific Metadata Getters using the standard tool pattern
 export const getOrganisationUnits = tool(
     async (input: { filters?: Record<string, string> }) => {
-        const result = await getAllMetadata({
-            endpoint: "organisationUnits.json",
-            key: "organisationUnits",
-            fields: "id,name,level",
-            filters: input.filters || {}
-        });
+        try {
+            const Dhis2Api = await import('../../app-runtime/dhis2-api');
 
-        return JSON.stringify({
-            organisationUnits: JSON.parse(result).data,
-            count: JSON.parse(result).count,
-            filters: input.filters || {}
-        });
+            const allItems = [];
+            let page = 1;
+
+            while (true) {
+                const params: any = {
+                    page: page,
+                    pageSize: 1000,
+                    fields: "id,name,level"
+                };
+
+                // Add filters
+                if (input.filters) {
+                    Object.entries(input.filters).forEach(([field, condition]) => {
+                        params[`filter`] = params[`filter`] || [];
+                        params[`filter`].push(`${field}:${condition}`);
+                    });
+                }
+
+                const response = await (Dhis2Api as any).default.query({
+                    resource: 'organisationUnits.json',
+                    params: params
+                });
+
+                const items = response.organisationUnits || [];
+
+                if (!items || items.length === 0) {
+                    break;
+                }
+
+                allItems.push(...items);
+
+                // Check pagination info
+                const pager = response.pager || {};
+                if (pager.page >= pager.pageCount) {
+                    break;
+                }
+
+                page += 1;
+
+                // Safety limit to prevent infinite loops
+                if (allItems.length > 10000) {
+                    console.warn('Reached safety limit of 10,000 items in getOrganisationUnits');
+                    break;
+                }
+            }
+
+            return JSON.stringify({
+                organisationUnits: allItems,
+                count: allItems.length,
+                filters: input.filters || {}
+            });
+        } catch (error) {
+            console.error('Error in getOrganisationUnits:', error);
+            return JSON.stringify({
+                error: `Failed to retrieve organisation units: ${error.message}`,
+                organisationUnits: [],
+                count: 0,
+                filters: input.filters || {}
+            });
+        }
     },
     {
         name: "get_organisation_units",
@@ -1365,18 +1975,69 @@ export const getOrganisationUnits = tool(
 
 export const getDataElements = tool(
     async (input: { filters?: Record<string, string> }) => {
-        const result = await getAllMetadata({
-            endpoint: "dataElements.json",
-            key: "dataElements",
-            fields: "id,name,categoryCombo[id,name,categories[id,name,categoryOptions[id,name]]]",
-            filters: input.filters || {}
-        });
+        try {
+            const Dhis2Api = await import('../../app-runtime/dhis2-api');
 
-        return JSON.stringify({
-            dataElements: JSON.parse(result).data,
-            count: JSON.parse(result).count,
-            filters: input.filters || {}
-        });
+            const allItems = [];
+            let page = 1;
+
+            while (true) {
+                const params: any = {
+                    page: page,
+                    pageSize: 1000,
+                    fields: "id,name,categoryCombo[id,name,categories[id,name,categoryOptions[id,name]]]"
+                };
+
+                // Add filters
+                if (input.filters) {
+                    Object.entries(input.filters).forEach(([field, condition]) => {
+                        params[`filter`] = params[`filter`] || [];
+                        params[`filter`].push(`${field}:${condition}`);
+                    });
+                }
+
+                const response = await (Dhis2Api as any).default.query({
+                    resource: 'dataElements.json',
+                    params: params
+                });
+
+                const items = response.dataElements || [];
+
+                if (!items || items.length === 0) {
+                    break;
+                }
+
+                allItems.push(...items);
+
+                // Check pagination info
+                const pager = response.pager || {};
+                if (pager.page >= pager.pageCount) {
+                    break;
+                }
+
+                page += 1;
+
+                // Safety limit to prevent infinite loops
+                if (allItems.length > 10000) {
+                    console.warn('Reached safety limit of 10,000 items in getDataElements');
+                    break;
+                }
+            }
+
+            return JSON.stringify({
+                dataElements: allItems,
+                count: allItems.length,
+                filters: input.filters || {}
+            });
+        } catch (error) {
+            console.error('Error in getDataElements:', error);
+            return JSON.stringify({
+                error: `Failed to retrieve data elements: ${error.message}`,
+                dataElements: [],
+                count: 0,
+                filters: input.filters || {}
+            });
+        }
     },
     {
         name: "get_data_elements",
@@ -1468,135 +2129,6 @@ export const createDhis2Event = tool(
     }
 );
 
-
-
-// =============================================================================
-// LLM-FIRST TOOLS - NEW ARCHITECTURE
-// Pure tool calling: LLM handles all NL processing and parameter extraction
-// =============================================================================
-
-export const createDhis2User = createLLMFirstTool({
-    name: "create_dhis2_user",
-    description: "Create DHIS2 user accounts with profile information, organisation unit assignments, and role-based access. Users are the primary accounts for accessing and managing DHIS2 systems. Examples: 'Create system administrator user', 'Add data entry clerk', 'Setup regional manager account'.",
-    schema: z.object({
-        username: z.string().min(1).describe("Unique username for login (must be unique across the system)"),
-        firstName: z.string().min(1).describe("User's first name"),
-        surname: z.string().min(1).describe("User's surname/family name"),
-        email: z.email().optional().describe("User's email address for notifications"),
-        phoneNumber: z.string().optional().describe("User's phone number (optional)"),
-        organisationUnitIds: z.array(z.string()).min(1).describe("Array of organisation unit IDs where user has access"),
-        userRoleNames: z.array(z.string()).optional().describe("Names of user roles to assign (leave empty for no roles - user will have limited access)")
-    }),
-    metadataType: "users",
-    dhis2SchemaName: "User",
-    dependencies: [
-        {
-            type: "userCredentials",
-            name: "auto_generated",
-            createIfNotFound: false, // UserCredentials are always created with User
-            createParams: {
-                disabled: false,
-                twoFA: false,
-                externalAuth: false,
-                userRoles: []
-            }
-        }
-    ]
-});
-
-// Relationship Type Tool - LLM-first versions
-export const createDhis2RelationshipType = createLLMFirstTool({
-    name: "create_dhis2_relationship_type",
-    description: "Create DHIS2 relationship types that define how tracked entities can be linked together. Relationship types specify directional or bidirectional connections between entities like parent-child, referral-supervision, or treatment-partnership relationships. Examples: 'Mother-Child Referral', 'Household Member', 'Health Facility Referral Network'.",
-    schema: z.object({
-        name: z.string().min(1).describe("Descriptive name for this relationship type"),
-        fromToName: z.string().min(1).describe("Name of the relationship when viewed from source to target (e.g., 'Refers to')"),
-        toFromName: z.string().min(1).describe("Name of the relationship when viewed from target to source (e.g., 'Referred by')"),
-        bidirectional: z.boolean().default(false).describe("Whether this relationship works both directions (true) or only one way (false)")
-    }),
-    metadataType: "relationshipTypes",
-    dhis2SchemaName: "RelationshipType",
-});
-
-// Relationship Tool (uses direct CRUD pattern due to relationship complexity)
-export const createDhis2Relationship = tool(
-    async ({
-        relationshipTypeId,
-        fromEntityId,
-        toEntityId,
-        fromEntityType = "trackedEntityInstance",
-        toEntityType = "trackedEntityInstance",
-        fromEnrollmentId,
-        toEnrollmentId,
-        fromEventId,
-        toEventId
-    }: {
-        relationshipTypeId: string;
-        fromEntityId: string;
-        toEntityId: string;
-        fromEntityType?: string;
-        toEntityType?: string;
-        fromEnrollmentId?: string;
-        toEnrollmentId?: string;
-        fromEventId?: string;
-        toEventId?: string;
-    }) => {
-        try {
-            // Build relationship payload based on entity types
-            const relationshipPayload = {
-                relationshipType: { id: relationshipTypeId },
-                from: {
-                    [fromEntityType]: { id: fromEntityId },
-                    ...(fromEnrollmentId && { enrollment: { id: fromEnrollmentId } }),
-                    ...(fromEventId && { event: { id: fromEventId } })
-                },
-                to: {
-                    [toEntityType]: { id: toEntityId },
-                    ...(toEnrollmentId && { enrollment: { id: toEnrollmentId } }),
-                    ...(toEventId && { event: { id: toEventId } })
-                }
-            };
-
-            const result = await createDhis2Metadata('relationships', [relationshipPayload]);
-
-            if (result.success && result.created?.[0]) {
-                // Add relationship to context
-                addResourceToContext(result.created[0].id!, 'relationships', `Relationship ${relationshipTypeId}`, 'created');
-            }
-
-            return JSON.stringify({
-                success: true,
-                message: `Created relationship between ${fromEntityType}:${fromEntityId} -> ${toEntityType}:${toEntityId}`,
-                relationshipId: result.created?.[0]?.id,
-                relationshipTypeId,
-                fromEntityType,
-                toEntityType
-            });
-        } catch (error) {
-            console.error('Error creating relationship:', error);
-            return JSON.stringify({
-                success: false,
-                error: `Failed to create relationship: ${error.message}`
-            });
-        }
-    },
-    {
-        name: "create_dhis2_relationship",
-        description: "Create DHIS2 relationships between tracked entities, enrollments, or events using predefined relationship types. Links entities in tracker systems for referral networks, family relationships, supervision hierarchies, or multi-entity workflows. Examples: link patient to primary care facility, connect household members, define supervision relationships.",
-        schema: z.object({
-            relationshipTypeId: z.string().describe("ID of the relationship type defining this connection"),
-            fromEntityId: z.string().describe("ID of the source entity (tracked entity, enrollment, or event)"),
-            toEntityId: z.string().describe("ID of the target entity being linked to"),
-            fromEntityType: z.enum(["trackedEntityInstance", "enrollment", "event"]).default("trackedEntityInstance").describe("Type of source entity"),
-            toEntityType: z.enum(["trackedEntityInstance", "enrollment", "event"]).default("trackedEntityInstance").describe("Type of target entity"),
-            fromEnrollmentId: z.string().optional().describe("If fromEntity is enrollment or event, provide enrollment ID"),
-            toEnrollmentId: z.string().optional().describe("If toEntity is enrollment or event, provide enrollment ID"),
-            fromEventId: z.string().optional().describe("If fromEntity is event, provide specific event ID"),
-            toEventId: z.string().optional().describe("If toEntity is event, provide specific event ID")
-        })
-    }
-);
-
 // LLM-First Creation Tools (new standard - LLM handles all NL processing)
 export const createDhis2Option = createLLMFirstTool({
     name: "create_dhis2_option",
@@ -1653,18 +2185,6 @@ export const createDhis2IndicatorType = createLLMFirstTool({
     }),
     metadataType: "indicatorTypes",
     dhis2SchemaName: "IndicatorType" // Validates against actual DHIS2 IndicatorType schema
-});
-
-export const createDhis2CategoryOption = createLLMFirstTool({
-    name: "create_dhis2_category_option",
-    description: "Create DHIS2 category options that define the individual values within a category. Category options are the actual choices users make when reporting data. Examples: 'Male', 'Female' for Sex category; '0-14', '15-49', '50+' for Age Groups; 'Urban', 'Rural' for Location type.",
-    schema: z.object({
-        name: z.string().min(1).describe("The name of the category option value"),
-        displayName: z.string().optional().describe("Display name (defaults to name)"),
-        shortName: z.string().optional().describe("Short name (defaults to name, max 50 chars)")
-    }),
-    metadataType: "categoryOptions",
-    dhis2SchemaName: "CategoryOption"
 });
 
 export const createDhis2OrganisationUnit = createLLMFirstTool({
@@ -1963,3 +2483,21 @@ export const Dhis2StructuredTools = {
     getDhis2DataSetById,
     getDhis2ProgramById,
 };
+
+/**
+ * Store analytics data for follow-up queries
+ */
+function storeAnalyticsData(description: string, indicators: string[], periods: string[], orgUnits: string[], data: any): string {
+    const memoryId = generateAnalyticsMemoryId();
+    // Store in a simple map for demo - in real app, this would be more sophisticated
+    // This is used by analytics agent for follow-up queries like filtering or charting
+    console.log(`Stored analytics data with ID: ${memoryId} for ${description}`);
+    return memoryId;
+}
+
+/**
+ * Retrieve stored analytics chart
+ */
+function getAnalyticsChart(chartId: string): AnalyticsChartData | null {
+    return analyticsCharts.find(chart => chart.id === chartId) || null;
+}

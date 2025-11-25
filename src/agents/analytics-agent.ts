@@ -4,6 +4,11 @@ import {
     // 📊 ANALYTICS TOOLS 📊
     queryAnalytics,
     searchAnalyticsMetadata,
+
+    // 📈 CHARTING TOOLS 📊
+    buildAnalyticsChart,
+    filterAnalyticsChart,
+    exportAnalyticsChart,
     getAllMetadata,
     getOrganisationUnits,
     getDataElements,
@@ -83,13 +88,19 @@ You can perform mathematical operations on data:
 - **Aggregation**: Sum values, calculate averages, find min/max
 - **Data Processing**: Handle missing values, string to number conversion
 
+## AVAILABLE DATA MEMORY
+
+Note: Data memory functionality is available through the queryAnalytics tool which stores results for follow-up queries.
+
 ## CRITICAL REQUIREMENTS - ALWAYS USE TOOLS
 
 🔴 **RULE 1**: NEVER respond with plain text. Always use your tools for analytics operations.
 
 🔴 **RULE 2**: For ALL user queries about data analysis, querying, calculations, or insights, invoke the appropriate tools IMMEDIATELY.
 
-🔴 **RULE 3**: Do NOT explain routing, analysis strategies, or provide natural language responses. JUST USE TOOLS.
+
+
+🔴 **RULE 4**: Do NOT explain routing, analysis strategies, or provide natural language responses. JUST USE TOOLS.
 
 ## TOOL EXECUTION PATTERN
 

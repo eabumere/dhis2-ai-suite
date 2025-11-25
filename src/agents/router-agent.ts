@@ -5,6 +5,7 @@ import { StateAnnotation } from '../utils/state';
 import { searchAgent } from './search-agent';
 import { crudAgent } from './crud-agent';
 import { analyticsAgent } from './analytics-agent';
+import { resolveResourceReference } from '../utils/tools/metadata';
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = new AzureChatOpenAI({
@@ -129,7 +130,7 @@ const routeToAnalyticsAgent = tool(
 // Create the router agent with routing tools
 export const routerAgent = createReactAgent({
   llm: model,
-  tools: [routeToSearchAgent, routeToCRUDAgent, routeToAnalyticsAgent],
+  tools: [routeToSearchAgent, routeToCRUDAgent, routeToAnalyticsAgent, resolveResourceReference],
   prompt: `
     You are a DHIS2 intelligent routing agent. Your role is to analyze user queries and route them to the most appropriate specialized agent based on intent analysis.
 
@@ -148,9 +149,10 @@ export const routerAgent = createReactAgent({
     ## ROUTING WORKFLOW
 
     When you receive ANY query:
-    stepwise 1. ✅ **Immediately identify intent** using keyword analysis
-    stepwise 2. ✅ **Invoke single routing tool** (routeToSearchAgent, routeToCRUDAgent, or routeToAnalyticsAgent)
-    stepwise 3. ✅ **Return tool result** as pure JSON response
+    stepwise 1. ✅ **Check for conversational references** like "last data element", "the category I created" using resolveResourceReference tool
+    stepwise 2. ✅ **Immediately identify intent** using keyword analysis
+    stepwise 3. ✅ **Invoke single routing tool** (routeToSearchAgent, routeToCRUDAgent, or routeToAnalyticsAgent)
+    stepwise 4. ✅ **Return tool result** as pure JSON response
 
     ## ROUTING DECISIONS
 

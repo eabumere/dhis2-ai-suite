@@ -23,5 +23,5 @@ export {
 // Export the complete tools collection
 export { Dhis2StructuredTools } from './structured-tools';
 
-export { createDhis2Option, createDhis2DataElement } from './structured-tools';
+export { createDhis2Option, createDhis2DataElement, createDhis2Category, createDhis2CategoryCombo, createDhis2DataSet, createDhis2Program } from './structured-tools';
 export { getUnifiedMetadataManager, batchCreateMetadata, batchUpdateMetadata } from './batch-manager';

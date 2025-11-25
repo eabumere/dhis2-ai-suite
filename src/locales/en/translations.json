@@ -2,14 +2,9 @@
     "ERROR": "ERROR",
     "Loading...": "Loading...",
     "Hello {{name}}": "Hello {{name}}",
-    "DHIS2 Metadata Search": "DHIS2 Metadata Search",
-    "Create metadata": "Create metadata",
-    "Describe the metadata to create (e.g., \"Create a numeric metadata called Patient Age that aggregates by sum\")": "Describe the metadata to create (e.g., \"Create a numeric metadata called Patient Age that aggregates by sum\")",
-    "Creating...": "Creating...",
-    "Create": "Create",
-    "Search Metadata": "Search Metadata",
-    "Enter metadata search query...": "Enter metadata search query...",
-    "Searching...": "Searching...",
-    "Search": "Search",
-    "No results found for \"{{query}}\"": "No results found for \"{{query}}\""
+    "DHIS2 Multi-Agent Metadata Assistant": "DHIS2 Multi-Agent Metadata Assistant",
+    "Ask Anything": "Ask Anything",
+    "e.g., \"Find all data elements with HIV\", \"Create a program for maternal health\", \"Show me programs about malaria\"": "e.g., \"Find all data elements with HIV\", \"Create a program for maternal health\", \"Show me programs about malaria\"",
+    "Processing...": "Processing...",
+    "Execute": "Execute"
 }

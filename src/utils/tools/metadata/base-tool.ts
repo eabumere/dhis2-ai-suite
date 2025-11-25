@@ -70,6 +70,17 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                     (await import('./schemas')).Dhis2Schemas[config.dhis2SchemaName] :
                     config.schema;
 
+                // Defensive check: ensure schema exists
+                if (!schemaToUse) {
+                    return JSON.stringify({
+                        success: false,
+                        error: `Schema validation failed: No schema found for ${config.dhis2SchemaName || 'config.schema'}. This may be a configuration issue.`,
+                        provided: llmInput,
+                        tool: config.name,
+                        schemaName: config.dhis2SchemaName
+                    });
+                }
+
                 // Validate against DHIS2 schema
                 const validation = validateResourceData(schemaToUse, dhis2Object);
                 if (!validation.success) {

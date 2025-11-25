@@ -1236,7 +1236,7 @@ export const getAllMetadata = tool(
             endpoint: z.string().describe("API endpoint (e.g., 'indicators.json', 'dataElements.json')"),
             key: z.string().describe("JSON key containing the data array (e.g., 'indicators', 'dataElements')"),
             fields: z.string().default("id,name").describe("Comma-separated list of fields to retrieve"),
-            filters: z.record(z.string()).optional().describe("Optional filters as field:condition pairs"),
+            filters: z.record(z.string(), z.any()).optional().describe("Optional filters as field:condition pairs"),
             page_size: z.number().int().min(1).max(5000).default(1000).describe("Page size for pagination")
         })
     }
@@ -1358,7 +1358,7 @@ export const getOrganisationUnits = tool(
         name: "get_organisation_units",
         description: "Retrieve DHIS2 organisation units with optional filtering",
         schema: z.object({
-            filters: z.record(z.string()).optional().describe("Optional filters (e.g., { 'level': 'eq:2', 'name': 'ilike:Sierra' })")
+            filters: z.record(z.string(), z.any()).optional().describe("Optional filters (e.g., { 'level': 'eq:2', 'name': 'ilike:Sierra' })")
         })
     }
 );
@@ -1382,7 +1382,7 @@ export const getDataElements = tool(
         name: "get_data_elements",
         description: "Retrieve DHIS2 data elements with category information",
         schema: z.object({
-            filters: z.record(z.string()).optional().describe("Optional filters for data elements")
+            filters: z.record(z.string(), z.any()).optional().describe("Optional filters for data elements")
         })
     }
 );
@@ -1475,8 +1475,6 @@ export const createDhis2Event = tool(
 // Pure tool calling: LLM handles all NL processing and parameter extraction
 // =============================================================================
 
-// TODO: Migrate ALL tools to LLM-first architecture (replace all existing tools below)
-
 export const createDhis2User = createLLMFirstTool({
     name: "create_dhis2_user",
     description: "Create DHIS2 user accounts with profile information, organisation unit assignments, and role-based access. Users are the primary accounts for accessing and managing DHIS2 systems. Examples: 'Create system administrator user', 'Add data entry clerk', 'Setup regional manager account'.",
@@ -1484,7 +1482,7 @@ export const createDhis2User = createLLMFirstTool({
         username: z.string().min(1).describe("Unique username for login (must be unique across the system)"),
         firstName: z.string().min(1).describe("User's first name"),
         surname: z.string().min(1).describe("User's surname/family name"),
-        email: z.string().email().optional().describe("User's email address for notifications"),
+        email: z.email().optional().describe("User's email address for notifications"),
         phoneNumber: z.string().optional().describe("User's phone number (optional)"),
         organisationUnitIds: z.array(z.string()).min(1).describe("Array of organisation unit IDs where user has access"),
         userRoleNames: z.array(z.string()).optional().describe("Names of user roles to assign (leave empty for no roles - user will have limited access)")

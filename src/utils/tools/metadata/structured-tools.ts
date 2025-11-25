@@ -1533,7 +1533,7 @@ async function createDhis2ReportingFormAggregated({
             error: `Failed to create aggregated reporting form: ${error.message}`,
         });
     }
-});
+}
 
 // REMOVED: Migration completed - now using LLM-first version above
 

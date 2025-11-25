@@ -996,21 +996,12 @@ async function createDhis2ReportingFormAggregated({
 // ANALYTICS TOOLS - DATA QUERYING AND COMPUTATION
 // =============================================================================
 
-// Query Analytics Tool - Main analytics data retrieval
+/**
+ * Query Analytics Tool - Main analytics data retrieval using direct tool approach
+ * Since this is a complex query operation with many parameters, use direct tool implementation
+ */
 export const queryAnalytics = tool(
-    async ({
-        indicators,
-        doc_type = 'indicator',
-        periods,
-        org_units,
-        disaggregations = [],
-        include_coc_dimension = false,
-        skip_meta = true,
-        display_property = "NAME",
-        include_num_den = false,
-        skip_data = false,
-        output_id_scheme = "NAME"
-    }: {
+    async (input: {
         indicators: string[];
         doc_type?: 'indicator' | 'dataElement';
         periods: string[];
@@ -1028,9 +1019,9 @@ export const queryAnalytics = tool(
             const Dhis2Api = await import('../../app-runtime/dhis2-api');
 
             // Build dimension parameters
-            const indicator_string = indicators.join(";");
-            const period_string = periods.join(";");
-            const org_unit_string = org_units.join(";");
+            const indicator_string = input.indicators.join(";");
+            const period_string = input.periods.join(";");
+            const org_unit_string = input.org_units.join(";");
 
             const dimensions = [
                 `dx:${indicator_string}`,
@@ -1039,19 +1030,19 @@ export const queryAnalytics = tool(
             ];
 
             // Add disaggregation dimensions if provided
-            if (disaggregations && disaggregations.length > 0) {
-                for (const cat_id of disaggregations) {
+            if (input.disaggregations && input.disaggregations.length > 0) {
+                for (const cat_id of input.disaggregations) {
                     dimensions.push(`${cat_id}`);
                 }
             }
 
             const params = {
                 dimension: dimensions,
-                displayProperty: display_property,
-                includeNumDen: include_num_den.toString(),
-                skipMeta: skip_meta.toString(),
-                skipData: skip_data.toString(),
-                outputIdScheme: output_id_scheme
+                displayProperty: input.display_property || "NAME",
+                includeNumDen: (input.include_num_den || false).toString(),
+                skipMeta: (input.skip_meta !== false).toString(), // Default true
+                skipData: (input.skip_data || false).toString(),
+                outputIdScheme: input.output_id_scheme || "NAME"
             };
 
             // Query the analytics endpoint
@@ -1060,24 +1051,24 @@ export const queryAnalytics = tool(
                 params: params
             });
 
-            return {
+            return JSON.stringify({
                 url: `analytics?${new URLSearchParams(params).toString()}`,
                 data: response,
-                doc_type: doc_type,
-                disaggregations: disaggregations,
-                indicators: indicators,
-                periods: periods,
-                org_units: org_units
-            };
+                doc_type: input.doc_type || 'indicator',
+                disaggregations: input.disaggregations || [],
+                indicators: input.indicators,
+                periods: input.periods,
+                org_units: input.org_units
+            });
         } catch (error) {
             console.error('Error querying analytics:', error);
-            return {
+            return JSON.stringify({
                 error: `Failed to query analytics: ${error.message}`,
-                doc_type: doc_type,
-                indicators: indicators,
-                periods: periods,
-                org_units: org_units
-            };
+                doc_type: input.doc_type || 'indicator',
+                indicators: input.indicators,
+                periods: input.periods,
+                org_units: input.org_units
+            });
         }
     },
     {
@@ -1099,15 +1090,17 @@ export const queryAnalytics = tool(
     }
 );
 
-// Search Metadata Tool (Analytics-focused)
+/**
+ * Search Analytics Metadata Tool - Simplified version
+ */
 export const searchAnalyticsMetadata = tool(
-    async ({ query }: { query: string }) => {
+    async (input: { query: string }) => {
         try {
             // Use the existing search functions with focus on analytics-relevant metadata
             const [indicators, dataElements, orgUnits] = await Promise.all([
-                searchDhis2Metadata('indicators', query, 10),
-                searchDhis2Metadata('dataElements', query, 10),
-                searchDhis2Metadata('organisationUnits', query, 10)
+                searchDhis2Metadata('indicators', input.query, 10),
+                searchDhis2Metadata('dataElements', input.query, 10),
+                searchDhis2Metadata('organisationUnits', input.query, 10)
             ]);
 
             const results = {
@@ -1116,59 +1109,54 @@ export const searchAnalyticsMetadata = tool(
                 organisationUnits: orgUnits.map(ou => ({ name: ou.name, id: ou.id, type: 'organisationUnit' }))
             };
 
-            // Determine best match based on simple heuristic (can be enhanced with ML later)
+            // Determine best match based on simple heuristic
             const allMatches = [...results.indicators, ...results.dataElements, ...results.organisationUnits];
-            const bestMatch = allMatches.length > 0 ? allMatches[0] : null;
 
             if (allMatches.length === 0) {
-                return {
+                return JSON.stringify({
                     status: "no_match",
                     message: "No analytics metadata matches found.",
                     suggestions: [],
-                    query: query
-                };
+                    query: input.query
+                });
             }
 
             if (allMatches.length === 1) {
-                return {
+                return JSON.stringify({
                     status: "auto_selected",
-                    selected: bestMatch,
-                    query: query
-                };
+                    selected: allMatches[0],
+                    query: input.query
+                });
             }
 
-            return {
+            return JSON.stringify({
                 status: "multiple_matches",
                 suggestions: allMatches.slice(0, 10), // Limit to 10 suggestions
-                query: query
-            };
+                query: input.query
+            });
         } catch (error) {
             console.error('Error searching analytics metadata:', error);
-            return {
+            return JSON.stringify({
                 status: "error",
                 message: `Search failed: ${error.message}`,
-                query: query
-            };
+                query: input.query
+            });
         }
     },
     {
         name: "search_analytics_metadata",
-        description: "Search for analytics-relevant metadata including indicators, data elements, and organisation units using semantic similarity",
+        description: "Search for analytics-relevant metadata including indicators, data elements, and organisation units",
         schema: z.object({
-            query: z.string().describe("Search query for finding analytics metadata (e.g., 'HIV testing coverage', 'population under 5')")
+            query: z.string().describe("Search query for finding analytics metadata")
         })
     }
 );
 
-// Get All Tool - Paginated metadata retrieval
+/**
+ * Get All Metadata Tool - Paginated retrieval
+ */
 export const getAllMetadata = tool(
-    async ({
-        endpoint,
-        key,
-        fields = "id,name",
-        filters = {},
-        page_size = 1000
-    }: {
+    async (input: {
         endpoint: string;
         key: string;
         fields?: string;
@@ -1184,24 +1172,24 @@ export const getAllMetadata = tool(
             while (true) {
                 const params: any = {
                     page: page,
-                    pageSize: page_size,
-                    fields: fields
+                    pageSize: input.page_size || 1000,
+                    fields: input.fields || "id,name"
                 };
 
                 // Add filters
-                if (filters) {
-                    Object.entries(filters).forEach(([field, condition]) => {
+                if (input.filters) {
+                    Object.entries(input.filters).forEach(([field, condition]) => {
                         params[`filter`] = params[`filter`] || [];
                         params[`filter`].push(`${field}:${condition}`);
                     });
                 }
 
                 const response = await Dhis2Api.default.query({
-                    resource: endpoint,
+                    resource: input.endpoint,
                     params: params
                 });
 
-                const items = response[key] || [];
+                const items = response[input.key] || [];
 
                 if (!items || items.length === 0) {
                     break;
@@ -1224,21 +1212,21 @@ export const getAllMetadata = tool(
                 }
             }
 
-            return {
+            return JSON.stringify({
                 count: all_items.length,
                 data: all_items,
-                endpoint: endpoint,
-                filters: filters
-            };
+                endpoint: input.endpoint,
+                filters: input.filters || {}
+            });
         } catch (error) {
             console.error('Error in getAllMetadata:', error);
-            return {
-                error: `Failed to retrieve metadata from ${endpoint}: ${error.message}`,
+            return JSON.stringify({
+                error: `Failed to retrieve metadata from ${input.endpoint}: ${error.message}`,
                 count: 0,
                 data: [],
-                endpoint: endpoint,
-                filters: filters
-            };
+                endpoint: input.endpoint,
+                filters: input.filters || {}
+            });
         }
     },
     {
@@ -1254,11 +1242,13 @@ export const getAllMetadata = tool(
     }
 );
 
-// Computation Tools - Data Aggregation Functions
+/**
+ * Computation Tools - Using direct approach
+ */
 export const computeTotal = tool(
-    async ({ values }: { values: (string | number | null)[] }) => {
+    async (input: { values: (string | number | null)[] }) => {
         try {
-            const numericValues = values
+            const numericValues = input.values
                 .map(v => typeof v === 'string' ? parseFloat(v) : v)
                 .filter(v => v !== null && v !== undefined && !isNaN(v as number));
 
@@ -1279,15 +1269,16 @@ export const computeTotal = tool(
 );
 
 export const computeAverage = tool(
-    async ({ values }: { values: (string | number | null)[] }) => {
+    async (input: { values: (string | number | null)[] }) => {
         try {
-            const numericValues = values
+            const numericValues = input.values
                 .map(v => typeof v === 'string' ? parseFloat(v) : v)
                 .filter(v => v !== null && v !== undefined && !isNaN(v as number));
 
             if (numericValues.length === 0) return 0;
 
-            return numericValues.reduce((sum, val) => sum + (val as number), 0) / numericValues.length;
+            const sum = numericValues.reduce((sum, val) => sum + (val as number), 0);
+            return sum / numericValues.length;
         } catch (error) {
             return `Error computing average: ${error.message}`;
         }
@@ -1302,11 +1293,11 @@ export const computeAverage = tool(
 );
 
 export const computeMax = tool(
-    async ({ values }: { values: (string | number | null)[] }) => {
+    async (input: { values: (string | number | null)[] }) => {
         try {
-            const numericValues = values
+            const numericValues = input.values
                 .map(v => typeof v === 'string' ? parseFloat(v) : v)
-                .filter(v => v !== null && v !== undefined && !isNaN(v as number));
+                .filter((v): v is number => v !== null && v !== undefined && !isNaN(v));
 
             if (numericValues.length === 0) return 0;
 
@@ -1325,17 +1316,17 @@ export const computeMax = tool(
 );
 
 export const computeMin = tool(
-    async ({ values }: { values: (string | number | null)[] }) => {
+    async (input: { values: (string | number | null)[] }) => {
         try {
-            const numericValues = values
+            const numericValues = input.values
                 .map(v => typeof v === 'string' ? parseFloat(v) : v)
-                .filter(v => v !== null && v !== undefined && !isNaN(v as number));
+                .filter((v): v is number => v !== null && v !== undefined && !isNaN(v));
 
             if (numericValues.length === 0) return 0;
 
             return Math.min(...numericValues);
         } catch (error) {
-            return `Error computing min: ${error.message}`;
+            return `Error computing minimum: ${error.message}`;
         }
     },
     {
@@ -1347,21 +1338,21 @@ export const computeMin = tool(
     }
 );
 
-// Specific Metadata Getters
+// Specific Metadata Getters using the standard tool pattern
 export const getOrganisationUnits = tool(
-    async ({ filters = {} }: { filters?: Record<string, string> }) => {
+    async (input: { filters?: Record<string, string> }) => {
         const result = await getAllMetadata({
             endpoint: "organisationUnits.json",
             key: "organisationUnits",
             fields: "id,name,level",
-            filters: filters
+            filters: input.filters || {}
         });
 
-        return {
-            organisationUnits: result.data,
-            count: result.count,
-            filters: filters
-        };
+        return JSON.stringify({
+            organisationUnits: JSON.parse(result).data,
+            count: JSON.parse(result).count,
+            filters: input.filters || {}
+        });
     },
     {
         name: "get_organisation_units",
@@ -1373,19 +1364,19 @@ export const getOrganisationUnits = tool(
 );
 
 export const getDataElements = tool(
-    async ({ filters = {} }: { filters?: Record<string, string> }) => {
+    async (input: { filters?: Record<string, string> }) => {
         const result = await getAllMetadata({
             endpoint: "dataElements.json",
             key: "dataElements",
             fields: "id,name,categoryCombo[id,name,categories[id,name,categoryOptions[id,name]]]",
-            filters: filters
+            filters: input.filters || {}
         });
 
-        return {
-            dataElements: result.data,
-            count: result.count,
-            filters: filters
-        };
+        return JSON.stringify({
+            dataElements: JSON.parse(result).data,
+            count: JSON.parse(result).count,
+            filters: input.filters || {}
+        });
     },
     {
         name: "get_data_elements",

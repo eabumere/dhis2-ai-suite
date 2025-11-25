@@ -1,4 +1,4 @@
-import { tool } from '@langchain/core/tools';
+import { tool, DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
     createDhis2Metadata,
@@ -37,7 +37,7 @@ export interface LLMToolConfig<T extends z.ZodSchema> {
  */
 export function createLLMFirstTool<T extends z.ZodSchema>(
     config: LLMToolConfig<T> & { dhis2SchemaName?: keyof typeof import('./schemas').Dhis2Schemas }
-) {
+): DynamicStructuredTool {
     return tool(
         async ({ resource }: { resource: z.infer<T> }) => {
             try {

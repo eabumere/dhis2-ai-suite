@@ -4,6 +4,7 @@ import React, { FC, useState } from 'react'
 import classes from './App.module.css'
 import { routerAgent } from './agents'
 import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
+import AnalyticsChart from './components/AnalyticsChart';
 
 interface QueryResults {
     me: {
@@ -315,6 +316,23 @@ const MyApp: FC = () => {
                                 {queryResults.count !== undefined && (
                                     <div style={{marginTop: '10px', color: '#2E7D32'}}>
                                         <strong>Total results:</strong> {queryResults.count}
+                                    </div>
+                                )}
+
+                                {/* Display analytics charts */}
+                                {queryResults.chart_id && queryResults.echarts_option && (
+                                    <div style={{marginTop: '20px'}}>
+                                        <AnalyticsChart
+                                            chartData={queryResults}
+                                            chartId={queryResults.chart_id}
+                                            title={queryResults.title}
+                                            onFilter={(filters) => {
+                                                console.log('Chart filtered:', filters);
+                                            }}
+                                            onExport={(format) => {
+                                                console.log('Chart exported as:', format);
+                                            }}
+                                        />
                                     </div>
                                 )}
                             </div>

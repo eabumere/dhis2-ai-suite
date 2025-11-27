@@ -15,12 +15,6 @@ import {
     searchDhis2Metadata
 } from './helpers';
 import { createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool } from './base-tool';
-import {
-    createDhis2CategoryOption,
-    createDhis2Relationship,
-    createDhis2RelationshipType,
-    createDhis2User
-} from './tools';
 
 // Schemas
 import { Dhis2Schemas } from './schemas';
@@ -866,56 +860,6 @@ export const getDhis2OptionSetById = createDhis2GetByIdTool("optionSets", "Optio
 export const getDhis2IndicatorById = createDhis2GetByIdTool("indicators", "Indicator");
 export const getDhis2VisualizationById = createDhis2GetByIdTool("visualizations", "Visualization");
 export const getDhis2DashboardById = createDhis2GetByIdTool("dashboards", "Dashboard");
-
-// Track existing tools
-export const existingTools = {
-    create: [
-        'createDhis2DataElement',
-        'createDhis2OrganisationUnit',
-        'createDhis2Category',
-        'createDhis2CategoryCombo',
-        'createDhis2DataSet',
-        'createDhis2Program',
-        'createDhis2Indicator',
-        'createDhis2ValidationRule',
-        'createDhis2OptionSet',
-        'createDhis2AggregatedMetadata',
-        'createDhis2ReportingForm'
-    ],
-    update: [
-        'updateDhis2DataElement',
-        'updateDhis2OrganisationUnit',
-        'updateDhis2Category',
-        'updateDhis2CategoryCombo',
-        'updateDhis2DataSet',
-        'updateDhis2Program',
-        'updateDhis2Indicator',
-        'updateDhis2ValidationRule',
-        'updateDhis2Option',
-        'updateDhis2OptionSet',
-        'updateDhis2TrackedEntityInstance',
-        'updateDhis2Enrollment',
-        'updateDhis2Event',
-        'updateDhis2User'
-    ],
-    search: [
-        'searchDhis2DataElements',
-        'searchDhis2OrganisationUnits',
-        'searchDhis2Categories',
-        'searchDhis2CategoryCombos',
-        'searchDhis2DataSets',
-        'searchDhis2Programs',
-        'searchDhis2Indicators',
-        'searchDhis2Users'
-    ],
-    getById: [
-        'getDhis2DataElementById',
-        'getDhis2OrganisationUnitById',
-        'getDhis2CategoryById',
-        'getDhis2DataSetById',
-        'getDhis2ProgramById'
-    ]
-};
 
 // REMOVED: Direct CRUD Tools for Top-level Entities - replaced with LLM-first versions below
 
@@ -2130,6 +2074,102 @@ export const createDhis2Event = tool(
 );
 
 // LLM-First Creation Tools (new standard - LLM handles all NL processing)
+export const createDhis2CategoryOption = createLLMFirstTool({
+    name: "create_dhis2_category_option",
+    description: "Create DHIS2 category options that represent values within disaggregation dimensions. Category options divide data into subgroups like 'Male' and 'Female' for Gender categories, or '<5 years' and '5-14 years' for Age categories. Examples: 'Male', 'Female', 'Urban', 'Rural', '<5 years', '5-14 years'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the category option value"),
+        displayName: z.string().optional().describe("Display name (defaults to name)"),
+        shortName: z.string().optional().describe("Short name (defaults to name truncated to 50 characters)"),
+        code: z.string().optional().describe("Optional unique code - if not provided, automatically generated from the name")
+    }),
+    metadataType: "categoryOptions",
+    dhis2SchemaName: "CategoryOption"
+});
+
+export const createDhis2Relationship = createLLMFirstTool({
+    name: "create_dhis2_relationship",
+    description: "Create DHIS2 relationships that link entities together in tracker programs. Relationships represent connections between tracked entities, such as parent-child relationships, referral links, or treatment partnerships. Examples: 'Mother-Child linkage', 'Referral from clinic A to clinic B'.",
+    schema: z.object({
+        relationshipType: z.object({
+            id: z.string()
+        }).describe("The relationship type that defines this connection"),
+        from: z.object({
+            trackedEntityInstance: z.object({
+                id: z.string()
+            }).optional(),
+            enrollment: z.object({
+                id: z.string()
+            }).optional(),
+            event: z.object({
+                id: z.string()
+            }).optional()
+        }).describe("The source entity in the relationship"),
+        to: z.object({
+            trackedEntityInstance: z.object({
+                id: z.string()
+            }).optional(),
+            enrollment: z.object({
+                id: z.string()
+            }).optional(),
+            event: z.object({
+                id: z.string()
+            }).optional()
+        }).describe("The target entity in the relationship")
+    }),
+    metadataType: "relationships",
+    dhis2SchemaName: "Relationship"
+});
+
+export const createDhis2RelationshipType = createLLMFirstTool({
+    name: "create_dhis2_relationship_type",
+    description: "Create DHIS2 relationship types that define the nature of connections between entities in tracker programs. Relationship types specify what kinds of relationships are possible, such as 'Program partner', 'Spouse', 'Supervisor', 'Referral source'. Examples: 'Mother-Child', 'Doctor-Patient', 'Facility-Referral'.",
+    schema: z.object({
+        name: z.string().min(1).describe("The name of the relationship type"),
+        description: z.string().optional().describe("Description of what this relationship represents"),
+        bidirectional: z.boolean().default(false).describe("Whether the relationship works in both directions"),
+        fromToName: z.string().describe("The forward direction name (e.g., 'mother')"),
+        toFromName: z.string().describe("The reverse direction name (e.g., 'child')")
+    }),
+    metadataType: "relationshipTypes",
+    dhis2SchemaName: "RelationshipType"
+});
+
+export const createDhis2User = createLLMFirstTool({
+    name: "create_dhis2_user",
+    description: "Create DHIS2 user accounts for system access and data entry. Users have roles that determine their permissions and access levels. Examples: 'Data Clerk - Region A', 'Program Manager', 'System Administrator', 'Facility In-Charge'.",
+    schema: z.object({
+        username: z.string().min(1).describe("The login username (must be unique)"),
+        firstName: z.string().min(1).describe("The user's first name"),
+        surname: z.string().min(1).describe("The user's last name"),
+        email: z.string().email().optional().describe("Optional email address for notifications"),
+        phoneNumber: z.string().optional().describe("Optional phone number"),
+        password: z.string().optional().describe("Login password (if not provided, user must reset on first login)")
+    }),
+    metadataType: "users",
+    dhis2SchemaName: "User",
+    preparePayload: async (input) => {
+        // Handle user-specific preparation
+        const result = { ...input };
+
+        // If password not provided, it might be handled differently
+        if (!result.password) {
+            console.log('Password not provided - user will need to reset on first login');
+        }
+
+        // Build user credentials object
+        result.userCredentials = {
+            username: result.username,
+            disabled: false
+        };
+
+        // Remove password from top level (it's handled in userCredentials if needed)
+        delete result.password;
+
+        return result;
+    }
+});
+
 export const createDhis2Option = createLLMFirstTool({
     name: "create_dhis2_option",
     description: "Create individual DHIS2 option values like 'Yes', 'No', 'Male', 'Female', 'High', 'Low', 'Positive', 'Negative'. Use for option values that appear in dropdown lists, not for creating data collection fields. Examples: create option 'Agreed', create option 'Critical Priority'.",

@@ -15,7 +15,18 @@ export {
     computeTotal,
     computeAverage,
     computeMax,
-    computeMin
+    computeMin,
+
+    // Charting tools
+    buildAnalyticsChart,
+    filterAnalyticsChart,
+    exportAnalyticsChart,
+
+    // Search tools for analytics
+    searchDhis2Indicators,
+    searchDhis2DataElements,
+    searchDhis2OrganisationUnits,
+    searchDhis2Categories
 } from './structured-tools';
 
 // No legacy tools - using structured tools only

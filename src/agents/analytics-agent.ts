@@ -9,6 +9,7 @@ import {
     buildAnalyticsChart,
     filterAnalyticsChart,
     exportAnalyticsChart,
+
     getAllMetadata,
     getOrganisationUnits,
     getDataElements,
@@ -21,6 +22,9 @@ import {
     searchDhis2Indicators,
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,
+
+    // Category searching for disaggregation discovery
+    searchDhis2Categories,
 } from '../utils/tools/metadata';
 import {
     resolveResourceReference as resolveRefHelper,
@@ -40,7 +44,7 @@ const model = new AzureChatOpenAI({
     azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
 });
 
-// Create the analytics agent with analytics and computation tools
+// Create the analytics agent with analytics, charting, and computation tools
 export const analyticsAgent = createReactAgent({
   llm: model,
   tools: [
@@ -48,10 +52,16 @@ export const analyticsAgent = createReactAgent({
     queryAnalytics,              // Query analytics data from DHIS2
     searchAnalyticsMetadata,     // Search for analytics-relevant metadata
 
+    // 📈 CHARTING TOOLS 📊
+    buildAnalyticsChart,         // Create interactive ECharts visualizations
+    filterAnalyticsChart,        // Apply filters to existing charts
+    exportAnalyticsChart,        // Export charts as PNG/SVG/CSV/JSON
+
     // 🔍 METADATA DISCOVERY TOOLS 🔍
     searchDhis2Indicators,       // Find indicators for analysis
     searchDhis2DataElements,     // Find data elements for analysis
     searchDhis2OrganisationUnits, // Find org units for analysis
+    searchDhis2Categories,       // Find categories for disaggregation
 
     // 📊 DATA RETRIEVAL & AGGREGATION TOOLS 📊
     getAllMetadata,             // Get paginated lists of metadata
@@ -88,6 +98,19 @@ You can perform mathematical operations on data:
 - **Aggregation**: Sum values, calculate averages, find min/max
 - **Data Processing**: Handle missing values, string to number conversion
 
+### 📈 CHART GENERATION
+You can create interactive visualizations from analytics data:
+- **Automatic Chart Creation**: Bar, line, and pie charts
+- **Interactive Filtering**: Filter by indicators, periods, org units, disaggregations
+- **Export Capabilities**: PNG, SVG, CSV, JSON formats
+
+### 🔍 CATEGORY DISCOVERY FOR DISAGGREGATION
+You can search for existing category metadata for data disaggregation:
+- **Search Categories**: Find existing Sex, Age, or other disaggregation dimensions
+- **Identify Disaggregation**: Locate categories that can provide breakdowns in analytics
+- **Clear Error Messages**: Report when requested disaggregation categories are not available
+- **Recommend Creation**: Suggest creating missing categories as separate metadata tasks
+
 ## AVAILABLE DATA MEMORY
 
 Note: Data memory functionality is available through the queryAnalytics tool which stores results for follow-up queries.
@@ -106,9 +129,11 @@ Note: Data memory functionality is available through the queryAnalytics tool whi
 
 When you receive ANY analytics query:
 1. ✅ **Immediately invoke searchAnalyticsMetadata** to find relevant indicators/data elements
-2. ✅ **Then invoke queryAnalytics** with found IDs and query parameters
-3. ✅ **Or invoke computation tools** for mathematical operations
-4. ✅ **Return the tool results as JSON**
+2. ✅ **If disaggregation requested, search for existing category metadata using searchDhis2Categories** - if found, include valid category IDs in queryAnalytics; if not found, skip disaggregation and proceed with aggregated data
+3. ✅ **Then invoke queryAnalytics** with found IDs and query parameters (ONLY including validated disaggregations)
+4. ✅ **Always invoke buildAnalyticsChart** after successful queryAnalytics to create visualizations
+5. ✅ **Or invoke computation tools** for mathematical operations
+6. ✅ **Return the buildAnalyticsChart results as JSON** (including chart_id, echarts_option, etc.)
 
 ## ANALYTICS TOOL GUIDE
 
@@ -122,6 +147,16 @@ When you receive ANY analytics query:
 - Use natural language search terms
 - Returns structured metadata for queryAnalytics
 
+### searchDhis2Categories (DISCOVERY TOOL)
+- Find existing categories for data disaggregation (e.g., Sex, Age groups)
+- Search by name to locate available disaggregation dimensions
+- Used to validate disaggregation requests before analytics queries
+
+### buildAnalyticsChart (VISUALIZATION TOOL)
+- Automatically invoked after queryAnalytics to create charts
+- Parameters: userQuery, analyticsData, chartType, indicators, periods, orgUnits, disaggregations, title
+- Returns: chart_id, echarts_option, data_summary for immediate visualization
+
 ### Computation Tools
 - computeTotal, computeAverage, computeMax, computeMin
 - Process arrays of numeric values
@@ -132,6 +167,13 @@ When you receive ANY analytics query:
 Query: "HIV testing coverage by gender last month"
 1. searchAnalyticsMetadata(query="HIV testing coverage")
 2. queryAnalytics(indicators=[found_ids], periods=["2024 LAST_MONTH"], disaggregations=["gender_category_id"])
+3. buildAnalyticsChart(analyticsData=previous_queryAnalytics_result.data, chartType="bar", indicators=found_ids, periods=["2024 LAST_MONTH"], orgUnits=["facility_ids"], disaggregations=["gender_category_id"])
+
+## DATA FLOW REQUIREMENTS
+
+🔧 **Preserve DHIS2 Response Structure**: Always pass the raw DHIS2 API response (with rows and headers arrays) to buildAnalyticsChart. Extract from queryAnalytics result as 'result.data' field.
+
+🔧 **Response Structure**: buildAnalyticsChart expects analyticsData object with rows: [] and headers: [] properties from DHIS2 API, never LLM reformatted summaries.
 
 ## RESPONSE REQUIREMENTS
 

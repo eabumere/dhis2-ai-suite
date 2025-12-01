@@ -88,6 +88,7 @@ export const buildAnalyticsChart = tool(
 
             // Build ECharts option object
             const echartsOption = buildEChartsOption(chartData);
+            console.log('Generated ECharts option:', JSON.stringify(echartsOption, null, 2));
 
             return JSON.stringify({
                 success: true,
@@ -280,23 +281,39 @@ function processAnalyticsForChart(params: {
         throw new Error("No data available for chart visualization");
     }
 
+    // First pass: collect all unique values to validate filtering
+    const allIndicators = new Set<string>();
+    const allPeriods = new Set<string>();
+    const allOrgUnits = new Set<string>();
+
+    rows.forEach((row: any[]) => {
+        headers.forEach((header: any, index: number) => {
+            if (header.column === 'Data') {
+                allIndicators.add(row[index]);
+            } else if (header.column === 'Period') {
+                allPeriods.add(row[index]);
+            } else if (header.column === 'Organisation unit') {
+                allOrgUnits.add(row[index]);
+            }
+        });
+    });
+
     // Process rows into chart-compatible format
-    // Apply initial filters if specified
-    let filteredRows = rows.map((row: any) => {
+    let filteredRows = rows.map((row: any[]) => {
         const rowObj: any = {};
         headers.forEach((header: any, index: number) => {
-            let value = row[index];
+            const value = row[index];
 
-            // Convert IDs to names where possible (org units, indicators, etc.)
-            if (header.name === 'Organisation unit') {
-                // Try to resolve org unit name - simplified for now
+            // Map header names to object properties (use API names, not display names)
+            if (header.name === 'ou') {
                 rowObj.org_unit = value;
-            } else if (header.name === 'Period') {
+            } else if (header.name === 'pe') {
                 rowObj.period = value;
-            } else if (header.name === 'Data') {
+            } else if (header.name === 'dx') {
                 rowObj.dx = value;
-            } else if (header.name === 'Value') {
-                rowObj.value = parseFloat(value) || 0;
+            } else if (header.name === 'value') {
+                // Ensure numeric values
+                rowObj.value = parseFloat(value.toString()) || 0;
             } else if (header.name.startsWith('co_')) { // Category options
                 rowObj[header.name] = value;
             } else {
@@ -305,15 +322,32 @@ function processAnalyticsForChart(params: {
         });
         return rowObj;
     });
-    if (indicators.length > 0) {
-        filteredRows = filteredRows.filter(row => indicators.includes(row.dx));
-    }
-    if (periods.length > 0) {
-        filteredRows = filteredRows.filter(row => periods.includes(row.period));
-    }
+
+    // Apply targeted filters - only org units and disaggregations for chart refinement
+    // Periods and indicators from analytics data are included as-is for dynamic handling
     if (orgUnits.length > 0) {
         filteredRows = filteredRows.filter(row => orgUnits.includes(row.org_unit));
     }
+
+    // Apply disaggregation filtering if specific breakdowns are requested
+
+    // Extract metadata for display names
+    const metaDataItems = analyticsData.metaData?.items || {};
+
+    // Resolve display names from metadata
+    const resolveIndicatorNames = Array.from(allIndicators).map(id =>
+        metaDataItems[id]?.name || metaDataItems[id]?.displayName || id
+    );
+
+    const resolveOrgUnitNames = Array.from(allOrgUnits).map(id =>
+        metaDataItems[id]?.name || metaDataItems[id]?.displayName || id
+    );
+
+    // Debug logging
+    console.log(`Chart processing: ${rows.length} raw rows, ${filteredRows.length} filtered rows`);
+    console.log(`Available indicators: ${Array.from(allIndicators)} → ${resolveIndicatorNames}`);
+    console.log(`Available periods: ${Array.from(allPeriods)}`);
+    console.log(`Available org units: ${Array.from(allOrgUnits)} → ${resolveOrgUnitNames}`);
 
     return {
         id: generateAnalyticsMemoryId(),
@@ -323,14 +357,14 @@ function processAnalyticsForChart(params: {
         echartsConfig: {},
         filteredData: filteredRows,
         dimensions: {
-            indicators,
-            periods,
-            orgUnits,
+            indicators: Array.from(allIndicators), // Always use what's actually in the data
+            periods: Array.from(allPeriods),       // Always use what's actually in the data
+            orgUnits: orgUnits.length > 0 ? orgUnits : Array.from(allOrgUnits),
             disaggregations
         },
         metadata: {
-            indicators: [], // Would be populated with actual indicator metadata
-            orgUnits: []   // Would be populated with actual org unit metadata
+            indicators: resolveIndicatorNames, // Human-readable indicator names
+            orgUnits: resolveOrgUnitNames     // Human-readable org unit names
         }
     };
 }
@@ -1507,7 +1541,7 @@ export const queryAnalytics = tool(
     }) => {
         try {
             // Import the DHIS2 API query function
-            const Dhis2Api = await import('../../app-runtime/dhis2-api');
+            const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
 
             // Build dimension parameters
             const indicator_string = input.indicators.join(";");
@@ -1520,29 +1554,52 @@ export const queryAnalytics = tool(
                 `ou:${org_unit_string}`
             ];
 
-            // Add disaggregation dimensions if provided
+            // Validate and add disaggregation dimensions if provided
+            const validDisaggregations: string[] = [];
             if (input.disaggregations && input.disaggregations.length > 0) {
                 for (const cat_id of input.disaggregations) {
-                    dimensions.push(`${cat_id}`);
+                    // Validate that the category exists by checking with API
+                    try {
+                        const { Dhis2Api: ValidateApi } = await import('../../app-runtime/dhis2-api');
+                        const validationResponse = await (ValidateApi as any).default.query({
+                            resource: `dimensions/${cat_id}`,
+                            params: {}
+                        });
+                        // Only include if validation succeeds (dimension exists)
+                        if (validationResponse) {
+                            dimensions.push(`${cat_id}`);
+                            validDisaggregations.push(cat_id);
+                        } else {
+                            console.warn(`Skipping invalid disaggregation dimension: ${cat_id}`);
+                        }
+                    } catch (error) {
+                        console.warn(`Dimension validation failed for ${cat_id}, skipping:`, error.message);
+                        // Skip this dimension if validation fails
+                    }
                 }
+                console.log(`Validated disaggregations: ${validDisaggregations.length}/${input.disaggregations.length} dimensions are valid`);
             }
 
-            // Build query parameters - DHIS2 expects URL style parameters
-            const queryParams = new URLSearchParams();
-            queryParams.set('displayProperty', input.display_property || "NAME");
-            queryParams.set('includeNumDen', (input.include_num_den || false).toString());
-            queryParams.set('skipMeta', (input.skip_meta !== false).toString()); // Default true
-            queryParams.set('skipData', (input.skip_data || false).toString());
-            queryParams.set('outputIdScheme', input.output_id_scheme || "NAME");
-
-            // Add dimensions as separate parameters
-            dimensions.forEach(dim => queryParams.append('dimension', dim));
+            // Build analytics query configuration
+            const analyticsConfig = {
+                analytics: {
+                    resource: 'analytics',
+                    params: dimensions.reduce((params: any, dimension) => {
+                        params.dimension = params.dimension || [];
+                        params.dimension.push(dimension);
+                        return params;
+                    }, {
+                        displayProperty: input.display_property || "NAME",
+                        includeNumDen: input.include_num_den || false,
+                        skipMeta: input.skip_meta !== false, // Default true
+                        skipData: input.skip_data || false,
+                        outputIdScheme: input.output_id_scheme || "NAME"
+                    })
+                }
+            };
 
             // Query the analytics endpoint
-            const response = await (Dhis2Api as any).default.query({
-                resource: 'analytics',
-                params: queryParams.toString()
-            });
+            const response = await Dhis2Api.query(analyticsConfig);
 
             // Store analytics data in memory for follow-up analysis
             const memoryId = storeAnalyticsData(
@@ -1554,7 +1611,7 @@ export const queryAnalytics = tool(
             );
 
             return JSON.stringify({
-                url: `analytics?${queryParams.toString()}`,
+                url: `analytics?${dimensions.map(dim => `dimension=${encodeURIComponent(dim)}`).join('&')}`,
                 data: response,
                 memory_id: memoryId,
                 doc_type: input.doc_type || 'indicator',
@@ -1841,11 +1898,11 @@ export const computeMin = tool(
     }
 );
 
-// Specific Metadata Getters using the standard tool pattern
+        // Specific Metadata Getters using the standard tool pattern
 export const getOrganisationUnits = tool(
     async (input: { filters?: Record<string, string> }) => {
         try {
-            const Dhis2Api = await import('../../app-runtime/dhis2-api');
+            const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
 
             const allItems = [];
             let page = 1;

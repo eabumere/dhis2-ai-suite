@@ -227,6 +227,39 @@ export const FollowUpQuestions: React.FC<FollowUpQuestionsProps> = ({
                         <strong>Total Results:</strong> {response.count}
                     </div>
                 )}
+
+                {/* General successful response - display all remaining key-value pairs */}
+                {response.success !== false && !response.chart_id && !response.data && !response.results && !response.message && response.count === undefined && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {Object.entries(response).map(([key, value]) => (
+                            <div key={key} style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                fontSize: '13px',
+                                padding: '4px 0',
+                                borderBottom: '1px solid #f0f0f0'
+                            }}>
+                                <span style={{
+                                    fontWeight: 'bold',
+                                    color: '#2E7D32',
+                                    textTransform: 'capitalize',
+                                    marginRight: '15px'
+                                }}>
+                                    {key.replace(/[_]/g, ' ')}:
+                                </span>
+                                <span style={{
+                                    textAlign: 'right',
+                                    fontFamily: typeof value === 'number' ? 'monospace' : 'inherit'
+                                }}>
+                                    {typeof value === 'string' ? value :
+                                     typeof value === 'number' ? value.toLocaleString() :
+                                     Array.isArray(value) ? `[${value.length} items]` :
+                                     JSON.stringify(value)}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
         );
     };

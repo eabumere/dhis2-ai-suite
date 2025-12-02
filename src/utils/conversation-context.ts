@@ -234,8 +234,8 @@ export class ConversationContextManager {
     /**
      * Export conversation for analysis/persistence
      */
-    exportConversation(): ConversationMemory {
-        // Return a copy without the Map (for JSON serialization)
+    exportConversation(): Omit<ConversationMemory, 'dataContexts'> & { dataContexts: { [key: string]: DataContext } } {
+        // Return a copy with Map converted to plain object for JSON serialization
         return {
             ...this.memory,
             dataContexts: Object.fromEntries(this.memory.dataContexts.entries())
@@ -245,7 +245,7 @@ export class ConversationContextManager {
     /**
      * Import conversation from export
      */
-    importConversation(savedMemory: any): void {
+    importConversation(savedMemory: Omit<ConversationMemory, 'dataContexts'> & { dataContexts: { [key: string]: DataContext } }): void {
         this.memory = {
             ...savedMemory,
             dataContexts: new Map(Object.entries(savedMemory.dataContexts || {}))

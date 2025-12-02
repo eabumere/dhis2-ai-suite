@@ -2,7 +2,7 @@ import { useDataQuery } from '@dhis2/app-runtime'
 import i18n from '@dhis2/d2-i18n'
 import React, { FC, useState } from 'react'
 import classes from './App.module.css'
-import { contextRouterAgent } from './agents/router-agent'
+import { unifiedAgent } from './agents/unified-agent'
 import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 import AnalyticsChart from './components/AnalyticsChart';
 
@@ -42,8 +42,8 @@ const MyApp: FC = () => {
         setQueryResults(null)
 
         try {
-            // Use context-aware router agent to analyze intent and route to appropriate specialized agent
-            const result = await contextRouterAgent.invoke({
+            // Use unified agent with all tools (eliminates recursion by avoiding nested agent executions)
+            const result = await unifiedAgent.invoke({
                 messages: [{role: 'user', content: universalQuery}]
             })
 

@@ -2,7 +2,7 @@ import { useDataQuery } from '@dhis2/app-runtime'
 import i18n from '@dhis2/d2-i18n'
 import React, { FC, useState } from 'react'
 import classes from './App.module.css'
-import { unifiedAgent } from './agents/unified-agent'
+import { stateGraphAgent } from './agents/state-graph-agent'
 import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 import AnalyticsChart from './components/AnalyticsChart';
 
@@ -42,29 +42,26 @@ const MyApp: FC = () => {
         setQueryResults(null)
 
         try {
-            // Use unified agent with all tools (eliminates recursion by avoiding nested agent executions)
-            const result = await unifiedAgent.invoke({
-                messages: [{role: 'user', content: universalQuery}]
+            // Use state graph agent (eliminates recursion with structured workflow)
+            const result = await stateGraphAgent.invoke({
+                messages: [{ role: 'user', content: universalQuery }]
             })
 
-            const lastMessage = result.messages[result.messages.length - 1]
-
-            if (lastMessage.content) {
-                const content = lastMessage.content as string
-
-                // Try to parse as JSON (expected from agents)
-                try {
-                    const parsedResults = JSON.parse(content)
-                    setQueryResults(parsedResults)
-                } catch (jsonError) {
-                    // If JSON parsing fails, display the raw content
-                    console.log('Response is not JSON, displaying as raw text:', content)
-                    setQueryResults({
-                        success: false,
-                        rawResponse: content,
-                        message: 'Received non-JSON response from agent'
-                    })
-                }
+            // StateGraph returns final state, extract finalResult
+            if (result.finalResult) {
+                setQueryResults(result.finalResult)
+            } else if (result.error) {
+                setQueryResults({
+                    success: false,
+                    error: result.error,
+                    type: 'unknown'
+                })
+            } else {
+                setQueryResults({
+                    success: false,
+                    message: 'No result returned from agent',
+                    type: 'unknown'
+                })
             }
         } catch (error) {
             console.error('Error processing query:', error)

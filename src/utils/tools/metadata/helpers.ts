@@ -197,13 +197,147 @@ export async function generateDhis2Id(): Promise<string> {
 
 
 /**
+ * Interface for external search API response
+ */
+interface ExternalSearchResult {
+    content: string;
+    metadata: {
+        item_id: string;
+        name: string;
+        type: string;
+    };
+}
+
+/**
+ * Interface for external search API response format
+ */
+interface ExternalSearchApiResponse extends Array<ExternalSearchResult> {}
+
+/**
+ * Call external search API with query and limit
+ */
+export async function callExternalSearchApi(
+    query: string,
+    targetType: string,
+    limit: number
+): Promise<ExternalSearchApiResponse | null> {
+    const externalUrl = (import.meta as any).env.EXTERNAL_SEARCH_URL;
+    const apiKey = (import.meta as any).env.EXTERNAL_SEARCH_API_KEY;
+    const timeout = parseInt((import.meta as any).env.EXTERNAL_SEARCH_TIMEOUT) || 5000;
+
+    // Check if external search is configured
+    if (!externalUrl) {
+        return null;
+    }
+
+    try {
+        // Create AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+        const response = await fetch(externalUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(apiKey && { 'Authorization': `Bearer ${apiKey}` })
+            },
+            body: JSON.stringify({
+                query: query,
+                limit: limit
+            }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            console.warn(`External search API returned ${response.status}: ${response.statusText}`);
+            return null;
+        }
+
+        const results: ExternalSearchApiResponse = await response.json();
+
+        // Validate response structure
+        if (!Array.isArray(results)) {
+            console.warn('External search API returned invalid response format (not an array)');
+            return null;
+        }
+
+        return results;
+
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            console.warn('External search API call timed out, falling back to DHIS2');
+        } else {
+            console.warn('External search API call failed:', error.message);
+        }
+        return null;
+    }
+}
+
+/**
+ * Filter external search results by target metadata type
+ */
+export function filterExternalResultsByType(
+    results: ExternalSearchApiResponse,
+    targetType: string
+): ExternalSearchApiResponse {
+    return results.filter(result =>
+        result.metadata?.type === targetType ||
+        result.metadata?.type?.toLowerCase() === targetType.toLowerCase() ||
+        // Handle plural forms (dataElements vs dataElement, etc.)
+        result.metadata?.type?.toLowerCase() === targetType.slice(0, -1).toLowerCase() ||
+        result.metadata?.type?.slice(0, -1).toLowerCase() === targetType.toLowerCase()
+    );
+}
+
+/**
+ * Transform external search results to match DHIS2 metadata format
+ */
+export function transformExternalResults(
+    results: ExternalSearchApiResponse
+): Array<{ id: string; name: string; code?: string; displayName: string }> {
+    return results.map(result => ({
+        id: result.metadata.item_id,
+        name: result.metadata.name,
+        code: result.metadata.name, // Use name as code since external API might not provide separate codes
+        displayName: result.content || result.metadata.name // Use content as display name if available, fallback to name
+    }));
+}
+
+/**
  * Search for existing DHIS2 metadata by name or code
+ * Now includes external search API call with fallback to DHIS2 native search
  */
 export async function searchDhis2Metadata(
     metadataType: string,
     query: string,
     limit: number = 10
 ): Promise<Array<{ id: string; name: string; code?: string; displayName: string }>> {
+
+    // STEP 1: Try external search API first (if configured)
+    try {
+        const externalResults = await callExternalSearchApi(query, metadataType, limit);
+
+        if (externalResults && externalResults.length > 0) {
+            // Filter results by the requested metadata type
+            const filteredResults = filterExternalResultsByType(externalResults, metadataType);
+
+            if (filteredResults.length > 0) {
+                console.log(`✅ External search found ${filteredResults.length} results for type '${metadataType}'`);
+                return transformExternalResults(filteredResults.slice(0, limit));
+            }
+
+            console.log(`⚠️ External search found results but none matched type '${metadataType}'`);
+        } else {
+            console.log('No external search results, falling back to DHIS2 API');
+        }
+    } catch (externalError) {
+        console.warn('External search failed, falling back to DHIS2 API:', externalError.message);
+    }
+
+    // STEP 2: Fall back to DHIS2 native search
+    console.log(`🔄 Using DHIS2 native search for ${metadataType}`);
     return await searchDhis2MetadataAppRuntime(metadataType, query, limit);
 }
 

@@ -1,11 +1,14 @@
 import { useDataQuery } from '@dhis2/app-runtime'
 import i18n from '@dhis2/d2-i18n'
-import React, { FC, useState } from 'react'
+import React, { FC, useEffect, useState, useRef } from 'react'
 import classes from './App.module.css'
-import { routerAgent } from './agents/router-agent'
-import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
+import { DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 import AnalyticsChart from './components/AnalyticsChart';
 import AnalyticsMetadataSelector, { MetadataOption } from './components/AnalyticsMetadataSelector';
+
+// Import the comprehensive workflow orchestrator
+import { workflowOrchestrator, WorkflowUIState } from './utils/workflow-orchestrator';
+import { routerAgent } from './agents/router-agent'
 
 interface QueryResults {
     me: {
@@ -19,167 +22,132 @@ const query = {
     },
 }
 
-interface MetadataResult {
-    [key: string]: any[];
-}
-
 const MyApp: FC = () => {
     const {error, loading, data} = useDataQuery<QueryResults>(query)
-    // Universal query state for multi-agent architecture
-    const [universalQuery, setUniversalQuery] = useState<string>('')
-    const [queryResults, setQueryResults] = useState<any>(null)
-    const [isProcessing, setIsProcessing] = useState<boolean>(false)
-    const [queryErrorMessage, setQueryErrorMessage] = useState<string>('')
 
-    // Helper function to detect analytics selection requests in error messages
-    const parseAnalyticsSelectionError = (errorMessage: string, originalQuery: string): any => {
-        // Check if this is an analytics selection error
-        const selectionPattern = /Analytics agent requires selection from multiple possible indicators\/data elements.*Please specify which indicator\/data element to use:\s*(.+?)(?:\sor another from the provided list\.)?$/s;
+    // Complete UI state is now managed by the orchestrator
+    const [uiState, setUiState] = useState<WorkflowUIState>({
+        showQueryInput: true,
+        queryText: '',
+        queryEnabled: true,
+        showProcessing: false,
+        showResults: false,
+        showSelection: false,
+        selectionOptions: [],
+        selectionMultiple: true,
+        showError: false
+    });
 
-        const match = errorMessage.match(selectionPattern);
-        if (!match) return null;
+    // Selection complete callback for the orchestrator
+    const pendingSelectionCallback = useRef<((selectedItems: any[]) => void) | null>(null);
 
-        const indicatorsText = match[1];
+    // Register comprehensive callbacks with the orchestrator
+    useEffect(() => {
+        workflowOrchestrator.registerCallbacks({
+            // UI state management - orchestrator fully controls what user sees
+            onUIStateChange: (newState) => {
+                setUiState(prevState => ({ ...prevState, ...newState }));
+            },
 
-        // Parse indicator entries like "DDD_ENROLLED: Individuals devolved to a DDD, DDD_ENROLLED (New on ART) Total: description..."
-        const indicatorEntries: string[] = indicatorsText.split(', ').filter(entry => entry.trim());
+            // Selection handling during workflows
+            onSelection: (options, callback) => {
+                // Store callback for when user completes selection
+                pendingSelectionCallback.current = callback;
+            },
 
-        const selectionOptions = indicatorEntries.map((entry, index) => {
-            const [name, description] = entry.split(': ').map(s => s.trim());
-            return {
-                name: name || `Option ${index + 1}`,
-                id: `parsed-${index}`, // We'll need to look these up later
-                type: 'indicator' as const
-            };
+            // Workflow lifecycle events
+            onWorkflowStart: (workflowId, flowType) => {
+                console.log(`🎬 Workflow ${workflowId} started: ${flowType}`);
+            },
+            onWorkflowComplete: (workflowId, result) => {
+                console.log(`✅ Workflow ${workflowId} completed`);
+            },
+            onWorkflowError: (workflowId, error) => {
+                console.error(`❌ Workflow ${workflowId} error:`, error);
+            }
         });
 
-        return {
-            type: 'analytics_selection_required',
-            selectionOptions,
-            message: `Found ${selectionOptions.length} potential indicators for analysis. Please select which ones to use.`,
-            isParsedError: true, // Flag to indicate this came from error parsing
-            originalError: errorMessage
-        };
-    };
+        // Reset UI to initial state on component mount
+        workflowOrchestrator.resetUIState();
+    }, []);
 
-    // Unified handler for multi-agent routing
-    const handleUniversalQuery = async () => {
-        if (!universalQuery.trim()) {
-            setQueryErrorMessage('Please enter a query')
-            return
+    // Handle query submission - now delegated to orchestrator
+    const handleQuerySubmit = async () => {
+        if (!uiState.queryText.trim()) {
+            workflowOrchestrator.updateUIState({
+                showError: true,
+                errorMessage: 'Please enter a query'
+            });
+            return;
         }
 
-        setIsProcessing(true)
-        setQueryErrorMessage('')
-        setQueryResults(null)
+        // Start analytics workflow through orchestrator
+        await workflowOrchestrator.startWorkflow(
+            'analytics',
+            {
+                flow: 'analytics_query',
+                input: { messages: [{ role: 'user', content: uiState.queryText }] },
+            },
+            async (input) => {
+                // Router agent routes to state graph for analytics
+                console.log('🚀 Invoking router agent with:', input);
+                const result = await routerAgent.invoke(input);
+                console.log('📦 Router agent result:', result);
 
-        try {
-            // Use router agent for intelligent routing to specialized agents
-            const result = await routerAgent.invoke({
-                messages: [{ role: 'user', content: universalQuery }]
-            })
+                const lastMessage = result.messages[result.messages.length - 1];
+                const responseContent = lastMessage.content as string;
 
-            // Router agent returns last message content as JSON from routed agent
-            const lastMessage = result.messages[result.messages.length - 1];
-            const responseContent = lastMessage.content as string;
+                // Debug the raw response
+                console.log('🔍 Last message:', lastMessage);
+                console.log('🔍 Raw response content:', responseContent);
+                console.log('🔍 Response content length:', responseContent.length);
 
-            try {
-                const parsedResult = JSON.parse(responseContent);
+                try {
+                    console.log('🔄 Parsing JSON response...');
+                    const parsed = JSON.parse(responseContent);
+                    console.log('✅ JSON parse successful:', parsed);
+                    return parsed;
+                } catch (parseError) {
+                    console.error('❌ JSON parse error:', parseError);
+                    console.error('❌ Failed to parse response:', responseContent);
 
-                // Special handling for analytics selection errors from other agents
-                if (Array.isArray(parsedResult) && parsedResult.length === 1 &&
-                    parsedResult[0].error === true && parsedResult[0].message) {
-                    const transformedResult = parseAnalyticsSelectionError(parsedResult[0].message, universalQuery);
-                    if (transformedResult) {
-                        setQueryResults(transformedResult);
-                    } else {
-                        setQueryResults(parsedResult[0]); // Fall back to original error
-                    }
-                } else {
-                    setQueryResults(parsedResult);
+                    // Return a result that won't crash the workflow
+                    return {
+                        success: false,
+                        error: `JSON parse error: ${parseError.message}`,
+                        rawResponse: responseContent,
+                        debug: {
+                            responseLength: responseContent.length,
+                            responseType: typeof responseContent,
+                            first100: responseContent.substring(0, 100)
+                        },
+                        type: 'parse_error'
+                    };
                 }
-            } catch (parseError) {
-                // If response is not valid JSON, show raw response
-                console.warn('Router response is not valid JSON:', parseError);
-                setQueryResults({
-                    success: false,
-                    error: `Invalid response format: ${parseError.message}`,
-                    rawResponse: responseContent,
-                    type: 'unknown'
-                });
             }
-        } catch (error) {
-            console.error('Error processing query:', error)
-            setQueryErrorMessage(`Error processing query: ${error.message}`)
-        } finally {
-            setIsProcessing(false)
-        }
-    }
+        );
+    };
 
-    // Handle analytics metadata selection
-    const handleAnalyticsSelection = async (selectedItems: MetadataOption[]) => {
-        if (selectedItems.length === 0) return;
+    // Handle query text changes - update local state and keep orchestrator in sync
+    const handleQueryChange = (newText: string) => {
+        setUiState(prevState => ({ ...prevState, queryText: newText }));
+    };
 
-        // Check if these are parsed items from error messages (placeholder IDs)
-        const hasParsedIds = selectedItems.some(item => item.id?.startsWith('parsed-'));
+    // Handle selection completion - call stored callback
+    const handleSelectionComplete = (selectedItems: MetadataOption[]) => {
+        if (pendingSelectionCallback.current) {
+            const transformedItems = selectedItems.map(item => ({
+                name: item.name,
+                id: item.id,
+                type: item.type
+            }));
 
-        let followUpQuery;
-        if (hasParsedIds) {
-            // Use names only for parsed items (no real IDs available)
-            const selectedNames = selectedItems.map(item => item.name).join(', ');
-            followUpQuery = `Analyze these indicators/data elements: "${selectedNames}". Original request: ${universalQuery}`;
-        } else {
-            // Use proper IDs for real metadata
-            followUpQuery = `Analyze using these selected metadata: ${selectedItems.map(item =>
-                `${item.type}:${item.name}(ID:${item.id})`
-            ).join(', ')}. Original request: ${universalQuery}`;
-        }
-
-        // Update the input field to show what's being analyzed
-        setUniversalQuery(followUpQuery);
-
-        // Trigger the follow-up query
-        setIsProcessing(true);
-        setQueryResults(null);
-
-        try {
-            const result = await routerAgent.invoke({
-                messages: [{ role: 'user', content: followUpQuery }]
-            });
-
-            const lastMessage = result.messages[result.messages.length - 1];
-            const responseContent = lastMessage.content as string;
-
-            try {
-                const parsedResult = JSON.parse(responseContent);
-                setQueryResults(parsedResult);
-            } catch (parseError) {
-                console.warn('Follow-up response is not valid JSON:', parseError);
-                setQueryResults({
-                    success: false,
-                    error: `Follow-up analytics failed: ${parseError.message}`,
-                    rawResponse: responseContent,
-                    type: 'unknown'
-                });
-            }
-        } catch (error) {
-            console.error('Error in follow-up analytics query:', error);
-            setQueryResults({
-                success: false,
-                error: `Follow-up analytics failed: ${error.message}`,
-                type: 'unknown'
-            });
-        } finally {
-            setIsProcessing(false);
+            pendingSelectionCallback.current(transformedItems);
+            pendingSelectionCallback.current = null;
         }
     };
 
-    const handleKeyPress = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
-            handleUniversalQuery()
-        }
-    }
-
+    // Loading and error states for the main app
     if (error) {
         return <span>{i18n.t('ERROR')}</span>
     }
@@ -191,281 +159,324 @@ const MyApp: FC = () => {
     return (
         <div className={classes.container}>
             <h1>{i18n.t('Hello {{name}}', {name: data?.me?.name})}</h1>
-            <h3>{i18n.t('DHIS2 Multi-Agent Metadata Assistant')}</h3>
+            <h3>{i18n.t('DHIS2 Orchestrated Multi-Agent Assistant')}</h3>
 
-            {/* Universal Query Section */}
-            <div style={{marginTop: '40px', maxWidth: '600px', width: '100%'}}>
-                <h3 style={{color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px'}}>
-                    {i18n.t('Ask Anything')}
-                </h3>
-                <p style={{color: '#666', marginBottom: '15px'}}>
-                    Describe what you want to do - search for existing metadata, create new resources, update configurations, etc.
-                </p>
+            {/* Query Input Section - only show when orchestrator allows */}
+            {uiState.showQueryInput && (
+                <div style={{marginTop: '40px', maxWidth: '600px', width: '100%'}}>
+                    <h3 style={{color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px'}}>
+                        {i18n.t('Ask Anything')}
+                    </h3>
+                    <p style={{color: '#666', marginBottom: '15px'}}>
+                        Describe what you want to do - your query will be intelligently routed to specialized agents.
+                    </p>
 
-                <div style={{display: 'flex', gap: '10px', marginBottom: '10px'}}>
-                    <input
-                        type="text"
-                        value={universalQuery}
-                        onChange={(e) => setUniversalQuery(e.target.value)}
-                        onKeyPress={handleKeyPress}
-                        placeholder={i18n.t('e.g., "Find all data elements with HIV", "Create a program for maternal health", "Show me programs about malaria"')}
-                        disabled={isProcessing}
-                        style={{
-                            flex: 1,
-                            padding: '10px',
-                            fontSize: '16px',
-                            border: '1px solid #ccc',
-                            borderRadius: '4px',
-                            outline: 'none'
-                        }}
-                    />
-                    <button
-                        onClick={handleUniversalQuery}
-                        disabled={isProcessing}
-                        style={{
-                            padding: '10px 20px',
-                            fontSize: '16px',
-                            backgroundColor: '#2c6693',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: isProcessing ? 'not-allowed' : 'pointer',
-                            whiteSpace: 'nowrap'
-                        }}
-                    >
-                        {isProcessing ? i18n.t('Processing...') : i18n.t('Execute')}
-                    </button>
+                    <div style={{display: 'flex', gap: '10px', marginBottom: '10px'}}>
+                        <input
+                            type="text"
+                            value={uiState.queryText}
+                            onChange={(e) => handleQueryChange(e.target.value)}
+                            placeholder={i18n.t('e.g., "Find all data elements with HIV", "Create a program for maternal health"')}
+                            disabled={!uiState.queryEnabled}
+                            onKeyPress={(e) => e.key === 'Enter' && handleQuerySubmit()}
+                            style={{
+                                flex: 1,
+                                padding: '10px',
+                                fontSize: '16px',
+                                border: '1px solid #ccc',
+                                borderRadius: '4px',
+                                outline: 'none'
+                            }}
+                        />
+                        <button
+                            onClick={handleQuerySubmit}
+                            disabled={!uiState.queryEnabled}
+                            style={{
+                                padding: '10px 20px',
+                                fontSize: '16px',
+                                backgroundColor: '#2c6693',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: uiState.queryEnabled ? 'pointer' : 'not-allowed',
+                                whiteSpace: 'nowrap'
+                            }}
+                        >
+                            {uiState.showProcessing ? i18n.t('Processing...') : i18n.t('Execute')}
+                        </button>
+                    </div>
                 </div>
+            )}
 
-                {queryErrorMessage && (
-                    <div style={{
-                        padding: '10px',
-                        backgroundColor: '#ffebee',
-                        color: '#c62828',
-                        borderRadius: '4px',
-                        border: '1px solid #ef5350',
-                        marginBottom: '10px'
-                    }}>
-                        {queryErrorMessage}
-                    </div>
-                )}
+            {/* Error Display - controlled by orchestrator */}
+            {uiState.showError && uiState.errorMessage && (
+                <div style={{
+                    padding: '15px',
+                    backgroundColor: '#ffebee',
+                    color: '#c62828',
+                    borderRadius: '4px',
+                    border: '1px solid #ef5350',
+                    marginBottom: '20px',
+                    maxWidth: '600px'
+                }}>
+                    <strong>{i18n.t('Error')}:</strong> {uiState.errorMessage}
+                </div>
+            )}
 
-                {queryResults && (
-                    <div style={{marginTop: '20px'}}>
-                        {/* Display query results based on agent response format */}
-                        {queryResults.success === false ? (
-                            <div style={{
-                                backgroundColor: '#ffebee',
-                                border: '1px solid #ef5350',
-                                borderRadius: '4px',
-                                padding: '15px'
-                            }}>
-                                <h4 style={{color: '#c62828', marginBottom: '10px'}}>Error</h4>
-                                <div><strong>Message:</strong> {queryResults.error || queryResults.message}</div>
-                                {queryResults.rawResponse && (
-                                    <div style={{marginTop: '10px'}}>
-                                        <strong>Raw Response:</strong>
-                                        <div style={{
-                                            fontSize: '12px',
-                                            color: '#666',
-                                            maxHeight: '100px',
-                                            overflow: 'auto',
-                                            whiteSpace: 'pre-wrap',
-                                            backgroundColor: '#f8f9fa',
-                                            padding: '8px',
-                                            borderRadius: '4px',
-                                            marginTop: '5px'
-                                        }}>
-                                            {queryResults.rawResponse}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div style={{
-                                backgroundColor: '#e8f5e8',
-                                border: '1px solid #4CAF50',
-                                borderRadius: '4px',
-                                padding: '15px'
-                            }}>
-                                <h4 style={{color: '#2E7D32', marginBottom: '10px'}}>
-                                    {queryResults.message || 'Operation Completed Successfully'}
-                                </h4>
+            {/* Processing Indicator - controlled by orchestrator */}
+            {uiState.showProcessing && (
+                <div style={{
+                    padding: '20px',
+                    textAlign: 'center',
+                    backgroundColor: '#e3f2fd',
+                    borderRadius: '8px',
+                    border: '1px solid #2196f3',
+                    marginBottom: '20px',
+                    maxWidth: '600px'
+                }}>
+                    <div style={{fontSize: '18px', marginBottom: '10px'}}>🔄</div>
+                    <div>{uiState.processingMessage || i18n.t('Processing your request...')}</div>
+                </div>
+            )}
 
-                                {/* Handle search results */}
-                                {queryResults.results && (
-                                    <div style={{marginTop: '20px'}}>
-                                        {Object.entries(queryResults.results).map(([type, items]) => {
-                                            if (!Array.isArray(items) || items.length === 0) return null;
+            {/* Analytics Metadata Selection - controlled by orchestrator */}
+            {uiState.showSelection && uiState.selectionOptions.length > 0 && (
+                <div style={{marginBottom: '20px', maxWidth: '600px'}}>
+                    <AnalyticsMetadataSelector
+                        selectionOptions={uiState.selectionOptions.map(opt => ({
+                            ...opt,
+                            type: opt.type as 'indicator' | 'dataElement'
+                        }))}
+                        originalQuery={uiState.queryText}
+                        onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
+                        allowMultiple={uiState.selectionMultiple}
+                    />
+                </div>
+            )}
 
-                                            return (
-                                                <div key={type} style={{marginBottom: '30px'}}>
-                                                    <h5 style={{
-                                                        marginBottom: '10px',
-                                                        color: '#2c6693',
-                                                        textTransform: 'capitalize',
-                                                        borderBottom: '2px solid #e0e0e0',
-                                                        paddingBottom: '5px'
+            {/* Results Display - controlled by orchestrator */}
+            {uiState.showResults && uiState.results && (
+                <div style={{marginTop: '20px', maxWidth: '800px'}}>
+                    {/* Success Results */}
+                    {uiState.results.success !== false ? (
+                        <div style={{
+                            backgroundColor: '#e8f5e8',
+                            border: '1px solid #4CAF50',
+                            borderRadius: '4px',
+                            padding: '15px'
+                        }}>
+                            <h4 style={{color: '#2E7D32', marginBottom: '10px'}}>
+                                {uiState.results.message || 'Operation Completed Successfully'}
+                            </h4>
+
+                            {/* Display tabular results */}
+                            {uiState.results.results && (
+                                <div style={{marginTop: '20px'}}>
+                                    {Object.entries(uiState.results.results).map(([type, items]) => {
+                                        if (!Array.isArray(items) || items.length === 0) return null;
+
+                                        return (
+                                            <div key={type} style={{marginBottom: '30px'}}>
+                                                <h5 style={{
+                                                    marginBottom: '10px',
+                                                    color: '#2c6693',
+                                                    textTransform: 'capitalize',
+                                                    borderBottom: '2px solid #e0e0e0',
+                                                    paddingBottom: '5px'
+                                                }}>
+                                                    {type.replace(/([A-Z])/g, ' $1').trim()}
+                                                </h5>
+                                                <div style={{
+                                                    border: '1px solid #ddd',
+                                                    borderRadius: '4px',
+                                                    overflow: 'hidden'
+                                                }}>
+                                                    <table style={{
+                                                        width: '100%',
+                                                        borderCollapse: 'collapse'
                                                     }}>
-                                                        {type.replace(/([A-Z])/g, ' $1').trim()}
-                                                    </h5>
-                                                    <div style={{
-                                                        border: '1px solid #ddd',
-                                                        borderRadius: '4px',
-                                                        overflow: 'hidden'
-                                                    }}>
-                                                        <table style={{
-                                                            width: '100%',
-                                                            borderCollapse: 'collapse'
-                                                        }}>
-                                                            <thead>
-                                                            <tr style={{backgroundColor: '#f5f5f5'}}>
-                                                                <th style={{
+                                                        <thead>
+                                                        <tr style={{backgroundColor: '#f5f5f5'}}>
+                                                            <th style={{
+                                                                padding: '12px',
+                                                                textAlign: 'left',
+                                                                borderBottom: '1px solid #ddd',
+                                                                fontWeight: 'bold'
+                                                            }}>
+                                                                Name
+                                                            </th>
+                                                            <th style={{
+                                                                padding: '12px',
+                                                                textAlign: 'left',
+                                                                borderBottom: '1px solid #ddd',
+                                                                fontWeight: 'bold'
+                                                            }}>
+                                                                Code
+                                                            </th>
+                                                        </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                        {items.map((item, index) => (
+                                                            <tr key={item.id || index} style={{
+                                                                backgroundColor: index % 2 === 0 ? 'white' : '#f9f9f9'
+                                                            }}>
+                                                                <td style={{
                                                                     padding: '12px',
-                                                                    textAlign: 'left',
-                                                                    borderBottom: '1px solid #ddd',
-                                                                    fontWeight: 'bold'
+                                                                    borderBottom: '1px solid #eee',
+                                                                    fontSize: '14px'
                                                                 }}>
-                                                                    Name
-                                                                </th>
-                                                                <th style={{
-                                                                    padding: '12px',
-                                                                    textAlign: 'left',
-                                                                    borderBottom: '1px solid #ddd',
-                                                                    fontWeight: 'bold'
-                                                                }}>
-                                                                    Code
-                                                                </th>
-                                                            </tr>
-                                                            </thead>
-                                                            <tbody>
-                                                            {items.map((item, index) => (
-                                                                <tr key={item.id || index} style={{
-                                                                    backgroundColor: index % 2 === 0 ? 'white' : '#f9f9f9'
-                                                                }}>
-                                                                    <td style={{
-                                                                        padding: '12px',
-                                                                        borderBottom: '1px solid #eee',
-                                                                        fontSize: '14px'
-                                                                    }}>
-                                                                        {item.rawContent ? (
-                                                                            <div>
-                                                                                <div style={{
-                                                                                    fontWeight: 'bold',
-                                                                                    marginBottom: '5px'
-                                                                                }}>
-                                                                                    {item.name || 'Results'}
-                                                                                </div>
-                                                                                <div style={{
-                                                                                    fontSize: '12px',
-                                                                                    color: '#666',
-                                                                                    maxHeight: '100px',
-                                                                                    overflow: 'auto',
-                                                                                    whiteSpace: 'pre-wrap',
-                                                                                    backgroundColor: '#f8f9fa',
-                                                                                    padding: '8px',
-                                                                                    borderRadius: '4px'
-                                                                                }}>
-                                                                                    {item.rawContent}
-                                                                                </div>
+                                                                    {item.rawContent ? (
+                                                                        <div>
+                                                                            <div style={{
+                                                                                fontWeight: 'bold',
+                                                                                marginBottom: '5px'
+                                                                            }}>
+                                                                                {item.name || 'Results'}
                                                                             </div>
-                                                                        ) : (
-                                                                            item.name || ''
-                                                                        )}
-                                                                    </td>
-                                                                    <td style={{
-                                                                        padding: '12px',
-                                                                        borderBottom: '1px solid #eee',
-                                                                        fontFamily: 'monospace',
-                                                                        fontSize: '14px'
-                                                                    }}>
-                                                                        {item.code || ''}
-                                                                    </td>
-                                                                </tr>
-                                                            ))}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
+                                                                            <div style={{
+                                                                                fontSize: '12px',
+                                                                                color: '#666',
+                                                                                maxHeight: '100px',
+                                                                                overflow: 'auto',
+                                                                                whiteSpace: 'pre-wrap',
+                                                                                backgroundColor: '#f8f9fa',
+                                                                                padding: '8px',
+                                                                                borderRadius: '4px'
+                                                                            }}>
+                                                                                {item.rawContent}
+                                                                            </div>
+                                                                        </div>
+                                                                    ) : (
+                                                                        item.name || ''
+                                                                    )}
+                                                                </td>
+                                                                <td style={{
+                                                                    padding: '12px',
+                                                                    borderBottom: '1px solid #eee',
+                                                                    fontFamily: 'monospace',
+                                                                    fontSize: '14px'
+                                                                }}>
+                                                                    {item.code || ''}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                        </tbody>
+                                                    </table>
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
 
-                                {/* Handle creation/update results */}
-                                {queryResults.data && (
-                                    <div style={{marginTop: '15px'}}>
-                                        <strong>Created/Updated Resource:</strong>
-                                        <div style={{
-                                            fontFamily: 'monospace',
-                                            fontSize: '14px',
-                                            backgroundColor: '#f5f5f5',
-                                            padding: '10px',
-                                            borderRadius: '4px',
-                                            marginTop: '5px'
-                                        }}>
-                                            <div>ID: {queryResults.data.id}</div>
-                                            <div>Name: {queryResults.data.name}</div>
-                                            {queryResults.data.valueType && <div>Type: {queryResults.data.valueType}</div>}
-                                            {queryResults.data.code && <div>Code: {queryResults.data.code}</div>}
-                                        </div>
+                            {/* Display creation/update results */}
+                            {uiState.results.data && (
+                                <div style={{marginTop: '15px'}}>
+                                    <strong>Created/Updated Resource:</strong>
+                                    <div style={{
+                                        fontFamily: 'monospace',
+                                        fontSize: '14px',
+                                        backgroundColor: '#f5f5f5',
+                                        padding: '10px',
+                                        borderRadius: '4px',
+                                        marginTop: '5px'
+                                    }}>
+                                        <div>ID: {uiState.results.data.id}</div>
+                                        <div>Name: {uiState.results.data.name}</div>
+                                        {uiState.results.data.valueType && <div>Type: {uiState.results.data.valueType}</div>}
+                                        {uiState.results.data.code && <div>Code: {uiState.results.data.code}</div>}
                                     </div>
-                                )}
+                                </div>
+                            )}
 
-                                {/* Show operation summary */}
-                                {queryResults.count !== undefined && (
-                                    <div style={{marginTop: '10px', color: '#2E7D32'}}>
-                                        <strong>Total results:</strong> {queryResults.count}
+                            {/* Show operation summary */}
+                            {uiState.results.count !== undefined && (
+                                <div style={{marginTop: '10px', color: '#2E7D32'}}>
+                                    <strong>Total results:</strong> {uiState.results.count}
+                                </div>
+                            )}
+
+                            {/* Display analytics charts */}
+                            {uiState.results.chart_id && uiState.results.echarts_option && (
+                                <div style={{marginTop: '20px'}}>
+                                    <AnalyticsChart
+                                        chartData={uiState.results}
+                                        chartId={uiState.results.chart_id}
+                                        title={uiState.results.title}
+                                        onFilter={(filters) => console.log('Chart filtered:', filters)}
+                                        onExport={(format) => console.log('Chart exported as:', format)}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Debug info for parse errors */}
+                            {uiState.results.debug && (
+                                <div style={{marginTop: '15px'}}>
+                                    <strong>Debug Info:</strong>
+                                    <div style={{
+                                        fontFamily: 'monospace',
+                                        fontSize: '12px',
+                                        backgroundColor: '#f5f5f5',
+                                        padding: '10px',
+                                        borderRadius: '4px',
+                                        marginTop: '5px'
+                                    }}>
+                                        <div>Length: {uiState.results.debug.responseLength}</div>
+                                        <div>Type: {uiState.results.debug.responseType}</div>
+                                        <div>First 100: {uiState.results.debug.first100}</div>
                                     </div>
-                                )}
-
-                                {/* Display analytics charts */}
-                                {queryResults.chart_id && queryResults.echarts_option && (
-                                    <div style={{marginTop: '20px'}}>
-                                        <AnalyticsChart
-                                            chartData={queryResults}
-                                            chartId={queryResults.chart_id}
-                                            title={queryResults.title}
-                                            onFilter={(filters) => {
-                                                console.log('Chart filtered:', filters);
-                                            }}
-                                            onExport={(format) => {
-                                                console.log('Chart exported as:', format);
-                                            }}
-                                        />
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        /* Error Results */
+                        <div style={{
+                            backgroundColor: '#ffebee',
+                            border: '1px solid #ef5350',
+                            borderRadius: '4px',
+                            padding: '15px'
+                        }}>
+                            <h4 style={{color: '#c62828', marginBottom: '10px'}}>Operation Failed</h4>
+                            <div><strong>Message:</strong> {uiState.results.error || uiState.results.message}</div>
+                            {uiState.results.rawResponse && (
+                                <div style={{marginTop: '10px'}}>
+                                    <strong>Raw Response:</strong>
+                                    <div style={{
+                                        fontSize: '12px',
+                                        color: '#666',
+                                        maxHeight: '100px',
+                                        overflow: 'auto',
+                                        whiteSpace: 'pre-wrap',
+                                        backgroundColor: '#f8f9fa',
+                                        padding: '8px',
+                                        borderRadius: '4px',
+                                        marginTop: '5px'
+                                    }}>
+                                        {uiState.results.rawResponse}
                                     </div>
-                                )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
 
-                                {/* Handle analytics metadata selection */}
-                                {queryResults.type === 'analytics_selection_required' && queryResults.selectionOptions && (
-                                    <div style={{marginTop: '15px'}}>
-                                        <AnalyticsMetadataSelector
-                                            selectionOptions={queryResults.selectionOptions}
-                                            originalQuery={universalQuery}
-                                            onSelection={(selectedItems, selectedIndices) => handleAnalyticsSelection(selectedItems)}
-                                            allowMultiple={true}
-                                        />
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {!isProcessing && !queryResults && (
-                    <div style={{
-                        padding: '20px',
-                        textAlign: 'center',
-                        color: '#666',
-                        fontStyle: 'italic',
-                        backgroundColor: '#f8f9fa',
-                        borderRadius: '4px',
-                        border: '1px solid #e0e0e0'
-                    }}>
-                        Enter a query above to search, create, or manage DHIS2 metadata
-                    </div>
-                )}
-            </div>
+            {/* Empty state when nothing is shown */}
+            {!uiState.showQueryInput && !uiState.showProcessing && !uiState.showResults && !uiState.showSelection && !uiState.showError && (
+                <div style={{
+                    padding: '40px',
+                    textAlign: 'center',
+                    color: '#666',
+                    fontStyle: 'italic',
+                    backgroundColor: '#f8f9fa',
+                    borderRadius: '8px',
+                    border: '1px solid #e0e0e0',
+                    maxWidth: '600px',
+                    marginTop: '20px'
+                }}>
+                    Ready to assist with DHIS2 metadata management and analytics.
+                </div>
+            )}
         </div>
     )
 }

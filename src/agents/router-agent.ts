@@ -137,10 +137,16 @@ const routeToCRUDAgent = tool(
 const routeToAnalyticsAgent = tool(
     async ({ userQuery }: { userQuery: string }) => {
         try {
-            // Actually invoke the StateGraph analytics agent
+            console.log('🔍 Routing query to analytics StateGraph:', userQuery);
+
+            // Actually invoke the StateGraph analytics agent with proper initial state
             const result = await stateGraphAgent.invoke({
-                messages: [{ role: 'user', content: userQuery }]
+                messages: [{ role: 'user', content: userQuery }],
+                query: userQuery,  // Explicitly set the query for StateGraph processing
+                step: 'classify'   // Set initial step
             });
+
+            console.log('📊 StateGraph result:', result);
 
             // StateGraph returns final state with finalResult directly
             if (result.finalResult) {

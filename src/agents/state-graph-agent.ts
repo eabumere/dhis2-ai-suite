@@ -49,6 +49,20 @@ const GraphAnnotation = Annotation.Root({
     default: () => null,
   }),
 
+  // Workflow pause/resume state
+  workflowId: Annotation<string>({
+    reducer: (left, right) => right,
+    default: () => '',
+  }),
+  workflowPaused: Annotation<boolean>({
+    reducer: (left, right) => right,
+    default: () => false,
+  }),
+  selectedItems: Annotation<any[]>({
+    reducer: (left, right) => left.concat(right || []),
+    default: () => [],
+  }),
+
   // Output state
   finalResult: Annotation<any>({
     reducer: (left, right) => right,

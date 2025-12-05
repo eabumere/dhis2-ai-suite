@@ -2,7 +2,7 @@
 export { searchAgent } from './search-agent';
 export { crudAgent } from './crud-agent';
 export { routerAgent } from './router-agent';
-export { analyticsAgent } from './analytics-agent';
+export { stateGraphAgent } from './state-graph-agent';
 
 // Export routing utilities
 export { routeToSearchAgent, routeToCRUDAgent, routeToAnalyticsAgent } from './router-agent';

@@ -5,8 +5,8 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
-"POT-Creation-Date: 2025-11-25T09:28:44.916Z\n"
-"PO-Revision-Date: 2025-11-25T09:28:44.916Z\n"
+"POT-Creation-Date: 2025-12-05T13:28:08.041Z\n"
+"PO-Revision-Date: 2025-12-05T13:28:08.041Z\n"
 
 msgid "ERROR"
 msgstr "ERROR"
@@ -17,21 +17,27 @@ msgstr "Loading..."
 msgid "Hello {{name}}"
 msgstr "Hello {{name}}"
 
-msgid "DHIS2 Multi-Agent Metadata Assistant"
-msgstr "DHIS2 Multi-Agent Metadata Assistant"
+msgid "DHIS2 Orchestrated Multi-Agent Assistant"
+msgstr "DHIS2 Orchestrated Multi-Agent Assistant"
 
 msgid "Ask Anything"
 msgstr "Ask Anything"
 
 msgid ""
 "e.g., \"Find all data elements with HIV\", \"Create a program for maternal "
-"health\", \"Show me programs about malaria\""
+"health\""
 msgstr ""
 "e.g., \"Find all data elements with HIV\", \"Create a program for maternal "
-"health\", \"Show me programs about malaria\""
+"health\""
 
 msgid "Processing..."
 msgstr "Processing..."
 
 msgid "Execute"
 msgstr "Execute"
+
+msgid "Error"
+msgstr "Error"
+
+msgid "Processing your request..."
+msgstr "Processing your request..."

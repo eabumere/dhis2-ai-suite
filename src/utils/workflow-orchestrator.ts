@@ -92,7 +92,7 @@ class WorkflowOrchestrator {
     }
 
     // Start a new workflow
-    async startWorkflow<T extends { flow: string; input: any; workflowId?: string }>(
+    async startWorkflow<T extends { flow: string; input: any; workflowId?: string; selectedItems?: any[] }>(
         flowType: string,
         input: T,
         agentFn: (input: any) => Promise<any>
@@ -118,18 +118,95 @@ class WorkflowOrchestrator {
             input
         });
 
+        let currentInput = { ...input };
+        let maxIterations = 5; // Prevent infinite loops
+        let iterationCount = 0;
+
         try {
-            const result = await agentFn(input);
-            this.activeWorkflows.set(workflowId, {
-                ...this.activeWorkflows.get(workflowId),
-                status: 'completed',
-                result
-            });
+            while (iterationCount < maxIterations) {
+                iterationCount++;
 
-            // Notify UI of completion
-            this.uiCallbacks?.onWorkflowComplete(workflowId, result);
+                console.log(`🔄 Workflow ${workflowId} iteration ${iterationCount} with input:`, currentInput);
 
-            return result;
+                const result = await agentFn(currentInput);
+                console.log(`📋 Workflow ${workflowId} iteration ${iterationCount} result:`, result);
+
+                // Check if selection is required
+                if (result?.requiresSelection && result?.selectionOptions?.length > 0) {
+                    console.log(`⏸️ Workflow ${workflowId} requires user selection`);
+
+                    // Request user selection
+                    const selectedItems = await this.requestSelection(workflowId, result.selectionOptions, result.allowMultiple || true);
+
+                    if (selectedItems && selectedItems.length > 0) {
+                        console.log(`▶️ Workflow ${workflowId} received selection, continuing with:`, selectedItems);
+
+                        // Update input with selected items for next iteration
+                        currentInput = {
+                            ...currentInput,
+                            selectedItems,
+                            // Update the user message to include selected metadata for follow-up queries
+                            input: {
+                                ...currentInput.input,
+                                messages: currentInput.input.messages.map((msg: any) => {
+                                    if (msg.role === 'user') {
+                                        // Format selected items for analytics continuation
+                                        const selectedFormatted = selectedItems.map((item: any) =>
+                                            `${item.type}:${item.name}(ID:${item.id})`
+                                        ).join(', ');
+
+                                        return {
+                                            ...msg,
+                                            content: `Continue analytics using these selected metadata: ${selectedFormatted}. Original query: ${input.input.messages[0]?.content || msg.content}`
+                                        };
+                                    }
+                                    return msg;
+                                })
+                            }
+                        };
+
+                        // Update UI for next iteration
+                        this.updateUIState({
+                            showProcessing: true,
+                            processingMessage: `Processing selected items...`
+                        });
+
+                        continue; // Continue the loop with selected items
+                    } else {
+                        // User cancelled selection
+                        throw new Error('Selection was cancelled by user');
+                    }
+                } else {
+                    // No selection required or final result, complete the workflow
+                    console.log(`✅ Workflow ${workflowId} completed after ${iterationCount} iterations`);
+
+                    this.activeWorkflows.set(workflowId, {
+                        ...this.activeWorkflows.get(workflowId),
+                        status: 'completed',
+                        result
+                    });
+
+                    // Notify UI of completion
+                    this.uiCallbacks?.onWorkflowComplete(workflowId, result);
+
+                    // Show appropriate success/error UI
+                    if (result?.success !== false) {
+                        this.showResults(result, result.type || 'default');
+                    } else if (result?.error) {
+                        this.updateUIState({
+                            showError: true,
+                            errorMessage: result.error,
+                            showProcessing: false
+                        });
+                    }
+
+                    return result;
+                }
+            }
+
+            // Max iterations reached
+            throw new Error(`Workflow ${workflowId} exceeded maximum iterations (${maxIterations})`);
+
         } catch (error) {
             console.error(`❌ Workflow ${workflowId} failed:`, error);
 

@@ -72,6 +72,12 @@ const GraphAnnotation = Annotation.Root({
     reducer: (left, right) => right,
     default: () => '',
   }),
+
+  // Orchestrator reference for selection
+  orchestrator: Annotation<any>({
+    reducer: (left, right) => right,
+    default: () => null,
+  }),
 });
 
 // Node functions for the StateGraph
@@ -218,19 +224,54 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
         }
       };
     } else if (multipleMatches) {
-      // Multiple matches found - require user selection
-      return {
-        metadata,
-        step: 'completed',
-        finalResult: {
-          success: true,
-          message: `Found ${suggestions.length} potential indicators/data elements for analysis. Please select which ones to use.`,
-          data: metadata,
-          type: 'analytics_selection_required',
-          requiresSelection: true,
-          selectionOptions: suggestions
-        }
-      };
+      // Multiple matches found - request selection through orchestrator
+      console.log('⏸️ Requesting user selection through orchestrator');
+
+      if (!state.orchestrator) {
+        console.error('No orchestrator available for selection');
+        return {
+          step: 'completed',
+          finalResult: {
+            success: false,
+            message: 'Cannot request user selection - no orchestrator available',
+            type: 'analytics'
+          }
+        };
+      }
+
+      // Request selection through orchestrator (this will show UI and wait)
+      const selectedItems = await state.orchestrator.requestSelection(
+        state.workflowId || 'analytics_workflow',
+        suggestions,
+        true // Allow multiple selection
+      );
+
+      console.log('▶️ Received selection from orchestrator:', selectedItems);
+
+      if (selectedItems && selectedItems.length > 0) {
+        // Update metadata with selected items
+        const updatedMetadata = {
+          ...metadata,
+          suggestions: selectedItems,
+          status: 'user_selected'
+        };
+
+        // Continue with query_data using selected items
+        return {
+          metadata: updatedMetadata,
+          step: 'query_data'
+        };
+      } else {
+        // Selection was cancelled
+        return {
+          step: 'completed',
+          finalResult: {
+            success: false,
+            message: 'Selection was cancelled by user',
+            type: 'analytics'
+          }
+        };
+      }
     } else {
       // Single match or auto-selected - proceed to query
       return {

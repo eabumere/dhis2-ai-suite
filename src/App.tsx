@@ -8,7 +8,7 @@ import AnalyticsMetadataSelector, { MetadataOption } from './components/Analytic
 
 // Import the comprehensive workflow orchestrator
 import { workflowOrchestrator, WorkflowUIState } from './utils/workflow-orchestrator';
-import { routerAgent } from './agents/router-agent'
+import { createContextRouterAgent } from './agents/router-agent'
 
 interface QueryResults {
     me: {
@@ -41,6 +41,9 @@ const MyApp: FC = () => {
     // Selection complete callback for the orchestrator
     const pendingSelectionCallback = useRef<((selectedItems: any[]) => void) | null>(null);
 
+    // Context router agent instance with orchestrator reference
+    const [contextRouterAgent, setContextRouterAgent] = useState<any>(null);
+
     // Register comprehensive callbacks with the orchestrator
     useEffect(() => {
         workflowOrchestrator.registerCallbacks({
@@ -67,6 +70,10 @@ const MyApp: FC = () => {
             }
         });
 
+        // Create context router agent with orchestrator reference
+        const agent = createContextRouterAgent(workflowOrchestrator);
+        setContextRouterAgent(agent);
+
         // Reset UI to initial state on component mount
         workflowOrchestrator.resetUIState();
     }, []);
@@ -87,11 +94,14 @@ const MyApp: FC = () => {
             {
                 flow: 'analytics_query',
                 input: { messages: [{ role: 'user', content: uiState.queryText }] },
+                orchestrator: workflowOrchestrator // Pass orchestrator reference for selection interrupts
             },
             async (input) => {
                 // Router agent routes to state graph for analytics
-                console.log('🚀 Invoking router agent with:', input);
-                const result = await routerAgent.invoke(input);
+                // Extract user messages and pass them properly to the agent
+                const userMessages = input.input?.messages || [{ role: 'user', content: input.query || '' }];
+                console.log('🚀 Invoking context-aware router agent with messages:', userMessages);
+                const result = await contextRouterAgent?.invoke({ messages: userMessages });
                 console.log('📦 Router agent result:', result);
 
                 const lastMessage = result.messages[result.messages.length - 1];

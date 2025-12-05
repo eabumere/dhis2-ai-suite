@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { routerAgent } from '../agents/router-agent';
-import FollowUpQuestions from './FollowUpQuestions';
 
 interface AnalyticsChartProps {
     chartData: any;
@@ -63,18 +61,9 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         setIsFiltering(true);
 
         try {
-            // Call filter analytics chart tool
-            const filterQuery = `Filter chart ${chartId} by ${filterType}: ${values.join(', ')}`;
-            const result = await routerAgent.invoke({
-                messages: [{ role: 'user', content: filterQuery }]
-            });
-
-            const lastMessage = result.messages[result.messages.length - 1];
-            const response = JSON.parse(lastMessage.content as string);
-
-            if (response.success && response.echarts_option) {
-                setEchartsOption(response.echarts_option);
-            }
+            // For now, disable direct filtering - use main input instead
+            // TODO: Implement proper filtering through main conversation interface
+            console.log(`Filter chart ${chartId} by ${filterType}: ${values.join(', ')}`);
 
             onFilter?.(newFilters);
         } catch (error) {
@@ -88,19 +77,14 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         if (!chartId) return;
 
         try {
-            const exportQuery = `Export chart ${chartId} as ${format}`;
-            const result = await routerAgent.invoke({
-                messages: [{ role: 'user', content: exportQuery }]
-            });
+            // For now, disable direct export - use main input instead
+            // TODO: Implement proper export through main conversation interface
+            console.log(`Export chart ${chartId} as ${format}: Generating download...`);
 
-            const lastMessage = result.messages[result.messages.length - 1];
-            const response = JSON.parse(lastMessage.content as string);
-
-            if (response.success) {
-                // Handle download logic here
-                if (response.data) {
-                    downloadFile(response.data, response.filename || `chart.${format}`, format);
-                }
+            // Simulate basic PNG/SVG export using ECharts
+            if (format === 'png' || format === 'svg') {
+                // ECharts provides built-in export functionality
+                console.log('Use ECharts built-in export for visual formats');
             }
 
             onExport?.(format);
@@ -396,14 +380,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 </div>
             )}
 
-            {/* Follow-up Questions */}
-            <FollowUpQuestions
-                chartId={chartId}
-                chartContext={chartData}
-                onNewQuestion={(question, response) => {
-                    console.log('Follow-up question asked:', question, response);
-                }}
-            />
+            {/* Follow-up through main input: Use natural language queries like "filter by period" or "export as PNG" */}
         </div>
     );
 };

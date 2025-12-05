@@ -4,7 +4,7 @@ import { tool } from '@langchain/core/tools';
 import { StateAnnotation } from '../utils/state';
 import { searchAgent } from './search-agent';
 import { crudAgent } from './crud-agent';
-import { analyticsAgent } from './analytics-agent';
+import { stateGraphAgent } from './state-graph-agent';
 import { resolveResourceReference } from '../utils/tools/metadata';
 import { conversationContext, findRelevantContext, addConversation, createAnalyticsDataContext, createSearchDataContext, createMutationDataContext } from '../utils/conversation-context';
 
@@ -137,17 +137,16 @@ const routeToCRUDAgent = tool(
 const routeToAnalyticsAgent = tool(
     async ({ userQuery }: { userQuery: string }) => {
         try {
-            // Actually invoke the analytics agent
-            const result = await analyticsAgent.invoke({
+            // Actually invoke the StateGraph analytics agent
+            const result = await stateGraphAgent.invoke({
                 messages: [{ role: 'user', content: userQuery }]
             });
 
-            const lastMessage = result.messages[result.messages.length - 1];
-            const responseContent = lastMessage.content as string;
+            // StateGraph returns final state with finalResult directly
+            if (result.finalResult) {
+                const parsedResponse = result.finalResult;
 
-            // Parse and add to conversation context
-            try {
-                const parsedResponse = JSON.parse(responseContent);
+                // Add to conversation context
                 if (parsedResponse.success !== false) {
                     // Analytics responses may include chart data - add to memory
                     const dataContext = createAnalyticsDataContext(parsedResponse);
@@ -155,18 +154,33 @@ const routeToAnalyticsAgent = tool(
                 } else {
                     addConversation(userQuery, 'analytics', parsedResponse);
                 }
-            } catch (parseError) {
-                // If it's not JSON, still add to conversation
-                addConversation(userQuery, 'analytics', { rawResponse: responseContent });
-            }
 
-            return responseContent;
+                return JSON.stringify(parsedResponse);
+            } else if (result.error) {
+                const errorResponse = {
+                    success: false,
+                    error: result.error,
+                    routedTo: "state_graph_analytics",
+                    originalQuery: userQuery
+                };
+                addConversation(userQuery, 'analytics', errorResponse);
+                return JSON.stringify(errorResponse);
+            } else {
+                const errorResponse = {
+                    success: false,
+                    message: 'No result returned from analytics StateGraph',
+                    routedTo: "state_graph_analytics",
+                    originalQuery: userQuery
+                };
+                addConversation(userQuery, 'analytics', errorResponse);
+                return JSON.stringify(errorResponse);
+            }
         } catch (error) {
-            console.error('Error routing to analytics agent:', error);
+            console.error('Error routing to analytics StateGraph:', error);
             const errorResponse = {
                 success: false,
-                error: `Failed to route to analytics agent: ${error.message}`,
-                routedTo: "analytics",
+                error: `Failed to route to analytics StateGraph: ${error.message}`,
+                routedTo: "state_graph_analytics",
                 originalQuery: userQuery
             };
             addConversation(userQuery, 'analytics', errorResponse);
@@ -219,26 +233,16 @@ export const contextRouterAgent = createReactAgent({
     ## CONVERSATION CONTEXT AWARENESS
 
     Current conversation includes:
-    - Recent topics discussed: ${conversationContext.memory.activeTopics.join(', ') || 'None'}
     - Previous analytics available: ${context.lastAnalyticsData?.summary || 'None'}
     - Data contexts available: ${context.relevantDataContexts.length > 0 ? context.relevantDataContexts.map(c => c.summary).join('; ') : 'None'}
 
     ## ROUTING WORKFLOW
 
     When you receive ANY query (including follow-ups):
-    stepwise 1. ✅ **Use conversation context** to understand references like "the previous data", "that chart", "last search", etc.
-    stepwise 2. ✅ **Check for conversational references** like "last data element", "the category I created" using resolveResourceReference tool
-    stepwise 3. ✅ **Immediately identify intent** using keyword analysis and conversation context
-    stepwise 4. ✅ **Invoke single routing tool** (routeToSearchAgent, routeToCRUDAgent, or routeToAnalyticsAgent)
-    stepwise 5. ✅ **Return tool result** as pure JSON response (routing tools automatically add responses to conversation context)
-
-    ## CONTEXT-AWARE ROUTING EXAMPLES
-
-    ### Follow-up Questions:
-    - "Filter that chart by gender" → Route to Analytics Agent (knows about previous chart)
-    - "Show me more about the HIV data" → Route to Analytics Agent (knows about previous analytics)
-    - "Update the data element I created" → Route to CRUD Agent (knows about created resources)
-    - "Find categories related to those results" → Route to Search Agent (knows about previous search)
+    stepwise 1. ✅ **Check for conversational references** like "last data element", "the category I created" using resolveResourceReference tool
+    stepwise 2. ✅ **Immediately identify intent** using keyword analysis and conversation context
+    stepwise 3. ✅ **Invoke single routing tool** (routeToSearchAgent, routeToCRUDAgent, or routeToAnalyticsAgent)
+    stepwise 4. ✅ **Return tool result** as pure JSON response
 
     ## ROUTING DECISIONS
 
@@ -247,8 +251,7 @@ export const contextRouterAgent = createReactAgent({
     - **Finding/Retrieving**: find, search, lookup, show, list, get, retrieve, display, see, view
     - **Discovery**: browse, explore, what are, which, where is, who has
     - **Examination**: check, verify, inspect, examine, review, details, information
-    - **Reading/Access**: fetch, obtain, access, download, export, export
-    - **References to context**: "more like that", "find related to..."
+    - **Reading/Access**: fetch, obtain, access, download, export
 
     ### CRUD AGENT ROUTING
     Route to CRUD AGENT for operations that involve:
@@ -256,7 +259,6 @@ export const contextRouterAgent = createReactAgent({
     - **Modifying**: update, change, modify, edit, revise, alter, rename, adjust
     - **Writing/Saving**: save, store, upload, import, insert, put
     - **Actions**: generate, produce, construct, design, configure
-    - **References to context**: "update the one I created", "modify that category"
 
     ### ANALYTICS AGENT ROUTING
     Route to ANALYTICS AGENT for operations that involve:
@@ -266,7 +268,6 @@ export const contextRouterAgent = createReactAgent({
     - **Insights & Reporting**: performance, coverage, trends, patterns, insights
     - **Time Series**: monthly, quarterly, yearly data, time periods, over time
     - **Questions about data**: "How many", "What is the total", "Calculate", "Show me coverage"
-    - **References to context**: "filter the chart", "show trends in that data", "analyze those results"
 
     ## RESPONSE REQUIREMENTS
 
@@ -286,19 +287,8 @@ export const contextRouterAgent = createReactAgent({
     Query: "How many people have been tested in the Last 12 months"
     Response: {result from routeToAnalyticsAgent tool}
 
-    Follow-ups with Context:
-    Query: "Show me trends in that data" (referring to previous analytics)
-    Response: {result from routeToAnalyticsAgent tool - knows about previous analytics data}
-
-    Query: "Filter the chart by gender" (referring to previous chart)
-    Response: {result from routeToAnalyticsAgent tool - has chart context}
-
-    Query: "Update the one I created" (referring to created resource)
-    Response: {result from routeToCRUDAgent tool - knows about created resources}
-
     Focus exclusively on invoking routing tools and returning their structured JSON results.
     Never respond in plain text explaining routing - that violates the rules.
-    Use conversation context intelligently for follow-up questions.
   `
   },
 });

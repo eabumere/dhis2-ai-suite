@@ -221,9 +221,9 @@ export async function callExternalSearchApi(
     targetType: string,
     limit: number
 ): Promise<ExternalSearchApiResponse | null> {
-    const externalUrl = (import.meta as any).env.EXTERNAL_SEARCH_URL;
-    const apiKey = (import.meta as any).env.EXTERNAL_SEARCH_API_KEY;
-    const timeout = parseInt((import.meta as any).env.EXTERNAL_SEARCH_TIMEOUT) || 5000;
+    const externalUrl = (import.meta as any).env.DHIS2_EXTERNAL_SEARCH_URL;
+    const apiKey = (import.meta as any).env.DHIS2_EXTERNAL_SEARCH_API_KEY;
+    const timeout = parseInt((import.meta as any).env.DHIS2_EXTERNAL_SEARCH_TIMEOUT) || 5000;
 
     // Check if external search is configured
     if (!externalUrl) {

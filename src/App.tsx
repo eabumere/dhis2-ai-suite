@@ -2,9 +2,10 @@ import { useDataQuery } from '@dhis2/app-runtime'
 import i18n from '@dhis2/d2-i18n'
 import React, { FC, useState } from 'react'
 import classes from './App.module.css'
-import { stateGraphAgent } from './agents/state-graph-agent'
+import { routerAgent } from './agents/router-agent'
 import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 import AnalyticsChart from './components/AnalyticsChart';
+import AnalyticsMetadataSelector, { MetadataOption } from './components/AnalyticsMetadataSelector';
 
 interface QueryResults {
     me: {
@@ -30,6 +31,37 @@ const MyApp: FC = () => {
     const [isProcessing, setIsProcessing] = useState<boolean>(false)
     const [queryErrorMessage, setQueryErrorMessage] = useState<string>('')
 
+    // Helper function to detect analytics selection requests in error messages
+    const parseAnalyticsSelectionError = (errorMessage: string, originalQuery: string): any => {
+        // Check if this is an analytics selection error
+        const selectionPattern = /Analytics agent requires selection from multiple possible indicators\/data elements.*Please specify which indicator\/data element to use:\s*(.+?)(?:\sor another from the provided list\.)?$/s;
+
+        const match = errorMessage.match(selectionPattern);
+        if (!match) return null;
+
+        const indicatorsText = match[1];
+
+        // Parse indicator entries like "DDD_ENROLLED: Individuals devolved to a DDD, DDD_ENROLLED (New on ART) Total: description..."
+        const indicatorEntries: string[] = indicatorsText.split(', ').filter(entry => entry.trim());
+
+        const selectionOptions = indicatorEntries.map((entry, index) => {
+            const [name, description] = entry.split(': ').map(s => s.trim());
+            return {
+                name: name || `Option ${index + 1}`,
+                id: `parsed-${index}`, // We'll need to look these up later
+                type: 'indicator' as const
+            };
+        });
+
+        return {
+            type: 'analytics_selection_required',
+            selectionOptions,
+            message: `Found ${selectionOptions.length} potential indicators for analysis. Please select which ones to use.`,
+            isParsedError: true, // Flag to indicate this came from error parsing
+            originalError: errorMessage
+        };
+    };
+
     // Unified handler for multi-agent routing
     const handleUniversalQuery = async () => {
         if (!universalQuery.trim()) {
@@ -42,26 +74,39 @@ const MyApp: FC = () => {
         setQueryResults(null)
 
         try {
-            // Use state graph agent (eliminates recursion with structured workflow)
-            const result = await stateGraphAgent.invoke({
+            // Use router agent for intelligent routing to specialized agents
+            const result = await routerAgent.invoke({
                 messages: [{ role: 'user', content: universalQuery }]
             })
 
-            // StateGraph returns final state, extract finalResult
-            if (result.finalResult) {
-                setQueryResults(result.finalResult)
-            } else if (result.error) {
+            // Router agent returns last message content as JSON from routed agent
+            const lastMessage = result.messages[result.messages.length - 1];
+            const responseContent = lastMessage.content as string;
+
+            try {
+                const parsedResult = JSON.parse(responseContent);
+
+                // Special handling for analytics selection errors from other agents
+                if (Array.isArray(parsedResult) && parsedResult.length === 1 &&
+                    parsedResult[0].error === true && parsedResult[0].message) {
+                    const transformedResult = parseAnalyticsSelectionError(parsedResult[0].message, universalQuery);
+                    if (transformedResult) {
+                        setQueryResults(transformedResult);
+                    } else {
+                        setQueryResults(parsedResult[0]); // Fall back to original error
+                    }
+                } else {
+                    setQueryResults(parsedResult);
+                }
+            } catch (parseError) {
+                // If response is not valid JSON, show raw response
+                console.warn('Router response is not valid JSON:', parseError);
                 setQueryResults({
                     success: false,
-                    error: result.error,
+                    error: `Invalid response format: ${parseError.message}`,
+                    rawResponse: responseContent,
                     type: 'unknown'
-                })
-            } else {
-                setQueryResults({
-                    success: false,
-                    message: 'No result returned from agent',
-                    type: 'unknown'
-                })
+                });
             }
         } catch (error) {
             console.error('Error processing query:', error)
@@ -70,6 +115,64 @@ const MyApp: FC = () => {
             setIsProcessing(false)
         }
     }
+
+    // Handle analytics metadata selection
+    const handleAnalyticsSelection = async (selectedItems: MetadataOption[]) => {
+        if (selectedItems.length === 0) return;
+
+        // Check if these are parsed items from error messages (placeholder IDs)
+        const hasParsedIds = selectedItems.some(item => item.id?.startsWith('parsed-'));
+
+        let followUpQuery;
+        if (hasParsedIds) {
+            // Use names only for parsed items (no real IDs available)
+            const selectedNames = selectedItems.map(item => item.name).join(', ');
+            followUpQuery = `Analyze these indicators/data elements: "${selectedNames}". Original request: ${universalQuery}`;
+        } else {
+            // Use proper IDs for real metadata
+            followUpQuery = `Analyze using these selected metadata: ${selectedItems.map(item =>
+                `${item.type}:${item.name}(ID:${item.id})`
+            ).join(', ')}. Original request: ${universalQuery}`;
+        }
+
+        // Update the input field to show what's being analyzed
+        setUniversalQuery(followUpQuery);
+
+        // Trigger the follow-up query
+        setIsProcessing(true);
+        setQueryResults(null);
+
+        try {
+            const result = await routerAgent.invoke({
+                messages: [{ role: 'user', content: followUpQuery }]
+            });
+
+            const lastMessage = result.messages[result.messages.length - 1];
+            const responseContent = lastMessage.content as string;
+
+            try {
+                const parsedResult = JSON.parse(responseContent);
+                setQueryResults(parsedResult);
+            } catch (parseError) {
+                console.warn('Follow-up response is not valid JSON:', parseError);
+                setQueryResults({
+                    success: false,
+                    error: `Follow-up analytics failed: ${parseError.message}`,
+                    rawResponse: responseContent,
+                    type: 'unknown'
+                });
+            }
+        } catch (error) {
+            console.error('Error in follow-up analytics query:', error);
+            setQueryResults({
+                success: false,
+                error: `Follow-up analytics failed: ${error.message}`,
+                type: 'unknown'
+            });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
@@ -329,6 +432,18 @@ const MyApp: FC = () => {
                                             onExport={(format) => {
                                                 console.log('Chart exported as:', format);
                                             }}
+                                        />
+                                    </div>
+                                )}
+
+                                {/* Handle analytics metadata selection */}
+                                {queryResults.type === 'analytics_selection_required' && queryResults.selectionOptions && (
+                                    <div style={{marginTop: '15px'}}>
+                                        <AnalyticsMetadataSelector
+                                            selectionOptions={queryResults.selectionOptions}
+                                            originalQuery={universalQuery}
+                                            onSelection={(selectedItems, selectedIndices) => handleAnalyticsSelection(selectedItems)}
+                                            allowMultiple={true}
                                         />
                                     </div>
                                 )}

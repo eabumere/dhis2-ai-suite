@@ -183,20 +183,15 @@ const MyApp: FC = () => {
                 }
             );
 
-            // Add assistant response to conversation
+            // Add assistant response to conversation (router agent now handles specialized rendering internally)
             if (result?.success !== false) {
-                // Check if this is a direct search result (not embedded in analytics)
-                if (result.routedTo === 'search') {
-                    // Use specialized search result rendering for direct search queries
-                    workflowOrchestrator.requestSearchRender(result, queryText);
-                } else {
-                    // Use generic assistant message for other result types
-                    workflowOrchestrator.addAssistantMessage(
-                        result.message || 'Operation completed successfully',
-                        'response',
-                        result
-                    );
-                }
+                // Router agent has already handled specialized rendering for direct searches
+                // For other results, add a simple confirmation message
+                workflowOrchestrator.addAssistantMessage(
+                    result.message || 'Operation completed successfully',
+                    'response',
+                    result
+                );
             } else {
                 workflowOrchestrator.addAssistantMessage(
                     result.error || 'Operation failed',

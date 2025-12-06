@@ -64,28 +64,83 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 	};
 }
 
-// 2. Direct search workflow - invoke search agent and render results
+// 2. Direct search workflow - comprehensive search across all metadata types
 async function invoke_search_agent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	console.log('🔍 Router: Invoking search agent directly');
+	console.log('🔍 Router: Invoking comprehensive search across all metadata types');
 
 	try {
-		// Invoke search agent
-		const result = await searchAgent.invoke({
-			messages: [{ role: 'user', content: state.originalQuery }]
+		// Import search tools directly for comprehensive parallel searching
+		const {
+			searchDhis2DataElements,
+			searchDhis2OrganisationUnits,
+			searchDhis2Categories,
+			searchDhis2CategoryCombos,
+			searchDhis2DataSets,
+			searchDhis2Programs,
+			searchDhis2Indicators,
+			searchDhis2CategoryOptions,
+			searchDhis2OrganisationUnitGroups,
+			searchDhis2Validations,
+			searchDhis2OptionSets,
+			searchDhis2Visualizations,
+			searchDhis2Dashboards
+		} = await import('../utils/tools/metadata');
+
+		// Comprehensive search across core metadata types - run in parallel
+		const searchPromises = [
+			['dataElements', searchDhis2DataElements.invoke({ query: state.originalQuery, limit: 10 })],
+			['indicators', searchDhis2Indicators.invoke({ query: state.originalQuery, limit: 10 })],
+			['organisationUnits', searchDhis2OrganisationUnits.invoke({ query: state.originalQuery, limit: 10 })],
+			['dataSets', searchDhis2DataSets.invoke({ query: state.originalQuery, limit: 10 })],
+			['programs', searchDhis2Programs.invoke({ query: state.originalQuery, limit: 10 })],
+			['categories', searchDhis2Categories.invoke({ query: state.originalQuery, limit: 5 })],
+			['categoryCombos', searchDhis2CategoryCombos.invoke({ query: state.originalQuery, limit: 5 })],
+			['optionSets', searchDhis2OptionSets.invoke({ query: state.originalQuery, limit: 5 })],
+			['validationRules', searchDhis2Validations.invoke({ query: state.originalQuery, limit: 5 })],
+			['visualizations', searchDhis2Visualizations.invoke({ query: state.originalQuery, limit: 5 })],
+			['dashboards', searchDhis2Dashboards.invoke({ query: state.originalQuery, limit: 5 })]
+		];
+
+		// Execute all searches in parallel
+		const searchResults = await Promise.allSettled(
+			searchPromises.map(([type, promise]) => promise.then(result => ({
+				type,
+				result: JSON.parse(result as string)
+			})).catch(error => ({
+				type,
+				error: error.message,
+				result: []
+			})))
+		);
+
+		// Aggregate results by type
+		const aggregatedResults: any = {};
+		let totalCount = 0;
+
+		searchResults.forEach((result, index) => {
+			const [type] = searchPromises[index];
+			if (result.status === 'fulfilled') {
+				const data = result.value.result;
+				if (data && Array.isArray(data) && data.length > 0) {
+					aggregatedResults[type] = data.slice(0, 10); // Limit to 10 items per type
+					totalCount += data.length;
+				}
+			}
 		});
 
-		const responseContent = result.messages[result.messages.length - 1].content as string;
+		console.log(`🔍 Router: Found ${Object.keys(aggregatedResults).length} metadata types with ${totalCount} total results`);
 
-		// Parse response
-		let parsedResponse;
-		try {
-			parsedResponse = JSON.parse(responseContent);
-		} catch (parseError) {
-			parsedResponse = { rawResponse: responseContent };
-		}
+		// Create unified response format
+		const parsedResponse = {
+			success: true,
+			searchCount: Object.keys(aggregatedResults).length,
+			totalResults: totalCount,
+			query: state.originalQuery,
+			...aggregatedResults
+		};
 
 		// Add to conversation context
-		if (parsedResponse.success !== false) {
+		if (parsedResponse.success) {
 			const dataContext = createSearchDataContext(parsedResponse);
 			addConversation(state.originalQuery, 'search', parsedResponse, dataContext);
 		} else {
@@ -107,7 +162,7 @@ async function invoke_search_agent(state: typeof RouterAnnotation.State): Promis
 			}
 		};
 	} catch (error) {
-		console.error('🔍 Router: Search agent error:', error);
+		console.error('🔍 Router: Comprehensive search error:', error);
 		const errorResponse = {
 			success: false,
 			error: `Search failed: ${error.message}`

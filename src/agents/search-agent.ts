@@ -73,58 +73,27 @@ const model = new AzureChatOpenAI({
 export const searchAgent = createReactAgent({
   llm: model,
   tools: [
-    // ████████ SEARCH TOOLS ████████
-    // Core Searches (7 tools)
+    // Core Search Tools (10 essential tools) - Limited for better LLM performance
     searchDhis2DataElements,
+    searchDhis2Indicators,
     searchDhis2OrganisationUnits,
-    searchDhis2Categories,
-    searchDhis2CategoryCombos,
     searchDhis2DataSets,
     searchDhis2Programs,
-    searchDhis2Indicators,
-
-    // Extended Searches (10 tools)
-    searchDhis2CategoryOptions,
-    searchDhis2OrganisationUnitGroups,
-    searchDhis2OrganisationUnitGroupSets,
-    searchDhis2TrackedEntityTypes,
-    searchDhis2TrackedEntityAttributes,
-    searchDhis2Validations,
+    searchDhis2Categories,
+    searchDhis2CategoryCombos,
     searchDhis2OptionSets,
+    searchDhis2Validations,
     searchDhis2Visualizations,
-    searchDhis2Dashboards,
-    searchDhis2Users,
-    searchDhis2RelationshipTypes,
 
-    // ████████ GET-BY-ID TOOLS ████████
-    // Core Get-by-ID (5 tools)
+    // Get-by-ID Tools (5 core tools for reference resolution)
     getDhis2DataElementById,
+    getDhis2IndicatorById,
     getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
     getDhis2DataSetById,
     getDhis2ProgramById,
-
-    // Extended Get-by-ID (8 tools)
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
-    getDhis2RelationshipTypeById,
-
-    // ████████ SPECIALIZED TOOLS ████████
-    getDhis2DataValues,
-
-    // ████████ UTILITY TOOLS ████████
-    resolveResourceReference,
   ],
   prompt: `
-You are a DHIS2 metadata search specialist. Choose the MOST RELEVANT search tools based on the query intent.
+You are a DHIS2 metadata search specialist. Choose the MOST RELEVANT search tools and format results properly for display.
 
 ## SEARCH STRATEGY:
 
@@ -132,36 +101,26 @@ You are a DHIS2 metadata search specialist. Choose the MOST RELEVANT search tool
 - User mentions specific type: "data elements about HIV" → searchDhis2DataElements
 - User mentions facility/org: "clinics", "facilities" → searchDhis2OrganisationUnits
 - User mentions indicators: "indicators about ART" → searchDhis2Indicators
-- User asks for validation: "validation rules" → searchDhis2Validations
 
 ### BROAD/DISCOVERY SEARCHES (use 4-8 tools):
 - "metadata about HIV" → Search dataElements + indicators + organisationUnits + optionSets
 - "find everything about malaria" → Core + extended searches for comprehensive discovery
-- "show me HIV data" → dataElements + indicators + dataSets + programs
 
-### TOOL MAPPING:
-| Query Type | Recommended Tools |
-|------------|-------------------|
-| Data elements | searchDhis2DataElements |
-| Indicators | searchDhis2Indicators |
-| Facilities/Clinics | searchDhis2OrganisationUnits |
-| Data sets | searchDhis2DataSets, searchDhis2Programs |
-| Categories | searchDhis2Categories, searchDhis2CategoryCombos |
-| Rule sets | searchDhis2OptionSets, searchDhis2Validations |
-| Analytics | searchDhis2Visualizations, searchDhis2Dashboards |
-| Everything | dataElements + indicators + organisationUnits + programs |
+### RESULT FORMATTING REQUIRED:
+For single-type searches, return: {"metadataType": [results]}
+For multi-type searches, return: {"dataElements": [...], "indicators": [...], etc.}
 
 ## CRITICAL RULES:
-1. Return ONLY JSON objects from tools (no wrapper text)
-2. Never summarize to string arrays
-3. Tool results have {name, id, displayName} - return them exactly
-4. For broad queries, use multiple relevant tools
-5. For specific queries, use targeted tools only
+1. **Always call tools individually** - do not combine in single call
+2. **Return only results** - no wrapper text, no success/error objects
+3. **Format by metadata type**: searchDhis2OrganisationUnits → {"organisationUnits": [results]}
+4. **For multiple tools**: combine into single object with multiple keys
+5. **Tool results** have {name, id, displayName} - preserve exactly
 
 ## EXAMPLES:
-✅ "find data elements about HIV" → searchDhis2DataElements only
-✅ "find metadata about HIV" → 5-6 relevant searches (comprehensive)
-✅ "find clinics" → searchDhis2OrganisationUnits only
+✅ "find data elements about HIV" → call searchDhis2DataElements → {"dataElements": [...]}
+✅ "find clinics" → call searchDhis2OrganisationUnits → {"organisationUnits": [...]}
+✅ "find metadata about HIV" → call 5+ tools → {"dataElements": [...], "organisationUnits": [...], ...}
   `,
 });
 

@@ -54,20 +54,166 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     };
 
     const handleFilterChange = async (filterType: keyof ChartFilter, values: string[]) => {
-        if (!chartId || !values.length) return;
+        if (!chartData || !values.length) return;
 
         const newFilters = { ...filters, [filterType]: values };
         setFilters(newFilters);
         setIsFiltering(true);
 
         try {
-            // For now, disable direct filtering - use main input instead
-            // TODO: Implement proper filtering through main conversation interface
-            console.log(`Filter chart ${chartId} by ${filterType}: ${values.join(', ')}`);
+            console.log(`📊 Applying filter: ${filterType} = [${values.join(', ')}]`);
+
+            // Apply client-side filtering to the analytics data
+            const filteredChartData = await applyClientSideFiltering(chartData, newFilters);
+
+            // Update the chart options with filtered data
+            const filteredOption = await generateFilteredChartOption(filteredChartData);
+
+            // Update the ECharts instance
+            setEchartsOption(filteredOption);
 
             onFilter?.(newFilters);
         } catch (error) {
-            console.error('Error filtering chart:', error);
+            console.error('❌ Error applying chart filter:', error);
+        } finally {
+            setIsFiltering(false);
+        }
+    };
+
+    // Reset filters back to showing all data
+    // Apply client-side filtering to the analytics data
+    const applyClientSideFiltering = async (data: any, filters: ChartFilter): Promise<any> => {
+        const { filteredData } = data;
+
+        if (!filteredData || !Array.isArray(filteredData)) {
+            return data;
+        }
+
+        console.log(`📊 Filtering ${filteredData.length} data points with filters:`, filters);
+
+        let filteredRows = [...filteredData];
+
+        // Filter by indicators (dx column)
+        if (filters.indicators && filters.indicators.length > 0) {
+            filteredRows = filteredRows.filter(row => filters.indicators!.includes(row.dx));
+            console.log(`📊 Filtered by indicators: ${filteredRows.length} points remaining`);
+        }
+
+        // Filter by periods (period column)
+        if (filters.periods && filters.periods.length > 0) {
+            filteredRows = filteredRows.filter(row => filters.periods!.includes(row.period));
+            console.log(`📊 Filtered by periods: ${filteredRows.length} points remaining`);
+        }
+
+        // Filter by org units (org_unit column)
+        if (filters.orgUnits && filters.orgUnits.length > 0) {
+            filteredRows = filteredRows.filter(row => filters.orgUnits!.includes(row.org_unit));
+            console.log(`📊 Filtered by org units: ${filteredRows.length} points remaining`);
+        }
+
+        // Filter by disaggregations (category option values)
+        if (filters.disaggregations && filters.disaggregations.length > 0) {
+            const coColumnRegex = /^co_/;
+            const coValuesToKeep = new Set(filters.disaggregations);
+
+            filteredRows = filteredRows.filter(row => {
+                // Check if any co_ column contains a value that matches our filter
+                let hasMatchingDisaggregation = false;
+
+                for (const [key, value] of Object.entries(row)) {
+                    if (coColumnRegex.test(key) && typeof value === 'string' && value.length > 0) {
+                        if (coValuesToKeep.has(value)) {
+                            hasMatchingDisaggregation = true;
+                            break;
+                        }
+                    }
+                }
+
+                // If we have disaggregation filters but no matching disaggregation values found,
+                // keep rows without disaggregation (they might be "Unknown" category)
+                if (!hasMatchingDisaggregation && filters.disaggregations.length > 0) {
+                    // Check if this row has any disaggregation values
+                    const hasAnyDisaggregation = Object.keys(row).some(key =>
+                        coColumnRegex.test(key) && row[key] && String(row[key]).length > 0
+                    );
+
+                    // Keep rows without disaggregation if they exist
+                    if (!hasAnyDisaggregation) {
+                        return true;
+                    }
+                }
+
+                return hasMatchingDisaggregation;
+            });
+
+            console.log(`📊 Filtered by disaggregations: ${filteredRows.length} points remaining`);
+        }
+
+        // Return the original data but with filtered rows
+        return {
+            ...data,
+            filteredData: filteredRows,
+            data_summary: {
+                ...data.data_summary,
+                total_points: filteredRows.length,
+                filtered: true,
+                original_point_count: data.data_summary?.total_points || 0,
+                filter_applied: Object.keys(filters).filter(key => filters[key as keyof ChartFilter]?.length).join(', ')
+            }
+        };
+    };
+
+    // Generate chart option from filtered data using the same logic as structured-tools.ts
+    const generateFilteredChartOption = async (filteredData: any): Promise<any> => {
+        // Import the chart processing functions
+        const { buildEChartsOption, groupChartData } = await import('../utils/tools/metadata/structured-tools');
+
+        if (!filteredData || !filteredData.filteredData) {
+            return null;
+        }
+
+        console.log(`📊 Generating chart options from ${filteredData.filteredData.length} filtered data points`);
+
+        // Get the dimensions from the original/enhanced chart data
+        const dimensions = filteredData.dimensions || {};
+        const chartType = filteredData.chartType === 'line' || filteredData.chartType === 'bar' || filteredData.chartType === 'pie'
+            ? filteredData.chartType
+            : 'bar'; // Default fallback
+
+        // Re-group the filtered data using the same logic as in structured-tools.ts
+        const groupedData = groupChartData(filteredData.filteredData, chartType);
+
+        // Build ECharts option object - create a mock chartData structure
+        const mockChartData = {
+            filteredData: filteredData.filteredData,
+            dimensions,
+            title: filteredData.title || 'Filtered Chart',
+            chartType
+        };
+
+        const echartsOption = buildEChartsOption(mockChartData);
+
+        console.log(`📊 Generated filtered chart with ${groupedData.series?.length || 0} series`);
+
+        return echartsOption;
+    };
+
+    // Reset filters back to showing all data
+    const resetFilters = async () => {
+        if (!chartData) return;
+
+        setFilters({});
+        setIsFiltering(true);
+
+        try {
+            console.log('🔄 Resetting chart filters');
+
+            // Re-generate the original chart options
+            if (chartData.echarts_option) {
+                setEchartsOption(chartData.echarts_option);
+            }
+        } catch (error) {
+            console.error('❌ Error resetting filters:', error);
         } finally {
             setIsFiltering(false);
         }
@@ -329,6 +475,31 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                         </option>
                                     ))}
                                 </select>
+                            </div>
+                        )}
+
+                        {/* Reset Filters Button */}
+                        {(filters.indicators?.length || filters.periods?.length || filters.orgUnits?.length || filters.disaggregations?.length) && (
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'flex-end',
+                                marginBottom: '8px'
+                            }}>
+                                <button
+                                    onClick={() => resetFilters()}
+                                    disabled={isFiltering}
+                                    style={{
+                                        padding: '6px 12px',
+                                        backgroundColor: '#6c757d',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '3px',
+                                        cursor: 'pointer',
+                                        fontSize: '12px'
+                                    }}
+                                >
+                                    Reset Filters
+                                </button>
                             </div>
                         )}
                     </div>

@@ -1,19 +1,14 @@
-import {createReactAgent} from '@langchain/langgraph/prebuilt';
-import {Annotation, StateGraph, START, END} from '@langchain/langgraph/web';
+import {Annotation, END, START, StateGraph} from '@langchain/langgraph/web';
 import {AzureChatOpenAI} from '@langchain/openai';
 import {HumanMessage} from '@langchain/core/messages';
-import {tool} from '@langchain/core/tools';
 import {searchAgent} from './search-agent';
 import {crudAgent} from './crud-agent';
 import {stateGraphAgent} from './state-graph-agent';
-import {resolveResourceReference} from '../utils/tools/metadata';
 import {
-	conversationContext,
-	findRelevantContext,
 	addConversation,
 	createAnalyticsDataContext,
-	createSearchDataContext,
-	createMutationDataContext
+	createMutationDataContext,
+	createSearchDataContext
 } from '../utils/conversation-context';
 
 // Define Router State - tracks workflow context and orchestrator reference
@@ -27,18 +22,8 @@ const RouterAnnotation = Annotation.Root({
 		reducer: (left, right) => right || left,
 		default: () => ''
 	}),
-	lastRouteAction: Annotation<string>({
-		reducer: (left, right) => right || left,
-		default: () => 'none'
-	}),
 
-	// Results and processing
-	searchResult: Annotation<any>({
-		reducer: (left, right) => right || left,
-		default: () => null
-	}),
-
-	// Orchestrator reference for direct calls
+	// Orchestrator reference for direct calls and rendering
 	orchestrator: Annotation<any>({
 		reducer: (left, right) => right || left,
 		default: () => null
@@ -68,375 +53,147 @@ const model = new AzureChatOpenAI({
 	azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
 });
 
-// Router StateGraph Workflow Nodes
-async function detectWorkflowType(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
+// StateGraph Workflow Nodes
+
+// 1. LLM-based workflow classification
+async function classify_intent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
 	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
-	console.log('🔄 Router: Detecting workflow type for query:', query);
+	console.log('🤖 Router: Classifying workflow type for query:', query);
 
-	const queryLower = query.toLowerCase();
-
-	// Determine workflow type based on query analysis
-	const isAnalyticsQuery = [
-		'analyze', 'calculate', 'compute', 'aggregate', 'trend', 'compare',
-		'query', 'extract', 'retrieve', 'sum', 'average', 'min', 'max', 'total',
-		'percentage', 'rate', 'performance', 'coverage', 'insights', 'monthly',
-		'quarterly', 'yearly', 'how many', 'what is the total', 'calculations'
-	].some(keyword => queryLower.includes(keyword));
-
-	const isCRUDQuery = [
-		'create', 'add', 'new', 'make', 'build', 'update', 'change', 'modify',
-		'edit', 'revise', 'alter', 'save', 'store', 'upload', 'generate'
-	].some(keyword => queryLower.includes(keyword));
-
-	const isSearchQuery = [
-		'find', 'search', 'lookup', 'show', 'list', 'get', 'retrieve', 'display',
-		'see', 'view', 'browse', 'explore', 'what are', 'which', 'where is', 'who has',
-		'check', 'verify', 'inspect', 'examine', 'review', 'details', 'information',
-		'fetch', 'obtain', 'access', 'download', 'export'
-	].some(keyword => queryLower.includes(keyword));
-
-	let workflowType = 'unknown';
-	if (isAnalyticsQuery) workflowType = 'analytics_routing';
-	else if (isCRUDQuery) workflowType = 'crud';
-	else if (isSearchQuery) workflowType = 'direct_search';
-
-	console.log(`🔄 Router: Detected workflow type: ${workflowType}`);
+	const workflowType = await detectWorkflowTypeLLM(query);
+	console.log(`🔄 Router: Classified as "${workflowType}"`);
 
 	return {
 		workflowType,
-		originalQuery: query,
-		lastRouteAction: 'detected'
+		originalQuery: query
 	};
 }
 
-async function routeDirectSearch(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	console.log('🔍 Router: Routing to direct search processing');
-	// This will be handled by the routing tool, but we set context here
-	return {lastRouteAction: 'search'};
-}
+// 2. Direct search workflow - invoke search agent and render results
+async function invoke_search_agent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
+	console.log('🔍 Router: Invoking search agent directly');
 
-async function routeAnalytics(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	console.log('📊 Router: Routing to analytics workflow');
-	return {lastRouteAction: 'analytics'};
-}
+	try {
+		// Invoke search agent
+		const result = await searchAgent.invoke({
+			messages: [{ role: 'user', content: state.originalQuery }]
+		});
 
-async function routeCRUD(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	console.log('🔧 Router: Routing to CRUD workflow');
-	return {lastRouteAction: 'crud'};
-}
+		const responseContent = result.messages[result.messages.length - 1].content as string;
 
-async function processSearchResult(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	console.log('🔍 Router: Processing direct search result');
-
-	if (!state.searchResult) {
-		console.log('🔍 Router: No search result to render');
-		return {finalResult: {success: false, message: 'No search result available'}};
-	}
-
-	// For direct search workflows, call orchestrator to render directly
-	if (state.workflowType === 'direct_search' && state.orchestrator) {
-		console.log('🔍 Router: Calling orchestrator.requestSearchRender() for direct search');
-
+		// Parse response
+		let parsedResponse;
 		try {
-			await state.orchestrator.requestSearchRender(state.searchResult, state.originalQuery);
-			return {
-				finalResult: {
-					success: true,
-					message: 'Direct search results rendered',
-					rendered: true
-				}
-			};
-		} catch (error) {
-			console.error('🔍 Router: Failed to render search results:', error);
-			return {
-				finalResult: {
-					success: false,
-					error: `Failed to render search results: ${error.message}`
-				}
-			};
+			parsedResponse = JSON.parse(responseContent);
+		} catch (parseError) {
+			parsedResponse = { rawResponse: responseContent };
 		}
+
+		// Add to conversation context
+		if (parsedResponse.success !== false) {
+			const dataContext = createSearchDataContext(parsedResponse);
+			addConversation(state.originalQuery, 'search', parsedResponse, dataContext);
+		} else {
+			addConversation(state.originalQuery, 'search', parsedResponse);
+		}
+
+		// For direct searches, render immediately through orchestrator
+		if (state.orchestrator) {
+			console.log('🔍 Router: Calling orchestrator.requestSearchRender()');
+			await state.orchestrator.requestSearchRender(parsedResponse, state.originalQuery);
+		}
+
+		return {
+			finalResult: {
+				success: true,
+				message: 'Search results rendered',
+				rendered: true,
+				data: parsedResponse
+			}
+		};
+	} catch (error) {
+		console.error('🔍 Router: Search agent error:', error);
+		const errorResponse = {
+			success: false,
+			error: `Search failed: ${error.message}`
+		};
+		addConversation(state.originalQuery, 'search', errorResponse);
+
+		return { finalResult: errorResponse };
 	}
-
-	// Fall back to returning result normally
-	return {finalResult: state.searchResult};
 }
 
-// Factory function to create routing tools with workflow state awareness
-function createRoutingTools(orchestrator: any, workflowContext: any = {}) {
-	const routeToSearchAgent = tool(
-		async ({userQuery}: { userQuery: string }) => {
-			console.log('🔍 Router Tool: Routing to search agent, userQuery:', userQuery);
+// 3. Analytics workflow - invoke state graph agent
+async function invoke_analytics_agent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
+	console.log('📊 Router: Invoking analytics StateGraph directly');
 
-			try {
-				// Actually invoke the search agent
-				const result = await searchAgent.invoke({
-					messages: [{role: 'user', content: userQuery}]
-				});
+	try {
+		const result = await stateGraphAgent.invoke({
+			messages: [{ role: 'user', content: state.originalQuery }],
+			query: state.originalQuery,
+			step: 'classify',
+			orchestrator: state.orchestrator
+		});
 
-				const lastMessage = result.messages[result.messages.length - 1];
-				const responseContent = lastMessage.content as string;
+		// Add to conversation context
+		addConversation(state.originalQuery, 'analytics', result.finalResult);
 
-				console.log('🔍 Router Tool: Search agent response length:', responseContent.length);
+		return { finalResult: result.finalResult };
+	} catch (error) {
+		console.error('📊 Router: Analytics error:', error);
+		const errorResponse = {
+			success: false,
+			error: `Analytics failed: ${error.message}`
+		};
+		addConversation(state.originalQuery, 'analytics', errorResponse);
 
-				// Parse the response
-				let parsedResponse;
-				try {
-					parsedResponse = JSON.parse(responseContent);
-				} catch (parseError) {
-					console.warn('🔍 Router Tool: Search response not JSON, wrapping:', parseError.message);
-					parsedResponse = {rawResponse: responseContent};
-				}
-
-				// Add to conversation context
-				if (parsedResponse.success !== false) {
-					const dataContext = createSearchDataContext(parsedResponse);
-					addConversation(userQuery, 'search', parsedResponse, dataContext);
-				} else {
-					addConversation(userQuery, 'search', parsedResponse);
-				}
-
-				// For direct search workflows, immediately render through orchestrator
-				const isDirectSearch = workflowContext.workflowType === 'direct_search';
-				if (isDirectSearch && orchestrator) {
-					console.log('🔍 Router Tool: Direct search workflow detected, calling orchestrator.requestSearchRender');
-					try {
-						await orchestrator.requestSearchRender(parsedResponse, userQuery);
-						return JSON.stringify({
-							success: true,
-							routedTo: 'search',
-							workflowType: 'direct_search',
-							rendered: true,
-							message: 'Direct search results rendered'
-						});
-					} catch (renderError) {
-						console.error('🔍 Router Tool: Failed to render search results:', renderError);
-					}
-				}
-
-				// Return response for workflow processing
-				return JSON.stringify({
-					...parsedResponse,
-					routedTo: 'search',
-					workflowType: workflowContext.workflowType
-				});
-
-			} catch (error) {
-				console.error('Error routing to search agent:', error);
-				const errorResponse = {
-					success: false,
-					error: `Failed to route to search agent: ${error.message}`,
-					routedTo: "search",
-					originalQuery: userQuery
-				};
-				addConversation(userQuery, 'search', errorResponse);
-				return JSON.stringify(errorResponse);
-			}
-		},
-		{
-			name: "route_to_search_agent",
-			description: "Route query to the search agent for finding, locating, and retrieving existing DHIS2 metadata resources. Handles direct search workflow rendering automatically.",
-			schema: JSON.parse(`{
-            "type": "object",
-            "properties": {
-                "userQuery": {
-                    "type": "string",
-                    "description": "The complete user query to route to search agent"
-                }
-            },
-            "required": ["userQuery"]
-        }`)
-		}
-	);
-
-	const routeToCRUDAgent = tool(
-		async ({userQuery}: { userQuery: string }) => {
-			try {
-				// Actually invoke the CRUD agent
-				const result = await crudAgent.invoke({
-					messages: [{role: 'user', content: userQuery}]
-				});
-
-				const lastMessage = result.messages[result.messages.length - 1];
-				const responseContent = lastMessage.content as string;
-
-				// Parse and add to conversation context
-				try {
-					const parsedResponse = JSON.parse(responseContent);
-					if (parsedResponse.success !== false) {
-						// Determine operation type
-						const operationType: 'creation' | 'update' =
-							userQuery.toLowerCase().includes('create') || userQuery.toLowerCase().includes('add') ||
-							userQuery.toLowerCase().includes('new') || userQuery.toLowerCase().includes('make')
-								? 'creation' : 'update';
-
-						const dataContext = createMutationDataContext(operationType, parsedResponse);
-						addConversation(userQuery, 'crud', parsedResponse, dataContext);
-					} else {
-						addConversation(userQuery, 'crud', parsedResponse);
-					}
-				} catch (parseError) {
-					// If it's not JSON, still add to conversation
-					addConversation(userQuery, 'crud', {rawResponse: responseContent});
-				}
-
-				return responseContent;
-			} catch (error) {
-				console.error('Error routing to CRUD agent:', error);
-				const errorResponse = {
-					success: false,
-					error: `Failed to route to CRUD agent: ${error.message}`,
-					routedTo: "crud",
-					originalQuery: userQuery
-				};
-				addConversation(userQuery, 'crud', errorResponse);
-				return JSON.stringify(errorResponse);
-			}
-		},
-		{
-			name: "route_to_crud_agent",
-			description: "Route query to the CRUD agent for creating, updating, and modifying DHIS2 metadata resources. Automatically adds creation/update results to conversation context for follow-up questions.",
-			schema: JSON.parse(`{
-            "type": "object",
-            "properties": {
-                "userQuery": {
-                    "type": "string",
-                    "description": "The complete user query to route to CRUD agent"
-                }
-            },
-            "required": ["userQuery"]
-        }`)
-		}
-	);
-
-	const routeToAnalyticsAgent = tool(
-		async ({userQuery}: { userQuery: string }) => {
-			try {
-				console.log('🔍 Routing query to analytics StateGraph:', userQuery);
-
-				// Initialize state with user query
-				const initialState: any = {
-					messages: [{role: 'user', content: userQuery}],
-					query: userQuery,  // Explicitly set the query for StateGraph processing
-					step: 'classify'   // Set initial step
-				};
-
-				// Actually invoke the StateGraph analytics agent with proper initial state
-				const result = await stateGraphAgent.invoke({
-					...initialState,
-					orchestrator: orchestrator // Pass orchestrator reference for selection interrupts
-				});
-
-				console.log('📊 StateGraph result:', result);
-				console.log('📊 Checking for finalResult:', result.finalResult);
-				console.log('📊 finalResult exists:', !!result.finalResult);
-
-				// StateGraph returns final state with finalResult directly
-				if (result.finalResult) {
-					const parsedResponse = result.finalResult;
-					console.log('📊 Extracting finalResult:', parsedResponse);
-
-					// Add to conversation context
-					if (parsedResponse.success !== false) {
-						// Analytics responses may include chart data - add to memory
-						const dataContext = createAnalyticsDataContext(parsedResponse);
-						addConversation(userQuery, 'analytics', parsedResponse, dataContext);
-					} else {
-						addConversation(userQuery, 'analytics', parsedResponse);
-					}
-
-					return JSON.stringify(parsedResponse);
-				} else if (result.error) {
-					console.log('📊 StateGraph returned error:', result.error);
-					const errorResponse = {
-						success: false,
-						error: result.error,
-						routedTo: "state_graph_analytics",
-						originalQuery: userQuery
-					};
-					addConversation(userQuery, 'analytics', errorResponse);
-					return JSON.stringify(errorResponse);
-				} else {
-					console.log('📊 No finalResult returned from StateGraph');
-					const errorResponse = {
-						success: false,
-						message: 'No result returned from analytics StateGraph',
-						routedTo: "state_graph_analytics",
-						originalQuery: userQuery,
-						stateKeys: Object.keys(result),
-						stateDump: result
-					};
-					addConversation(userQuery, 'analytics', errorResponse);
-					return JSON.stringify(errorResponse);
-				}
-			} catch (error) {
-				console.error('Error routing to analytics StateGraph:', error);
-				const errorResponse = {
-					success: false,
-					error: `Failed to route to analytics StateGraph: ${error.message}`,
-					routedTo: "state_graph_analytics",
-					originalQuery: userQuery
-				};
-				addConversation(userQuery, 'analytics', errorResponse);
-				return JSON.stringify(errorResponse);
-			}
-		},
-		{
-			name: "route_to_analytics_agent",
-			description: "Route query to the analytics agent for data analysis, querying analytics endpoints, performing calculations, and generating insights from DHIS2 data. Automatically adds analytics results and chart data to conversation context for follow-up questions.",
-			schema: JSON.parse(`{
-              "type": "object",
-              "properties": {
-                  "userQuery": {
-                      "type": "string",
-                      "description": "The complete user query to route to analytics agent"
-                  }
-              },
-              "required": ["userQuery"]
-          }`)
-		}
-	);
-
-	// Return all tools from factory
-	return {
-		routeToSearchAgent,
-		routeToCRUDAgent,
-		routeToAnalyticsAgent,
-		resolveResourceReference
-	};
+		return { finalResult: errorResponse };
+	}
 }
 
-// Create StateGraph workflow for state-aware routing
-const routerWorkflow = new StateGraph(RouterAnnotation);
+// 4. CRUD workflow - invoke CRUD agent
+async function invoke_crud_agent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
+	console.log('🔧 Router: Invoking CRUD agent directly');
 
-// Add nodes
-routerWorkflow.addNode('detect_workflow_type', detectWorkflowType);
-routerWorkflow.addNode('route_direct_search', routeDirectSearch);
-routerWorkflow.addNode('route_analytics', routeAnalytics);
-routerWorkflow.addNode('route_crud', routeCRUD);
-routerWorkflow.addNode('process_search_result', processSearchResult);
+	try {
+		const result = await crudAgent.invoke({
+			messages: [{ role: 'user', content: state.originalQuery }]
+		});
 
-// Add conditional edges based on workflow type
-// @ts-ignore
-routerWorkflow.addEdge(START, 'detect_workflow_type');
+		const responseContent = result.messages[result.messages.length - 1].content as string;
 
-// @ts-ignore
-routerWorkflow.addConditionalEdges('detect_workflow_type', (state) => {
-	if (state.workflowType === 'direct_search') return 'route_direct_search';
-	if (state.workflowType === 'analytics_routing') return 'route_analytics';
-	if (state.workflowType === 'crud') return 'route_crud';
-	return END;
-});
+		// Parse response
+		let parsedResponse;
+		try {
+			parsedResponse = JSON.parse(responseContent);
+		} catch (parseError) {
+			parsedResponse = { rawResponse: responseContent };
+		}
 
-// After routing actions, process search results for direct searches
-// @ts-ignore
-routerWorkflow.addEdge('route_direct_search', 'process_search_result');
+		// Add to conversation context
+		if (parsedResponse.success !== false) {
+			const operationType: 'creation' | 'update' =
+				state.originalQuery.toLowerCase().includes('create') || state.originalQuery.toLowerCase().includes('add')
+					? 'creation' : 'update';
 
-// Terminal nodes (route_analytics, route_crud, process_search_result) don't need edges - they end the workflow
+			const dataContext = createMutationDataContext(operationType, parsedResponse);
+			addConversation(state.originalQuery, 'crud', parsedResponse, dataContext);
+		} else {
+			addConversation(state.originalQuery, 'crud', parsedResponse);
+		}
 
-// Compile the router StateGraph
-const stateRouterGraph = routerWorkflow.compile();
+		return { finalResult: parsedResponse };
+	} catch (error) {
+		console.error('🔧 Router: CRUD error:', error);
+		const errorResponse = {
+			success: false,
+			error: `CRUD operation failed: ${error.message}`
+		};
+		addConversation(state.originalQuery, 'crud', errorResponse);
 
-// Legacy escaped function - no longer needed since we use StateGraph
+		return { finalResult: errorResponse };
+	}
+}
 
 // LLM-based workflow type classification
 async function detectWorkflowTypeLLM(query: string): Promise<string> {
@@ -456,24 +213,20 @@ Query: "${query}"
 Category:`;
 
 		const result = await model.invoke([new HumanMessage(classificationPrompt)]);
-		const category = result.content.trim().toLowerCase();
+		const category = (result.content as string).trim().toLowerCase();
 
 		const classifiedType = category.includes('search') ? 'direct_search' :
 		                     category.includes('analytics') ? 'analytics_routing' :
 		                     category.includes('crud') ? 'crud' : 'unknown';
 
-		console.log(`🤖 Router: LLM classified "${query}" as "${classifiedType}"`);
-
 		return classifiedType;
 	} catch (error) {
-		console.error('🤖 Router: LLM classification failed:', error);
-		// Fallback to keyword-based detection
+		console.error('🤖 Router: LLM classification failed, using fallback');
+		// Simple keyword fallback
 		const queryLower = query.toLowerCase();
-		const isSearch = ['find', 'search', 'lookup', 'show', 'list', 'get', 'retrieve', 'display',
-		                  'see', 'view', 'browse', 'explore', 'what are', 'which', 'where is'].some(k => queryLower.includes(k));
-		const isAnalytics = ['analyze', 'calculate', 'compute', 'sum', 'average', 'min', 'max', 'total',
-		                    'percentage', 'rate', 'trend', 'compare', 'query', 'extract'].some(k => queryLower.includes(k));
-		const isCRUD = ['create', 'add', 'new', 'make', 'update', 'change', 'modify', 'edit', 'delete'].some(k => queryLower.includes(k));
+		const isSearch = ['find', 'search', 'show', 'list', 'get', 'lookup'].some(k => queryLower.includes(k));
+		const isAnalytics = ['analyze', 'calculate', 'sum', 'total', 'trend'].some(k => queryLower.includes(k));
+		const isCRUD = ['create', 'add', 'update', 'delete', 'modify'].some(k => queryLower.includes(k));
 
 		if (isAnalytics) return 'analytics_routing';
 		if (isCRUD) return 'crud';
@@ -482,51 +235,60 @@ Category:`;
 	}
 }
 
-// Enhanced context-aware router agent with LLM-based workflow type detection
+// Create and compile StateGraph workflow
+const routerWorkflow = new StateGraph(RouterAnnotation);
+
+// Add nodes
+routerWorkflow.addNode('classify_intent', classify_intent);
+routerWorkflow.addNode('invoke_search_agent', invoke_search_agent);
+routerWorkflow.addNode('invoke_analytics_agent', invoke_analytics_agent);
+routerWorkflow.addNode('invoke_crud_agent', invoke_crud_agent);
+
+// Add edges
+routerWorkflow.addEdge(START, 'classify_intent');
+
+// Conditional routing based on workflow type
+// @ts-ignore
+routerWorkflow.addConditionalEdges('classify_intent', (state) => {
+	if (state.workflowType === 'direct_search') return 'invoke_search_agent';
+	if (state.workflowType === 'analytics_routing') return 'invoke_analytics_agent';
+	if (state.workflowType === 'crud') return 'invoke_crud_agent';
+	return END;
+});
+
+// Terminal nodes don't need additional edges
+routerWorkflow.addEdge('invoke_search_agent', END);
+routerWorkflow.addEdge('invoke_analytics_agent', END);
+routerWorkflow.addEdge('invoke_crud_agent', END);
+
+// Compile the workflow
+const routerStateGraph = routerWorkflow.compile();
+
+// StateGraph-based router agent (no LLM routing)
 export function createContextRouterAgent(orchestrator: any) {
-	// Override invoke to add LLM-based workflow detection
-	const enhancedAgent = {
+	return {
 		invoke: async (input: any) => {
-			console.log('🔄 Enhanced Router Agent called:', input);
+			console.log('🔄 Router StateGraph: Processing query');
 
-			// Detect workflow type using LLM
-			const query = input.messages?.find((m: any) => m.role === 'user')?.content || '';
-			const workflowType = await detectWorkflowTypeLLM(query);
+			const initialState: Partial<typeof RouterAnnotation.State> = {
+				messages: input.messages || [],
+				orchestrator: orchestrator,
+				workflowType: 'unknown',
+				originalQuery: '',
+			};
 
-			console.log(`🔄 Router: LLM detected workflow type "${workflowType}" for query: ${query}`);
+			// Execute StateGraph workflow
+			const result = await routerStateGraph.invoke(initialState);
 
-			// Create tools with current workflow context
-			const tools = createRoutingTools(orchestrator, {workflowType});
-
-			// Create a fresh agent instance with the right tools for this workflow
-			const agentInstance = createReactAgent({
-				llm: model,
-				tools: [tools.routeToSearchAgent, tools.routeToCRUDAgent, tools.routeToAnalyticsAgent, tools.resolveResourceReference],
-				prompt: `
-    You are a DHIS2 intelligent routing agent. Route queries to specialized agents.
-
-    WORKFLOW TYPE: "${workflowType}"
-    Query: "${query}"
-
-    For search queries (find, list, show, etc.):
-    - Call route_to_search_agent
-
-    For analytics queries (analyze, calculate, etc.):
-    - Call route_to_analytics_agent
-
-    For CRUD queries (create, update, etc.):
-    - Call route_to_crud_agent
-
-    Return only JSON results from tools.`,
-			});
-
-			// Call the fresh agent instance
-			const result = await agentInstance.invoke(input);
-			console.log('🔄 Router: Result from routing:', result);
-
-			return result;
+			// Format for compatibility with existing interface
+			return {
+				messages: [{
+					content: JSON.stringify(result.finalResult),
+					name: undefined,
+					additional_kwargs: {},
+					response_metadata: {}
+				}]
+			};
 		}
 	};
-
-	return enhancedAgent;
 }

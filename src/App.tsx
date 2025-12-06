@@ -185,11 +185,18 @@ const MyApp: FC = () => {
 
             // Add assistant response to conversation
             if (result?.success !== false) {
-                workflowOrchestrator.addAssistantMessage(
-                    result.message || 'Operation completed successfully',
-                    'response',
-                    result
-                );
+                // Check if this is a direct search result (not embedded in analytics)
+                if (result.routedTo === 'search') {
+                    // Use specialized search result rendering for direct search queries
+                    workflowOrchestrator.requestSearchRender(result, queryText);
+                } else {
+                    // Use generic assistant message for other result types
+                    workflowOrchestrator.addAssistantMessage(
+                        result.message || 'Operation completed successfully',
+                        'response',
+                        result
+                    );
+                }
             } else {
                 workflowOrchestrator.addAssistantMessage(
                     result.error || 'Operation failed',

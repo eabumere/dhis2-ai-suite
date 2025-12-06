@@ -393,6 +393,58 @@ class WorkflowOrchestrator {
         return message;
     }
 
+    // Specialized method for rendering direct search results in conversation
+    requestSearchRender(searchResult: any, originalQuery: string) {
+        console.log('🔍 Rendering direct search results:', searchResult);
+
+        // Check if we have search results to render
+        if (!searchResult || (!searchResult.results && !searchResult.data)) {
+            // No search data, just add a simple message
+            return this.addAssistantMessage(
+                searchResult?.message || 'Search completed',
+                'response',
+                searchResult
+            );
+        }
+
+        // Create a rich search result message
+        const totalResults = this.calculateTotalResults(searchResult);
+        const content = `Found ${totalResults} metadata ${totalResults === 1 ? 'item' : 'items'} matching "${originalQuery}"`;
+
+        // Add the search result as a specialized message type
+        const message = this.addAssistantMessage(
+            content,
+            'response',
+            {
+                ...searchResult,
+                displayType: 'search_results', // Flag for specialized rendering
+                originalQuery,
+                totalResults
+            }
+        );
+
+        return message;
+    }
+
+    // Calculate total results across all result categories
+    private calculateTotalResults(searchResult: any): number {
+        if (searchResult.count !== undefined) {
+            return searchResult.count;
+        }
+
+        if (searchResult.results) {
+            return Object.values(searchResult.results).reduce((total: number, items: any) => {
+                return total + (Array.isArray(items) ? items.length : 0);
+            }, 0);
+        }
+
+        if (searchResult.data && Array.isArray(searchResult.data)) {
+            return searchResult.data.length;
+        }
+
+        return 0;
+    }
+
     // Load conversation history from conversation context
     loadConversationFromStorage() {
         try {

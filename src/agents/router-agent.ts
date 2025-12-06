@@ -1,15 +1,10 @@
-import {Annotation, END, START, StateGraph} from '@langchain/langgraph/web';
-import {AzureChatOpenAI} from '@langchain/openai';
-import {HumanMessage} from '@langchain/core/messages';
-import {searchAgent} from './search-agent';
-import {crudAgent} from './crud-agent';
-import {stateGraphAgent} from './state-graph-agent';
-import {
-	addConversation,
-	createAnalyticsDataContext,
-	createMutationDataContext,
-	createSearchDataContext
-} from '../utils/conversation-context';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
+import { AzureChatOpenAI } from '@langchain/openai';
+import { HumanMessage } from '@langchain/core/messages';
+import { searchAgent } from './search-agent';
+import { crudAgent } from './crud-agent';
+import { analyticsGraphAgent } from './analytics-graph-agent';
+import { addConversation, createMutationDataContext, createSearchDataContext } from '../utils/conversation-context';
 
 // Define Router State - tracks workflow context and orchestrator reference
 const RouterAnnotation = Annotation.Root({
@@ -128,7 +123,7 @@ async function invoke_analytics_agent(state: typeof RouterAnnotation.State): Pro
 	console.log('📊 Router: Invoking analytics StateGraph directly');
 
 	try {
-		const result = await stateGraphAgent.invoke({
+		const result = await analyticsGraphAgent.invoke({
 			messages: [{ role: 'user', content: state.originalQuery }],
 			query: state.originalQuery,
 			step: 'classify',
@@ -163,7 +158,7 @@ async function invoke_crud_agent(state: typeof RouterAnnotation.State): Promise<
 		const responseContent = result.messages[result.messages.length - 1].content as string;
 
 		// Parse response
-		let parsedResponse;
+		let parsedResponse: { success?: any; rawResponse?: string; };
 		try {
 			parsedResponse = JSON.parse(responseContent);
 		} catch (parseError) {
@@ -215,11 +210,9 @@ Category:`;
 		const result = await model.invoke([new HumanMessage(classificationPrompt)]);
 		const category = (result.content as string).trim().toLowerCase();
 
-		const classifiedType = category.includes('search') ? 'direct_search' :
-		                     category.includes('analytics') ? 'analytics_routing' :
-		                     category.includes('crud') ? 'crud' : 'unknown';
-
-		return classifiedType;
+		return category.includes('search') ? 'direct_search' :
+			category.includes('analytics') ? 'analytics_routing' :
+				category.includes('crud') ? 'crud' : 'unknown';
 	} catch (error) {
 		console.error('🤖 Router: LLM classification failed, using fallback');
 		// Simple keyword fallback
@@ -245,6 +238,7 @@ routerWorkflow.addNode('invoke_analytics_agent', invoke_analytics_agent);
 routerWorkflow.addNode('invoke_crud_agent', invoke_crud_agent);
 
 // Add edges
+// @ts-ignore
 routerWorkflow.addEdge(START, 'classify_intent');
 
 // Conditional routing based on workflow type
@@ -257,8 +251,11 @@ routerWorkflow.addConditionalEdges('classify_intent', (state) => {
 });
 
 // Terminal nodes don't need additional edges
+// @ts-ignore
 routerWorkflow.addEdge('invoke_search_agent', END);
+// @ts-ignore
 routerWorkflow.addEdge('invoke_analytics_agent', END);
+// @ts-ignore
 routerWorkflow.addEdge('invoke_crud_agent', END);
 
 // Compile the workflow

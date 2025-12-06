@@ -1,24 +1,24 @@
 // ========== IMPORTS ==========
 
 // External libraries (alphabetically)
-import { tool } from '@langchain/core/tools';
-import { z } from 'zod';
-import { AzureChatOpenAI } from '@langchain/openai';
+import {tool} from '@langchain/core/tools';
+import {z} from 'zod';
+import {AzureChatOpenAI} from '@langchain/openai';
 
 // Local imports (alphabetically by module)
 import {
-    addResourceToContext,
-    createDhis2Metadata,
-    createDhis2MetadataAggregated,
-    createDhis2MetadataDirect,
-    generateDhis2Code,
-    generateDhis2Id,
-    searchDhis2Metadata
+	addResourceToContext,
+	createDhis2Metadata,
+	createDhis2MetadataAggregated,
+	createDhis2MetadataDirect,
+	generateDhis2Code,
+	generateDhis2Id,
+	searchDhis2Metadata
 } from './helpers';
-import { createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool } from './base-tool';
+import {createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool} from './base-tool';
 
 // Schemas
-import { Dhis2Schemas } from './schemas';
+import {Dhis2Schemas} from './schemas';
 
 // =============================================================================
 // ECHARTS VISUALIZATION TOOLS - NEW ANALYTICS CAPABILITIES
@@ -1680,14 +1680,15 @@ export const extractOrgUnitKeywordsLLM = tool(
             console.log('🧠 LLM extraction called for:', input.query);
 
             // Initialize Azure OpenAI LLM
+	        const env = (import.meta as any).env;
             const llm = new AzureChatOpenAI({
-                model: import.meta.env.DHIS2_OPENAI_MODEL || 'gpt-4',
+                model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
                 temperature: 0.1, // Low temperature for consistent extraction
                 maxTokens: 100,   // Limit output for focused responses
-                azureOpenAIApiKey: import.meta.env.DHIS2_AZURE_KEY,
-                azureOpenAIEndpoint: import.meta.env.DHIS2_AZURE_ENDPOINT,
-                azureOpenAIApiDeploymentName: import.meta.env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-                azureOpenAIApiVersion: import.meta.env.DHIS2_AZURE_API_VERSION,
+                azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
+                azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
+                azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+                azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
             });
 
             // Create prompt for organization unit extraction
@@ -1725,7 +1726,7 @@ Return ONLY a JSON array of unique location strings: ["location1", "location2", 
             console.log('🧠 LLM response:', llmResponse.content);
 
             // Parse LLM response - handle various formats
-            const content = llmResponse.content.trim();
+            const content = (llmResponse.content as string).trim();
             let keywordCandidates: string[];
 
             try {
@@ -1741,10 +1742,9 @@ Return ONLY a JSON array of unique location strings: ["location1", "location2", 
                 // Try to extract array-like content between brackets
                 const arrayMatch = content.match(/\[([^\]]*)\]/);
                 if (arrayMatch) {
-                    const items = arrayMatch[1].split(',')
-                        .map(item => item.replace(/['"]/g, '').trim())
-                        .filter(item => item.length > 0);
-                    keywordCandidates = items;
+	                keywordCandidates = arrayMatch[1].split(',')
+	                    .map(item => item.replace(/['"]/g, '').trim())
+	                    .filter(item => item.length > 0);
                 } else {
                     keywordCandidates = [];
                 }
@@ -1762,7 +1762,7 @@ Return ONLY a JSON array of unique location strings: ["location1", "location2", 
             return JSON.stringify({
                 keywordCandidates,
                 method: 'llm_extraction',
-                llmModel: llm.modelName,
+                llmModel: (llm as any).modelName,
                 query: input.query,
                 context: input.context,
                 confidence: keywordCandidates.length > 0 ? 'high' : 'low'

@@ -1,16 +1,16 @@
-import {Annotation, END, START, StateGraph} from '@langchain/langgraph/web';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 
 // Import analytics tools
-import {buildAnalyticsChart, queryAnalytics,} from '../utils/tools/metadata';
+import { buildAnalyticsChart, queryAnalytics } from '../utils/tools/metadata';
 
 // Import LLM-based org unit keyword extraction
 import { extractOrgUnitKeywordsLLM } from '../utils/tools/metadata';
 
 // Import 2-level search function
-import {searchDhis2Metadata} from '../utils/tools/metadata/helpers';
+import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 
 // Import conversation context
-import {addConversation} from '../utils/conversation-context';
+import { addConversation } from '../utils/conversation-context';
 
 // Define the state using Annotation API (as per LangGraph official docs)
 const GraphAnnotation = Annotation.Root({
@@ -813,7 +813,7 @@ function extractOrgUnitKeywords(query: string): string[] {
 
 	// Extract using patterns
 	orgUnitPatterns.forEach(pattern => {
-		let match;
+		let match: any;
 		while ((match = pattern.exec(queryLower)) !== null) {
 			const extracted = match[1].trim();
 			if (extracted.length > 2) { // Ignore very short matches
@@ -875,4 +875,4 @@ workflow.addEdge('build_chart', END);
 // Compile the workflow
 const stateGraphAgent = workflow.compile();
 
-export {stateGraphAgent, GraphAnnotation};
+export { stateGraphAgent as analyticsGraphAgent, GraphAnnotation };

@@ -3,7 +3,6 @@ import i18n from '@dhis2/d2-i18n'
 import React, { FC, useEffect, useState, useRef } from 'react'
 import classes from './App.module.css'
 import { DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
-import AnalyticsChart from './components/AnalyticsChart';
 import MetadataSelector, { MetadataOption } from './components/MetadataSelector';
 
 import MessageContainer from './components/MessageContainer';

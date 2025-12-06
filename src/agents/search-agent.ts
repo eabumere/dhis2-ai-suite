@@ -69,10 +69,10 @@ const model = new AzureChatOpenAI({
     azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
 });
 
-// Create the search agent with only metadata search and retrieval tools
+// Create the search agent with comprehensive metadata search and retrieval tools
 export const searchAgent = createReactAgent({
   llm: model,
-  tools: [
+  tools: [ // ALL search and Get-by-ID tools for comprehensive DHIS2 metadata coverage
     // Core Search Tools (10 essential tools) - Limited for better LLM performance
     searchDhis2DataElements,
     searchDhis2Indicators,

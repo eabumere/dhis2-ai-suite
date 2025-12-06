@@ -98,13 +98,9 @@ async function invoke_search_agent(state: typeof RouterAnnotation.State): Promis
 			await state.orchestrator.requestSearchRender(parsedResponse, state.originalQuery);
 		}
 
+		// Return the search results directly without wrapping - let orchestrator handle rendering
 		return {
-			finalResult: {
-				success: true,
-				message: 'Search results rendered',
-				rendered: true,
-				data: parsedResponse
-			}
+			finalResult: parsedResponse  // Pass search results directly
 		};
 	} catch (error) {
 		console.error('🔍 Router: Search agent error:', error);

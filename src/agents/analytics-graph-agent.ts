@@ -1,10 +1,10 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 
 // Import analytics tools
-import { buildAnalyticsChart, queryAnalytics } from '../utils/tools/metadata';
+import { buildAnalyticsChart, getDataElements, queryAnalytics } from '../utils/tools/metadata';
 
 // Import LLM-based org unit keyword extraction
-import { extractOrgUnitKeywordsLLM } from '../utils/tools/metadata';
+import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM } from '../utils/tools/metadata';
 
 // Import 2-level search function
 import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
@@ -41,6 +41,10 @@ const GraphAnnotation = Annotation.Root({
 		default: () => null,
 	}),
 	orgUnitsMetadata: Annotation<any>({
+		reducer: (left, right) => right,
+		default: () => null,
+	}),
+	disaggregationsMetadata: Annotation<any>({
 		reducer: (left, right) => right,
 		default: () => null,
 	}),
@@ -319,27 +323,70 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 			orgUnitIds.push(...state.orgUnitsMetadata.suggestions.map((suggestion: any) => suggestion.id));
 		}
 
-		console.log('📊 Using org units for query:', orgUnitIds);
+		// Extract formatted disaggregation dimension strings from resolved metadata
+		const disaggregationDimensions: string[] = [];
+		if (state.disaggregationsMetadata?.suggestions?.length > 0) {
+			disaggregationDimensions.push(...state.disaggregationsMetadata.suggestions.map((suggestion: any) => suggestion.formattedDimension));
+		}
 
-		// Use the first suggestion for now (simplified approach)
-		const suggestion = state.metadata.suggestions[0];
-		const isIndicator = suggestion.type === 'indicator';
+		console.log('📊 Using org units for query:', orgUnitIds);
+		console.log('📊 Using disaggregation dimensions for query:', disaggregationDimensions);
+
+		// Group suggestions by type to properly handle both indicators and dataElements
+		const groupedSuggestions = {
+			indicators: state.metadata.suggestions.filter((s: any) => s.type === 'indicator').map((s: any) => s.id),
+			dataElements: state.metadata.suggestions.filter((s: any) => s.type === 'dataElement').map((s: any) => s.id)
+		};
+
+		console.log('📊 Grouped suggestions:', groupedSuggestions);
+
+		// CRITICAL FIX: Split indicators and dataElements into separate arrays
+		// The analytics API requires separate handling for indicators vs dataElements
+		const indicators = groupedSuggestions.indicators;
+		const dataElements = groupedSuggestions.dataElements;
+
+		const hasIndicators = indicators.length > 0;
+		const hasDataElements = dataElements.length > 0;
+
+		// Validate we have something to query
+		if (!hasIndicators && !hasDataElements) {
+			return {
+				step: 'completed',
+				finalResult: {
+					success: false,
+					message: 'No valid indicators or dataElements found for analytics query',
+					data: state.metadata,
+					type: 'analytics'
+				}
+			};
+		}
+
+		// Determine primary type and include coc dimension when using dataElements
+		const primaryType = hasIndicators ? 'indicator' : 'dataElement';
+		const includeCocDimension = hasDataElements && !hasIndicators; // Add COC for dataElement-only queries
+
+		console.log(`📊 Query setup - Indicators: ${indicators.length}, DataElements: ${dataElements.length}, Primary: ${primaryType}, COC dimension: ${includeCocDimension}`);
+
+		// OPTION A: Merge dataElements into indicators since DHIS2 dx dimension accepts mixed ID types
+		const dxDimensionIds = [...indicators, ...dataElements];
 
 		const result = await queryAnalytics.invoke({
-			indicators: isIndicator ? [suggestion.id] : [],
-			doc_type: isIndicator ? 'indicator' : 'dataElement',
+			indicators: dxDimensionIds,     // All IDs (indicators + dataElements) go to dx dimension
+			doc_type: primaryType,
 			periods: ['2024'], // Default
 			org_units: orgUnitIds, // Now using resolved organisation units
-			disaggregations: []
+			disaggregations: disaggregationDimensions, // Now using resolved disaggregation dimensions
+			include_coc_dimension: includeCocDimension // Enable COC dimension for dataElement queries
 		});
 
 		const data = JSON.parse(result);
 		console.log('📊 Data query completed:', data);
 
-		// Add org units metadata to conversation context
+		// Add all metadata to conversation context
 		addConversation(state.query, 'analytics', {
 			...state.metadata,
 			orgUnitsMetadata: state.orgUnitsMetadata,
+			disaggregationsMetadata: state.disaggregationsMetadata,
 			queryData: data
 		});
 
@@ -352,6 +399,7 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 				data: {
 					metadata: state.metadata,
 					orgUnitsMetadata: state.orgUnitsMetadata,
+					disaggregationsMetadata: state.disaggregationsMetadata,
 					queryData: data
 				},
 				type: 'analytics'
@@ -367,7 +415,8 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 				error: error.message,
 				data: {
 					metadata: state.metadata,
-					orgUnitsMetadata: state.orgUnitsMetadata
+					orgUnitsMetadata: state.orgUnitsMetadata,
+					disaggregationsMetadata: state.disaggregationsMetadata
 				},
 				type: 'analytics'
 			}
@@ -761,6 +810,288 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 	}
 }
 
+// New disaggregation resolution function
+async function searchDisaggregations(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+	try {
+		console.log('🔢 Searching for disaggregations in query using LLM extraction');
+
+		// Extract available categories directly from dataElements categoryCombo (no extra API calls needed)
+		let availableCategories: Array<{name: string, id: string}> = [];
+
+		// Check if we have dataElements in metadata
+		if (state.metadata?.suggestions?.some((s: any) => s.type === 'dataElement')) {
+			const dataElementIds = state.metadata.suggestions
+				.filter((s: any) => s.type === 'dataElement')
+				.map((s: any) => s.id);
+
+			// Fetch dataElements with category structure (this contains full categoryCombo)
+			try {
+				const toolResult = await getDataElements.invoke({
+					filters: { id: `in:[${dataElementIds.join(',')}]` }
+				});
+				const dataElementsWithCategories = JSON.parse(toolResult as string);
+
+				// Format: {"dataElements": [{"categoryCombo": {"categories": [{"name":"","id":"","categoryOptions":[...]}]}}]}
+				const categoryMap = new Map<string, {name: string, categoryOptions: any[]}>();
+
+				dataElementsWithCategories.dataElements?.forEach((de: any) => {
+					de.categoryCombo?.categories?.forEach((cat: any) => {
+						// Keep full category info including categoryOptions for dimension generation
+						if (!categoryMap.has(cat.id)) {
+							categoryMap.set(cat.id, {
+								name: cat.name,
+								categoryOptions: cat.categoryOptions || []
+							});
+						}
+					});
+				});
+
+				// Convert to simple format for LLM filtering
+				availableCategories = Array.from(categoryMap.entries()).map(([id, {name}]) => ({ id, name }));
+				console.log('🔢 Available categories from dataElements:', availableCategories);
+
+				// Store full category details for later dimension generation
+				// @ts-ignore - Adding non-property to state
+				state.fullCategoryDetails = categoryMap;
+
+			} catch (dataElementError) {
+				console.warn('🔢 Failed to fetch dataElement categories:', dataElementError.message);
+				availableCategories = [];
+			}
+		}
+
+		// Use LLM to filter categories for disaggregation
+		const llmResult = await filterCategoriesForDisaggregationLLM.invoke({
+			query: state.query,
+			availableCategories
+		});
+
+		const llmResponse = JSON.parse(llmResult as string);
+		console.log('🔢 LLM category filtering result:', llmResponse);
+
+		// Extract selected categories from LLM response
+		const selectedCategories = llmResponse.selectedCategories || [];
+		console.log('🔢 Selected categories from LLM:', selectedCategories);
+
+		const hasAvailableCategories = availableCategories.length > 0;
+		const hasSelectedCategories = selectedCategories.length > 0;
+
+		if (!hasAvailableCategories || !hasSelectedCategories) {
+			console.log('🔢 No dataElements or no disaggregation categories selected - proceeding without disaggregation');
+
+			// No disaggregations found or no dataElements - proceed to query data
+			const noDisaggMetadata = {
+				status: 'none_found',
+				suggestions: [],
+				query: state.query,
+				llmResponse: llmResponse,
+				availableCategories: availableCategories
+			};
+
+			return {
+				disaggregationsMetadata: noDisaggMetadata,
+				step: 'query_data'
+			};
+		}
+
+		// Build category dimension suggestions from selected categories
+		// Use already-available fullCategoryDetails instead of additional API calls
+		const suggestions: any[] = [];
+
+		// @ts-ignore - Access the stored full category details
+		const fullCategoryDetails = state.fullCategoryDetails || new Map();
+
+		for (const selectedCategory of selectedCategories) {
+			// Get full category info from the already-fetched data
+			const fullCategoryInfo = fullCategoryDetails.get(selectedCategory.id);
+			if (!fullCategoryInfo) continue;
+
+			const { name: categoryName, categoryOptions: options } = fullCategoryInfo;
+
+			// Create dimension suggestion with category_id and all option_ids
+			const optionIds = options.map((opt: any) => opt.id).join(';');
+			suggestions.push({
+				name: `Disaggregate by ${categoryName}`,
+				id: `dimension_${selectedCategory.id}`, // Composite ID for the category dimension
+				categoryId: selectedCategory.id, // Actual DHIS2 category ID
+				categoryName: categoryName,
+				optionIds: optionIds,
+				optionCount: options.length,
+				type: 'categoryDimension',
+				formattedDimension: `${selectedCategory.id}:${optionIds}`
+			});
+		}
+
+		console.log(`🔢 Generated ${suggestions.length} category dimension suggestions`);
+
+		// Determine status based on results
+		const disaggregationsMetadata = {
+			status: suggestions.length > 3 ? 'multiple_matches' : // Allow more for disagg since they can be combined
+				suggestions.length === 1 ? 'auto_selected' : 'no_match',
+			suggestions,
+			query: state.query,
+			rawSearchResults: suggestions, // Use actual generated suggestions
+			selectedCategories: selectedCategories,
+			llmResponse: llmResponse
+		};
+
+		console.log('🔢 Disaggregations metadata:', disaggregationsMetadata);
+
+		const hasResults = suggestions.length > 0;
+		const autoSelected = disaggregationsMetadata.status === 'auto_selected';
+		const multipleMatches = disaggregationsMetadata.status === 'multiple_matches';
+
+		if (!hasResults) {
+			// No disaggregation matches found
+			console.log('🔢 No category option combo matches found');
+
+			return {
+				disaggregationsMetadata: {
+					...disaggregationsMetadata,
+					status: 'none_found'
+				},
+				step: 'query_data'
+			};
+		} else if (multipleMatches) {
+			// Multiple matches found - request selection through orchestrator
+			console.log('⏸️ Requesting disaggregation selection through orchestrator');
+
+			if (!state.orchestrator) {
+				console.error('No orchestrator available for disaggregation selection');
+				return {
+					step: 'completed',
+					finalResult: {
+						success: false,
+						message: 'Cannot request disaggregation selection - no orchestrator available',
+						type: 'analytics'
+					}
+				};
+			}
+
+			// Request selection through orchestrator (this will show UI and wait)
+			const selectedItems = await state.orchestrator.requestSelection(
+				state.workflowId || 'disaggregations_workflow',
+				suggestions,
+				true // Allow multiple selection for disaggregations
+			);
+
+			console.log('▶️ Received disaggregation selection from orchestrator:', selectedItems);
+
+			if (selectedItems && selectedItems.length > 0) {
+				// Update metadata with selected items
+				const updatedDisaggMetadata = {
+					...disaggregationsMetadata,
+					suggestions: selectedItems,
+					status: 'user_selected'
+				};
+
+				// Continue with query_data using selected disaggregations
+				return {
+					disaggregationsMetadata: updatedDisaggMetadata,
+					step: 'query_data'
+				};
+			} else {
+				// Selection was cancelled - proceed without disaggregations
+				console.log('⏭️ Disaggregation selection cancelled - proceeding without disaggregation');
+
+				const cancelledDisaggMetadata = {
+					...disaggregationsMetadata,
+					status: 'cancelled',
+					suggestions: []
+				};
+
+				return {
+					disaggregationsMetadata: cancelledDisaggMetadata,
+					step: 'query_data'
+				};
+			}
+		} else {
+			// Single match or auto-selected - proceed directly to query
+			return {
+				disaggregationsMetadata,
+				step: 'query_data'
+			};
+		}
+	} catch (error) {
+		console.error('🔢 Disaggregation search failed:', error);
+		return {
+			step: 'completed',
+			finalResult: {
+				success: false,
+				error: error.message,
+				message: 'Disaggregation search failed',
+				type: 'analytics'
+			}
+		};
+	}
+}
+
+// Helper function to extract disaggregation keywords from query
+function extractDisaggregationKeywords(query: string): string[] {
+	const keywords: string[] = [];
+
+	// Convert to lowercase for matching
+	const queryLower = query.toLowerCase();
+
+	// Common disaggregation dimensions
+	const disaggregationTerms = [
+		// Demographic categories
+		'age group', 'age groups', 'age', 'ages', 'gender', 'sex',
+		// Health system categories
+		'facility type', 'facility types', 'service type', 'service types',
+		'ownership', 'ownership type', 'ownership types',
+		// Geographic categories (non-org unit)
+		'urban', 'rural', 'urban/rural', 'urban rural',
+		// Socioeconomic categories
+		'income level', 'income levels', 'economic status', 'socioeconomic',
+		'wealth quintile', 'wealth quintiles',
+		// Program categories
+		'treatment type', 'treatment types', 'intervention type', 'intervention types',
+		// Common category breakdowns
+		'category', 'categories', 'group', 'groups', 'breakdown', 'breakdowns'
+	];
+
+	// Check for disaggregation keywords with "by" preposition
+	const byPattern = /by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi;
+	let match;
+	while ((match = byPattern.exec(queryLower)) !== null) {
+		const extracted = match[1].trim();
+		if (extracted.length > 2 && !/\b(and|or|the|a|an|for|in|at|of|with)\b/i.test(extracted)) {
+			keywords.push(extracted);
+		}
+	}
+
+	// Check for explicit disaggregation terms
+	for (const term of disaggregationTerms) {
+		if (queryLower.includes(term)) {
+			keywords.push(term.charAt(0).toUpperCase() + term.slice(1)); // Capitalize first letter
+		}
+	}
+
+	// Check for "disaggregated by" or "broken down by" patterns
+	const disaggPatterns = [
+		/disaggregated?\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi,
+		/broken\s+down\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi,
+		/grouped\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi
+	];
+
+	for (const pattern of disaggPatterns) {
+		while ((match = pattern.exec(queryLower)) !== null) {
+			const extracted = match[1].trim();
+			if (extracted.length > 2) {
+				keywords.push(extracted);
+			}
+		}
+	}
+
+	// Remove duplicates and clean up
+	return [...new Set(keywords)].filter(keyword =>
+		keyword.length > 2 &&
+		!/\b(month|year|quarter|period|date|time|week|day)\b/i.test(keyword) && // Filter out time dimensions
+		!/\b(country|countries|district|districts|province|provinces|region|regions|county|counties|facility|facilities|hospital|hospitals|clinic|clinics|centre|centers|center|centres)\b/i.test(keyword) // Filter out location dimensions
+	);
+}
+
 // Helper function to extract organisation unit keywords from query
 function extractOrgUnitKeywords(query: string): string[] {
 	const keywords: string[] = [];
@@ -836,6 +1167,7 @@ workflow.addNode('classify_intent', classifyIntent);
 workflow.addNode('parse_selected_metadata', parseSelectedMetadata);
 workflow.addNode('search_metadata', searchMetadata);
 workflow.addNode('search_org_units', searchOrgUnits);
+workflow.addNode('search_disaggregations', searchDisaggregations);
 workflow.addNode('query_data', queryData);
 workflow.addNode('build_chart', buildChart);
 
@@ -866,7 +1198,9 @@ workflow.addEdge('parse_selected_metadata', 'query_data'); // Selected metadata 
 // @ts-ignore
 workflow.addEdge('search_metadata', 'search_org_units');    // Always try org unit search after metadata search
 // @ts-ignore
-workflow.addEdge('search_org_units', 'query_data');         // Always proceed to data query after org unit attempt
+workflow.addEdge('search_org_units', 'search_disaggregations'); // Always try disaggregation search after org unit search
+// @ts-ignore
+workflow.addEdge('search_disaggregations', 'query_data');   // Always proceed to data query after disaggregation attempt
 // @ts-ignore
 workflow.addEdge('query_data', 'build_chart');             // Always try chart building after data query
 // @ts-ignore

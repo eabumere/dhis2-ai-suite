@@ -1634,8 +1634,6 @@ export const queryAnalytics = tool(
 
             if (input.disaggregations && input.disaggregations.length > 0) {
                 try {
-                    // input.disaggregations contains category dimension strings like:
-                    // ["d7ZaswhlDjR:I85StqsPWlg;DH1RBcpzNqw"] (categoryId:optionId1;optionId2)
 
                     const cocIds: string[] = [];
 

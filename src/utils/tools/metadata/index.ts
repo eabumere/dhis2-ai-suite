@@ -10,6 +10,7 @@ export {
     queryAnalytics,
     searchAnalyticsMetadata,
     extractOrgUnitKeywordsLLM,
+    filterCategoriesForDisaggregationLLM,
     getAllMetadata,
     getOrganisationUnits,
     getDataElements,

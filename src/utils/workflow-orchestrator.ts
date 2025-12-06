@@ -459,6 +459,21 @@ class WorkflowOrchestrator {
             return searchResult.count;
         }
 
+        // Handle properly formatted search results: {organisationUnits: [...], dataElements: [...]}
+        if (searchResult && typeof searchResult === 'object' && !Array.isArray(searchResult)) {
+            const metadataTypeKeys = ['dataElements', 'indicators', 'organisationUnits', 'dataSets', 'programs',
+                                     'categories', 'categoryCombos', 'optionSets', 'validationRules',
+                                     'visualizations', 'dashboards', 'users', 'categoryOptions',
+                                     'organisationUnitGroups', 'trackedEntityTypes'];
+
+            // Count results in metadata type arrays
+            return metadataTypeKeys.reduce((total, key) => {
+                const items = searchResult[key];
+                return total + (Array.isArray(items) ? items.length : 0);
+            }, 0);
+        }
+
+        // Fallback for legacy formats
         if (searchResult.results) {
             return Object.values(searchResult.results).reduce((total: number, items: any) => {
                 return total + (Array.isArray(items) ? items.length : 0);

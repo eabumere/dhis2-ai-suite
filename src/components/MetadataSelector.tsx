@@ -7,14 +7,14 @@ export interface MetadataOption {
     type: 'indicator' | 'dataElement';
 }
 
-export interface AnalyticsMetadataSelectorProps {
+export interface MetadataSelectorProps {
     selectionOptions: MetadataOption[];
     originalQuery: string;
     onSelection: (selectedItems: MetadataOption[], selectedIndices: number[]) => void;
     allowMultiple?: boolean;
 }
 
-const AnalyticsMetadataSelector: React.FC<AnalyticsMetadataSelectorProps> = ({
+const MetadataSelector: React.FC<MetadataSelectorProps> = ({
     selectionOptions,
     originalQuery,
     onSelection,
@@ -78,7 +78,7 @@ const AnalyticsMetadataSelector: React.FC<AnalyticsMetadataSelectorProps> = ({
                 marginBottom: '15px',
                 marginTop: '0'
             }}>
-                Select Analytics Metadata
+                Select Metadata
             </h4>
 
             <p style={{
@@ -222,4 +222,4 @@ const AnalyticsMetadataSelector: React.FC<AnalyticsMetadataSelectorProps> = ({
     );
 };
 
-export default AnalyticsMetadataSelector;
+export default MetadataSelector;

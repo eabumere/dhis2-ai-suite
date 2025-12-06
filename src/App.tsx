@@ -4,7 +4,7 @@ import React, { FC, useEffect, useState, useRef } from 'react'
 import classes from './App.module.css'
 import { DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 import AnalyticsChart from './components/AnalyticsChart';
-import AnalyticsMetadataSelector, { MetadataOption } from './components/AnalyticsMetadataSelector';
+import MetadataSelector, { MetadataOption } from './components/MetadataSelector';
 
 import MessageContainer from './components/MessageContainer';
 
@@ -313,7 +313,7 @@ const MyApp: FC = () => {
                             maxHeight: '80vh',
                             overflow: 'auto'
                         }}>
-                            <AnalyticsMetadataSelector
+                            <MetadataSelector
                                 selectionOptions={uiState.selectionOptions.map(opt => ({
                                     ...opt,
                                     type: opt.type as 'indicator' | 'dataElement'

@@ -1,7 +1,7 @@
 import React, { FC } from 'react';
 import { ConversationMessage } from '../utils/workflow-orchestrator';
 import AnalyticsChart from './AnalyticsChart';
-import AnalyticsMetadataSelector, { MetadataOption } from './AnalyticsMetadataSelector';
+import MetadataSelector, { MetadataOption } from './MetadataSelector';
 
 interface MessageRendererProps {
     message: ConversationMessage;
@@ -64,8 +64,16 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                     <div>
                         <div style={{ marginBottom: '8px' }}>{message.content}</div>
                         {message.data?.selectionOptions && (
-                            <div style={{ backgroundColor: 'white', padding: '12px', borderRadius: '4px' }}>
-                                <AnalyticsMetadataSelector
+                            <div style={{
+                                backgroundColor: 'white',
+                                padding: '12px',
+                                borderRadius: '4px',
+                                maxWidth: '500px',
+                                overflowX: 'auto',
+                                overflowY: 'auto',
+                                maxHeight: '400px'
+                            }}>
+                                <MetadataSelector
                                     selectionOptions={message.data.selectionOptions.map((opt: any) => ({
                                         ...opt,
                                         type: opt.type as 'indicator' | 'dataElement'

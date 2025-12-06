@@ -27,6 +27,24 @@ const query = {
 const MyApp: FC = () => {
     const {error, loading, data} = useDataQuery<QueryResults>(query)
 
+    // Add spin animation CSS for loading indicator
+    const spinKeyframes = `
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    `;
+
+    // Inject the keyframes into the document head
+    React.useEffect(() => {
+        const style = document.createElement('style');
+        style.textContent = spinKeyframes;
+        document.head.appendChild(style);
+        return () => {
+            document.head.removeChild(style);
+        };
+    }, []);
+
     // Complete UI state is now managed by the orchestrator
     const [uiState, setUiState] = useState<WorkflowUIState>({
         showQueryInput: true,
@@ -232,7 +250,7 @@ const MyApp: FC = () => {
             <div style={{
                 display: 'flex',
                 flexDirection: 'column',
-                height: 'calc(100vh - 150px)', // Adjust based on header height
+                height: '600px', // Fixed height to prevent wobbling
                 marginTop: '20px',
                 border: '1px solid #e0e0e0',
                 borderRadius: '8px',
@@ -248,30 +266,24 @@ const MyApp: FC = () => {
                     }}>
                         <MessageContainer messages={uiState.conversation} />
 
-                        {/* Processing overlay */}
+                        {/* Processing overlay - only show spinner, no text box */}
                         {uiState.showProcessing && (
                             <div style={{
                                 position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                backgroundColor: 'rgba(255, 255, 255, 0.8)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                zIndex: 10
+                                bottom: '80px', // Above input area
+                                right: '20px',
+                                zIndex: 10,
+                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                                borderRadius: '50%',
+                                padding: '12px',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                                border: '1px solid #e0e0e0'
                             }}>
                                 <div style={{
-                                    backgroundColor: '#e3f2fd',
-                                    borderRadius: '12px',
-                                    padding: '20px',
-                                    border: '1px solid #2196f3',
-                                    maxWidth: '400px',
-                                    textAlign: 'center'
+                                    fontSize: '18px',
+                                    animation: 'spin 1s linear infinite'
                                 }}>
-                                    <div style={{fontSize: '24px', marginBottom: '10px'}}>🔄</div>
-                                    <div>{uiState.processingMessage || i18n.t('Processing your request...')}</div>
+                                    🔄
                                 </div>
                             </div>
                         )}

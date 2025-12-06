@@ -132,7 +132,7 @@ class WorkflowOrchestrator {
         this.updateUIState({
             showQueryInput: false,
             showProcessing: true,
-            processingMessage: `Starting ${flowType} workflow...`,
+            processingMessage: 'Thinking...',
             currentWorkflowId: workflowId
         });
 

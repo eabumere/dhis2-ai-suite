@@ -5,6 +5,15 @@ export interface SelectionOptions {
     type: 'indicator' | 'dataElement';
 }
 
+export interface ConversationMessage {
+    id: string;
+    timestamp: number;
+    role: 'user' | 'assistant';
+    content: string;
+    data?: any;
+    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response';
+}
+
 export interface WorkflowUIState {
     // Input states
     showQueryInput: boolean;
@@ -35,6 +44,10 @@ export interface WorkflowUIState {
 
     // General states
     currentWorkflowId?: string;
+
+    // Conversation states
+    conversation: ConversationMessage[];
+    showConversation: boolean;
 }
 
 // Comprehensive UI orchestration callbacks
@@ -67,7 +80,9 @@ class WorkflowOrchestrator {
         showSelection: false,
         selectionOptions: [],
         selectionMultiple: true,
-        showError: false
+        showError: false,
+        conversation: [],
+        showConversation: true
     };
 
     // Initialize default UI state
@@ -82,7 +97,9 @@ class WorkflowOrchestrator {
             showSelection: false,
             selectionOptions: [],
             selectionMultiple: true,
-            showError: false
+            showError: false,
+            conversation: [],
+            showConversation: true
         };
         this.uiCallbacks?.onUIStateChange(this.currentUIState);
     }
@@ -276,6 +293,14 @@ class WorkflowOrchestrator {
                 return;
             }
 
+            // Add selection prompt to conversation
+            const selectionMessage = `Please select the relevant items from the ${options.length} available options${multiple ? ' (multiple selection allowed)' : ''}`;
+            this.addAssistantMessage(selectionMessage, 'selection', {
+                selectionOptions: options,
+                allowMultiple: multiple,
+                workflowId
+            });
+
             // Update UI to show selection
             this.updateUIState({
                 showProcessing: false,
@@ -327,6 +352,127 @@ class WorkflowOrchestrator {
             if (workflow.status === 'completed' || workflow.status === 'error') {
                 this.activeWorkflows.delete(id);
             }
+        }
+    }
+
+    // Conversation management methods
+
+    // Add user message to conversation
+    addUserMessage(content: string, type: ConversationMessage['type'] = 'query', data?: any) {
+        const message: ConversationMessage = {
+            id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            role: 'user',
+            content,
+            data,
+            type
+        };
+
+        this.updateUIState({
+            conversation: [...this.currentUIState.conversation, message]
+        });
+
+        return message;
+    }
+
+    // Add assistant message to conversation
+    addAssistantMessage(content: string, type: ConversationMessage['type'] = 'response', data?: any) {
+        const message: ConversationMessage = {
+            id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            role: 'assistant',
+            content,
+            data,
+            type
+        };
+
+        this.updateUIState({
+            conversation: [...this.currentUIState.conversation, message]
+        });
+
+        return message;
+    }
+
+    // Load conversation history from conversation context
+    loadConversationFromStorage() {
+        try {
+            // Import the conversation context dynamically to avoid circular dependencies
+            import('./conversation-context').then(({ conversationContext }) => {
+                const recentContext = conversationContext.getRecentContext(20); // Load last 20 conversations
+
+                // Convert conversation entries to conversation messages
+                const messages: ConversationMessage[] = [];
+
+                recentContext.forEach(entry => {
+                    // Add user message
+                    messages.push({
+                        id: `user_${entry.id}`,
+                        timestamp: entry.timestamp - 1, // User message slightly before
+                        role: 'user',
+                        content: entry.query,
+                        type: 'query'
+                    });
+
+                    // Add assistant message
+                    messages.push({
+                        id: `assistant_${entry.id}`,
+                        timestamp: entry.timestamp,
+                        role: 'assistant',
+                        content: this.formatResponseContent(entry.response, entry.agent),
+                        data: entry.response,
+                        type: this.getMessageTypeFromAgent(entry.agent)
+                    });
+                });
+
+                // Sort by timestamp
+                messages.sort((a, b) => a.timestamp - b.timestamp);
+
+                this.updateUIState({
+                    conversation: messages
+                });
+
+                console.log(`📚 Loaded ${messages.length} messages from conversation history`);
+            }).catch(error => {
+                console.warn('Failed to load conversation history:', error);
+            });
+        } catch (error) {
+            console.warn('Failed to load conversation history:', error);
+        }
+    }
+
+    // Clear conversation history
+    clearConversation() {
+        this.updateUIState({
+            conversation: []
+        });
+    }
+
+    // Private helper methods for conversation management
+    private formatResponseContent(response: any, agent: string): string {
+        if (!response) return 'No response';
+
+        if (response.message) return response.message;
+        if (response.error) return `Error: ${response.error}`;
+        if (response.success !== false) {
+            if (response.count !== undefined) {
+                return `Found ${response.count} results`;
+            }
+            if (response.data) {
+                return 'Results returned';
+            }
+            return 'Operation completed successfully';
+        }
+
+        return JSON.stringify(response).substring(0, 200) + '...';
+    }
+
+    private getMessageTypeFromAgent(agent: string): ConversationMessage['type'] {
+        switch (agent) {
+            case 'search': return 'response';
+            case 'crud': return 'response';
+            case 'analytics': return 'response';
+            case 'router': return 'response';
+            default: return 'response';
         }
     }
 

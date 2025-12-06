@@ -72,25 +72,50 @@ const model = new AzureChatOpenAI({
 // Create the search agent with comprehensive metadata search and retrieval tools
 export const searchAgent = createReactAgent({
   llm: model,
-  tools: [ // ALL search and Get-by-ID tools for comprehensive DHIS2 metadata coverage
-    // Core Search Tools (10 essential tools) - Limited for better LLM performance
+  tools: [ // ALL DHIS2 search and Get-by-ID tools for comprehensive metadata coverage
+    // Core Search Tools (7 tools)
     searchDhis2DataElements,
-    searchDhis2Indicators,
     searchDhis2OrganisationUnits,
-    searchDhis2DataSets,
-    searchDhis2Programs,
     searchDhis2Categories,
     searchDhis2CategoryCombos,
-    searchDhis2OptionSets,
-    searchDhis2Validations,
-    searchDhis2Visualizations,
+    searchDhis2DataSets,
+    searchDhis2Programs,
+    searchDhis2Indicators,
 
-    // Get-by-ID Tools (5 core tools for reference resolution)
+    // Extended Search Tools (11 tools) - Complete DHIS2 metadata coverage
+    searchDhis2CategoryOptions,
+    searchDhis2OrganisationUnitGroups,
+    searchDhis2OrganisationUnitGroupSets,
+    searchDhis2TrackedEntityTypes,
+    searchDhis2TrackedEntityAttributes,
+    searchDhis2Validations,
+    searchDhis2OptionSets,
+    searchDhis2Visualizations,
+    searchDhis2Dashboards,
+    searchDhis2Users,
+    searchDhis2RelationshipTypes,
+
+    // Get-by-ID Tools (5 core + 9 extended = 14 tools)
     getDhis2DataElementById,
-    getDhis2IndicatorById,
     getDhis2OrganisationUnitById,
+    getDhis2CategoryById,
     getDhis2DataSetById,
     getDhis2ProgramById,
+    getDhis2CategoryOptionById,
+    getDhis2OrganisationUnitGroupById,
+    getDhis2OrganisationUnitGroupSetById,
+    getDhis2TrackedEntityTypeById,
+    getDhis2TrackedEntityAttributeById,
+    getDhis2ValidationRuleById,
+    getDhis2OptionSetById,
+    getDhis2IndicatorById,
+    getDhis2VisualizationById,
+    getDhis2DashboardById,
+    getDhis2RelationshipTypeById,
+
+    // Specialized Utility Tools (2 tools)
+    getDhis2DataValues,
+    resolveResourceReference,
   ],
   prompt: `
 You are a DHIS2 metadata search specialist. Choose the MOST RELEVANT search tools and format results properly for display.

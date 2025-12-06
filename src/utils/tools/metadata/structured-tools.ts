@@ -426,7 +426,7 @@ function processAnalyticsForChart(params: {
 /**
  * Build ECharts option object from processed chart data
  */
-function buildEChartsOption(chartData: AnalyticsChartData): any {
+export function buildEChartsOption(chartData: AnalyticsChartData): any {
     const { filteredData, chartType, dimensions, title } = chartData;
 
     if (filteredData.length === 0) {

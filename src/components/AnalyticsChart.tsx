@@ -27,6 +27,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     const [filters, setFilters] = useState<ChartFilter>({});
     const [isFiltering, setIsFiltering] = useState(false);
     const [filterOptions, setFilterOptions] = useState<any>({});
+    const [filtersExpanded, setFiltersExpanded] = useState(false);
 
     useEffect(() => {
         if (chartData?.echarts_option) {
@@ -163,39 +164,56 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         };
     };
 
-    // Generate chart option from filtered data using the same logic as structured-tools.ts
+    // Generate chart option from filtered data by re-creating the chart using buildAnalyticsChart
     const generateFilteredChartOption = async (filteredData: any): Promise<any> => {
-        // Import the chart processing functions
-        const { buildEChartsOption, groupChartData } = await import('../utils/tools/metadata/structured-tools');
+        // Use the buildAnalyticsChart tool with filtered data to generate new chart options
+        const { buildAnalyticsChart } = await import('../utils/tools/metadata/structured-tools');
 
         if (!filteredData || !filteredData.filteredData) {
             return null;
         }
 
-        console.log(`📊 Generating chart options from ${filteredData.filteredData.length} filtered data points`);
+        console.log(`📊 Re-generating chart with filtered data: ${filteredData.filteredData.length} points`);
 
-        // Get the dimensions from the original/enhanced chart data
-        const dimensions = filteredData.dimensions || {};
-        const chartType = filteredData.chartType === 'line' || filteredData.chartType === 'bar' || filteredData.chartType === 'pie'
-            ? filteredData.chartType
-            : 'bar'; // Default fallback
+        try {
+            // Format data for buildAnalyticsChart tool
+            const chartParams = {
+                userQuery: `Filtered chart: ${filteredData.title || 'Analytics'}`,
+                analyticsData: {
+                    data: {
+                        analytics: {
+                            rows: filteredData.filteredData,
+                            headers: [] // Headers are already processed into rows
+                        }
+                    }
+                },
+                chartType: filteredData.chartType || 'bar',
+                indicators: filteredData.dimensions?.indicators || [],
+                periods: filteredData.dimensions?.periods || [],
+                orgUnits: filteredData.dimensions?.orgUnits || [],
+                disaggregations: filteredData.dimensions?.disaggregations || [],
+                title: filteredData.title || 'Filtered Chart'
+            };
 
-        // Re-group the filtered data using the same logic as in structured-tools.ts
-        const groupedData = groupChartData(filteredData.filteredData, chartType);
+            // Call buildAnalyticsChart to get new options with filtered data
+            const result = await buildAnalyticsChart.invoke(chartParams);
 
-        // Build ECharts option object - create a mock chartData structure
-        const mockChartData = {
-            filteredData: filteredData.filteredData,
-            dimensions,
-            title: filteredData.title || 'Filtered Chart',
-            chartType
-        };
+            // Parse the result
+            if (typeof result === 'string') {
+                const parsed = JSON.parse(result);
+                if (parsed.echarts_option) {
+                    console.log('📊 Successfully generated filtered chart options');
+                    return parsed.echarts_option;
+                }
+            }
 
-        const echartsOption = buildEChartsOption(mockChartData);
+            console.error('📊 Failed to generate filtered chart options');
+            return null;
 
-        console.log(`📊 Generated filtered chart with ${groupedData.series?.length || 0} series`);
-
-        return echartsOption;
+        } catch (error) {
+            console.error('❌ Error generating filtered chart:', error);
+            return null;
+        }
     };
 
     // Reset filters back to showing all data
@@ -350,163 +368,211 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 </div>
             </div>
 
-            {/* Filter Controls */}
+            {/* Collapsed/Expanded Filter Controls */}
             {Object.keys(filterOptions).length > 0 && (
                 <div style={{
-                    backgroundColor: '#f8f9fa',
-                    padding: '15px',
-                    borderRadius: '4px',
                     marginBottom: '15px',
-                    border: '1px solid #e0e0e0'
+                    border: '1px solid #e0e0e0',
+                    borderRadius: '4px',
+                    overflow: 'hidden'
                 }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#2c6693' }}>Filters</h4>
-
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
-                        {filterOptions.indicators && filterOptions.indicators.length > 1 && (
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                    Indicators:
-                                </label>
-                                <select
-                                    multiple
-                                    disabled={isFiltering}
-                                    onChange={(e) => {
-                                        const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                        handleFilterChange('indicators', values);
-                                    }}
-                                    style={{
-                                        minWidth: '150px',
-                                        padding: '4px',
-                                        border: '1px solid #ccc',
-                                        borderRadius: '3px',
-                                        minHeight: '60px'
-                                    }}
-                                >
-                                    {filterOptions.indicators.map((indicator: string) => (
-                                        <option key={indicator} value={indicator}>
-                                            {indicator}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-
-                        {filterOptions.periods && filterOptions.periods.length > 1 && (
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                    Periods:
-                                </label>
-                                <select
-                                    multiple
-                                    disabled={isFiltering}
-                                    onChange={(e) => {
-                                        const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                        handleFilterChange('periods', values);
-                                    }}
-                                    style={{
-                                        minWidth: '120px',
-                                        padding: '4px',
-                                        border: '1px solid #ccc',
-                                        borderRadius: '3px',
-                                        minHeight: '60px'
-                                    }}
-                                >
-                                    {filterOptions.periods.map((period: string) => (
-                                        <option key={period} value={period}>
-                                            {period}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-
-                        {filterOptions.orgUnits && filterOptions.orgUnits.length > 1 && (
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                    Organization Units:
-                                </label>
-                                <select
-                                    multiple
-                                    disabled={isFiltering}
-                                    onChange={(e) => {
-                                        const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                        handleFilterChange('orgUnits', values);
-                                    }}
-                                    style={{
-                                        minWidth: '150px',
-                                        padding: '4px',
-                                        border: '1px solid #ccc',
-                                        borderRadius: '3px',
-                                        minHeight: '60px'
-                                    }}
-                                >
-                                    {filterOptions.orgUnits.map((orgUnit: string) => (
-                                        <option key={orgUnit} value={orgUnit}>
-                                            {orgUnit}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-
-                        {filterOptions.disaggregations && filterOptions.disaggregations.length > 1 && (
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                                    Disaggregations:
-                                </label>
-                                <select
-                                    multiple
-                                    disabled={isFiltering}
-                                    onChange={(e) => {
-                                        const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                        handleFilterChange('disaggregations', values);
-                                    }}
-                                    style={{
-                                        minWidth: '140px',
-                                        padding: '4px',
-                                        border: '1px solid #ccc',
-                                        borderRadius: '3px',
-                                        minHeight: '60px'
-                                    }}
-                                >
-                                    {filterOptions.disaggregations.map((disagg: string) => (
-                                        <option key={disagg} value={disagg}>
-                                            {disagg}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-
-                        {/* Reset Filters Button */}
-                        {(filters.indicators?.length || filters.periods?.length || filters.orgUnits?.length || filters.disaggregations?.length) && (
-                            <div style={{
-                                display: 'flex',
-                                alignItems: 'flex-end',
-                                marginBottom: '8px'
-                            }}>
-                                <button
-                                    onClick={() => resetFilters()}
-                                    disabled={isFiltering}
-                                    style={{
-                                        padding: '6px 12px',
-                                        backgroundColor: '#6c757d',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '3px',
-                                        cursor: 'pointer',
-                                        fontSize: '12px'
-                                    }}
-                                >
-                                    Reset Filters
-                                </button>
-                            </div>
-                        )}
+                    {/* Filter Header - Always Visible */}
+                    <div style={{
+                        backgroundColor: '#f8f9fa',
+                        padding: '10px 15px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                        borderBottom: filtersExpanded ? '1px solid #e0e0e0' : 'none'
+                    }} onClick={() => setFiltersExpanded(!filtersExpanded)}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#2c6693' }}>
+                                📊 Filters
+                            </span>
+                            {/* Show active filter count */}
+                            {Object.keys(filters).some(key => filters[key as keyof ChartFilter]?.length) && (
+                                <span style={{
+                                    backgroundColor: '#007bff',
+                                    color: 'white',
+                                    padding: '2px 6px',
+                                    borderRadius: '10px',
+                                    fontSize: '11px',
+                                    fontWeight: 'bold'
+                                }}>
+                                    {Object.values(filters).reduce((count, arr) => count + (arr?.length || 0), 0)} active
+                                </span>
+                            )}
+                        </div>
+                        <span style={{
+                            fontSize: '12px',
+                            color: '#666',
+                            transform: filtersExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                            transition: 'transform 0.2s'
+                        }}>
+                            ▼
+                        </span>
                     </div>
 
-                    {isFiltering && (
-                        <div style={{ marginTop: '10px', fontSize: '14px', color: '#666' }}>
-                            Applying filters...
+                    {/* Expandable Filter Body */}
+                    {filtersExpanded && (
+                        <div style={{
+                            backgroundColor: '#f8f9fa',
+                            padding: '15px',
+                            borderTop: '1px solid #e9ecef'
+                        }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
+                                {filterOptions.indicators && filterOptions.indicators.length > 1 && (
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
+                                            Indicators:
+                                        </label>
+                                        <select
+                                            multiple
+                                            disabled={isFiltering}
+                                            onChange={(e) => {
+                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
+                                                handleFilterChange('indicators', values);
+                                            }}
+                                            style={{
+                                                minWidth: '120px',
+                                                padding: '4px',
+                                                border: '1px solid #ccc',
+                                                borderRadius: '3px',
+                                                minHeight: '50px',
+                                                fontSize: '11px'
+                                            }}
+                                        >
+                                            {filterOptions.indicators.map((indicator: string) => (
+                                                <option key={indicator} value={indicator}>
+                                                    {indicator.length > 20 ? indicator.substring(0, 17) + '...' : indicator}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {filterOptions.periods && filterOptions.periods.length > 1 && (
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
+                                            Periods:
+                                        </label>
+                                        <select
+                                            multiple
+                                            disabled={isFiltering}
+                                            onChange={(e) => {
+                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
+                                                handleFilterChange('periods', values);
+                                            }}
+                                            style={{
+                                                minWidth: '100px',
+                                                padding: '4px',
+                                                border: '1px solid #ccc',
+                                                borderRadius: '3px',
+                                                minHeight: '50px',
+                                                fontSize: '11px'
+                                            }}
+                                        >
+                                            {filterOptions.periods.map((period: string) => (
+                                                <option key={period} value={period}>
+                                                    {period}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {filterOptions.orgUnits && filterOptions.orgUnits.length > 1 && (
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
+                                            Organization Units:
+                                        </label>
+                                        <select
+                                            multiple
+                                            disabled={isFiltering}
+                                            onChange={(e) => {
+                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
+                                                handleFilterChange('orgUnits', values);
+                                            }}
+                                            style={{
+                                                minWidth: '120px',
+                                                padding: '4px',
+                                                border: '1px solid #ccc',
+                                                borderRadius: '3px',
+                                                minHeight: '50px',
+                                                fontSize: '11px'
+                                            }}
+                                        >
+                                            {filterOptions.orgUnits.map((orgUnit: string) => (
+                                                <option key={orgUnit} value={orgUnit}>
+                                                    {orgUnit.length > 20 ? orgUnit.substring(0, 17) + '...' : orgUnit}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {filterOptions.disaggregations && filterOptions.disaggregations.length > 1 && (
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
+                                            Disaggregations:
+                                        </label>
+                                        <select
+                                            multiple
+                                            disabled={isFiltering}
+                                            onChange={(e) => {
+                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
+                                                handleFilterChange('disaggregations', values);
+                                            }}
+                                            style={{
+                                                minWidth: '120px',
+                                                padding: '4px',
+                                                border: '1px solid #ccc',
+                                                borderRadius: '3px',
+                                                minHeight: '50px',
+                                                fontSize: '11px'
+                                            }}
+                                        >
+                                            {filterOptions.disaggregations.map((disagg: string) => (
+                                                <option key={disagg} value={disagg}>
+                                                    {disagg.length > 20 ? disagg.substring(0, 17) + '...' : disagg}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {/* Reset Filters Button */}
+                                {(filters.indicators?.length || filters.periods?.length || filters.orgUnits?.length || filters.disaggregations?.length) && (
+                                    <div style={{
+                                        display: 'flex',
+                                        alignItems: 'flex-end',
+                                        marginBottom: '8px'
+                                    }}>
+                                        <button
+                                            onClick={() => resetFilters()}
+                                            disabled={isFiltering}
+                                            style={{
+                                                padding: '6px 10px',
+                                                backgroundColor: '#6c757d',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '3px',
+                                                cursor: 'pointer',
+                                                fontSize: '11px'
+                                            }}
+                                        >
+                                            Reset Filters
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {isFiltering && (
+                                <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
+                                    Applying filters...
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

@@ -3,6 +3,7 @@
 // External libraries (alphabetically)
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
+import { AzureChatOpenAI } from '@langchain/openai';
 
 // Local imports (alphabetically by module)
 import {
@@ -331,17 +332,28 @@ function processAnalyticsForChart(params: {
 
     // Apply disaggregation filtering if specific breakdowns are requested
 
-    // Extract metadata for display names
+    // Extract metadata for fallback lookups
     const metaDataItems = analyticsData.metaData?.items || {};
 
-    // Resolve display names from metadata
-    const resolveIndicatorNames = Array.from(allIndicators).map(id =>
-        metaDataItems[id]?.name || metaDataItems[id]?.displayName || id
-    );
+    // Intelligent name resolution: Use readable names directly when provided by DHIS2,
+    // or resolve from metadata when needed (backward compatibility)
+    const resolveIndicatorNames = Array.from(allIndicators).map(value => {
+        // If DHIS2 provided readable names in rows, use them directly
+        if (typeof value === 'string' && value.length > 10) {
+            return value; // Already readable (long text = human-readable name)
+        }
+        // Otherwise try metadata lookup (legacy compatibility)
+        return metaDataItems[value]?.name || metaDataItems[value]?.displayName || value;
+    });
 
-    const resolveOrgUnitNames = Array.from(allOrgUnits).map(id =>
-        metaDataItems[id]?.name || metaDataItems[id]?.displayName || id
-    );
+    const resolveOrgUnitNames = Array.from(allOrgUnits).map(value => {
+        // If DHIS2 provided readable names in rows, use them directly
+        if (typeof value === 'string' && value.length > 2 && !/^[a-zA-Z0-9_-]+$/.test(value)) {
+            return value; // Already readable (contains spaces/symbols = human-readable name)
+        }
+        // Otherwise try metadata lookup (legacy compatibility)
+        return metaDataItems[value]?.name || metaDataItems[value]?.displayName || value;
+    });
 
     // Debug logging
     console.log(`Chart processing: ${rows.length} raw rows, ${filteredRows.length} filtered rows`);
@@ -1591,7 +1603,7 @@ export const queryAnalytics = tool(
                     }, {
                         displayProperty: input.display_property || "NAME",
                         includeNumDen: input.include_num_den || false,
-                        skipMeta: input.skip_meta !== false, // Default true
+                        skipMeta: input.skip_meta === true, // Default false - INCLUDE metadata for analytics
                         skipData: input.skip_data || false,
                         outputIdScheme: input.output_id_scheme || "NAME"
                     })
@@ -1641,11 +1653,132 @@ export const queryAnalytics = tool(
             org_units: z.array(z.string()).describe("Array of organization unit IDs"),
             disaggregations: z.array(z.string()).optional().describe("Array of category IDs for disaggregation (optional)"),
             include_coc_dimension: z.boolean().optional().describe("Whether to include category option combo dimension"),
-            skip_meta: z.boolean().default(true).describe("Whether to skip metadata in response"),
+            skip_meta: z.boolean().default(false).describe("Whether to skip metadata in response"),
             display_property: z.string().default("NAME").describe("Display property format"),
             include_num_den: z.boolean().default(false).describe("Whether to include numerator/denominator data"),
             skip_data: z.boolean().default(false).describe("Whether to skip actual data values"),
             output_id_scheme: z.string().default("NAME").describe("Output ID scheme")
+        })
+    }
+);
+
+/**
+ * Extract Organisation Unit Keywords using LLM
+ * Uses context-aware understanding to identify geographic locations from natural language queries
+ */
+export const extractOrgUnitKeywordsLLM = tool(
+    async (input: { query: string, context?: string }) => {
+        try {
+            console.log('🧠 LLM extraction called for:', input.query);
+
+            // Initialize Azure OpenAI LLM
+            const llm = new AzureChatOpenAI({
+                model: import.meta.env.DHIS2_OPENAI_MODEL || 'gpt-4',
+                temperature: 0.1, // Low temperature for consistent extraction
+                maxTokens: 100,   // Limit output for focused responses
+                azureOpenAIApiKey: import.meta.env.DHIS2_AZURE_KEY,
+                azureOpenAIEndpoint: import.meta.env.DHIS2_AZURE_ENDPOINT,
+                azureOpenAIApiDeploymentName: import.meta.env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+                azureOpenAIApiVersion: import.meta.env.DHIS2_AZURE_API_VERSION,
+            });
+
+            // Create prompt for organization unit extraction
+            const prompt = `
+Analyze this DHIS2 analytics query and extract potential organization unit location names.
+Focus ONLY on geographic locations, administrative units, and facility names that could be DHIS2 organization units.
+
+QUERY: "${input.query}"
+CONTEXT: ${input.context || 'Health analytics context - focus on locations for geographical filtering'}
+
+EXAMPLES:
+"Show HIV prevalence in Burkina Faso" → ["Burkina Faso"]
+"HIV testing data from Central Hospital and Rural Clinic" → ["Central Hospital", "Rural Clinic"]
+"Malaria cases in Kenya for 2024" → ["Kenya"] (ignore "2024")
+"Treatment success rates in District C" → ["District C"]
+"ART coverage in urban areas of Accra" → ["Accra"]
+"NCD indicators for facility level data" → [] (no specific locations)
+
+IMPORTANT RULES:
+- Return ONLY geographic/administrative location names
+- IGNORE: medical terms (HIV, ART, treatment), program terms, temporal references (2024, December)
+- IGNORE: general concepts ("rural areas", "facility level")
+- Be specific: if mentioned, extract exact location names
+- Return empty array [] if no locations found
+
+Return ONLY a JSON array of unique location strings: ["location1", "location2", ...]
+`;
+
+            // Make LLM call
+            const llmResponse = await llm.invoke([
+                { role: "system", content: prompt },
+                { role: "user", content: `JSON array only: ${JSON.stringify(input)}` }
+            ]);
+
+            console.log('🧠 LLM response:', llmResponse.content);
+
+            // Parse LLM response - handle various formats
+            const content = llmResponse.content.trim();
+            let keywordCandidates: string[];
+
+            try {
+                // Try to parse as JSON
+                keywordCandidates = JSON.parse(content);
+                if (!Array.isArray(keywordCandidates)) {
+                    throw new Error('LLM returned non-array response');
+                }
+            } catch (parseError) {
+                // Fallback parsing for non-JSON responses
+                console.warn('⚠️ LLM returned non-JSON response, attempting fallback parsing');
+
+                // Try to extract array-like content between brackets
+                const arrayMatch = content.match(/\[([^\]]*)\]/);
+                if (arrayMatch) {
+                    const items = arrayMatch[1].split(',')
+                        .map(item => item.replace(/['"]/g, '').trim())
+                        .filter(item => item.length > 0);
+                    keywordCandidates = items;
+                } else {
+                    keywordCandidates = [];
+                }
+            }
+
+            // Clean and filter results
+            keywordCandidates = keywordCandidates
+                .filter(item => typeof item === 'string' && item.length > 1) // Remove empty/short strings
+                .map(item => item.trim()) // Clean whitespace
+                .filter((item, index, arr) => arr.indexOf(item) === index) // Remove duplicates
+                .slice(0, 10); // Limit to 10 for safety
+
+            console.log('🧠 Extracted keywords:', keywordCandidates);
+
+            return JSON.stringify({
+                keywordCandidates,
+                method: 'llm_extraction',
+                llmModel: llm.modelName,
+                query: input.query,
+                context: input.context,
+                confidence: keywordCandidates.length > 0 ? 'high' : 'low'
+            });
+
+        } catch (error) {
+            console.error('❌ Error in LLM keyword extraction:', error);
+
+            // Return graceful failure with empty array (fallback to regex)
+            return JSON.stringify({
+                keywordCandidates: [], // Will trigger regex fallback
+                error: `LLM extraction failed: ${error.message}`,
+                method: 'failed_llm_extraction',
+                query: input.query,
+                fallback_available: true
+            });
+        }
+    },
+    {
+        name: "extract_org_unit_keywords_llm",
+        description: "Extract potential DHIS2 organisation unit names from natural language queries using AI understanding. Focuses on geographic locations (countries, regions, districts, facilities) and administrative units while intelligently filtering out medical terms, programs, and temporal references. Returns empty array for fallbacks.",
+        schema: z.object({
+            query: z.string().describe("The user's query text to analyze for organization unit references"),
+            context: z.string().optional().describe("Optional context about what kind of organization units are likely (country level, facility level, etc.)")
         })
     }
 );
@@ -2545,6 +2678,7 @@ export const Dhis2StructuredTools = {
     // 📊 ANALYTICS TOOLS 📊
     queryAnalytics,
     searchAnalyticsMetadata,
+    extractOrgUnitKeywordsLLM,
     getAllMetadata,
     getOrganisationUnits,
     getDataElements,

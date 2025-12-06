@@ -9,6 +9,7 @@ export * from './batch-manager';
 export {
     queryAnalytics,
     searchAnalyticsMetadata,
+    extractOrgUnitKeywordsLLM,
     getAllMetadata,
     getOrganisationUnits,
     getDataElements,

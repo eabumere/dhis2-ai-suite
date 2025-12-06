@@ -397,24 +397,49 @@ class WorkflowOrchestrator {
     requestSearchRender(searchResult: any, originalQuery: string) {
         console.log('🔍 Rendering direct search results:', searchResult);
 
-        // Check if we have search results to render
-        if (!searchResult || (!searchResult.results && !searchResult.data)) {
+        // Handle different response formats from search agent
+        let cleanSearchResult = searchResult;
+
+        // If search agent returned a flat array, wrap it in correct format for MessageRenderer
+        if (Array.isArray(searchResult)) {
+            console.log('🔍 Array search result detected, wrapping as organisationUnits');
+            cleanSearchResult = { organisationUnits: searchResult };
+        }
+        // If wrapped in success response, extract the core results
+        else if (searchResult.success !== undefined && searchResult.data && Array.isArray(searchResult.data)) {
+            console.log('🔍 Wrapped search result detected, extracting and wrapping as organisationUnits');
+            cleanSearchResult = { organisationUnits: searchResult.data };
+        }
+        // If already in correct multi-type format, use as-is
+        else if (cleanSearchResult && typeof cleanSearchResult === 'object' && !Array.isArray(cleanSearchResult)) {
+            // Check if it has metadata type keys
+            const hasMetadataKeys = Object.keys(cleanSearchResult).some(key =>
+                ['dataElements', 'indicators', 'organisationUnits', 'dataSets', 'programs', 'categories', 'optionSets', 'validationRules'].includes(key)
+            );
+            if (!hasMetadataKeys && cleanSearchResult.results && Array.isArray(cleanSearchResult.results)) {
+                // Wrap results under organisationUnits key
+                cleanSearchResult = { organisationUnits: cleanSearchResult.results };
+            }
+        }
+
+        // Check if we have actual search results to render
+        if (!cleanSearchResult || (!Array.isArray(cleanSearchResult) && Object.keys(cleanSearchResult).length === 0)) {
             // No search data, just add a simple message
             return this.addAssistantMessage(
-                searchResult?.message || 'Search completed',
+                'Search completed',
                 'response',
-                searchResult
+                { searchResult, originalQuery }
             );
         }
 
         // Create a rich search result message
-        const totalResults = this.calculateTotalResults(searchResult);
+        const totalResults = this.calculateTotalResults(cleanSearchResult);
         const content = `Found ${totalResults} metadata ${totalResults === 1 ? 'item' : 'items'} matching "${originalQuery}"`;
 
         // Preserve the original multi-type structure that MessageRenderer expects
-        // Search agent already returns the correct format: { dataElements: [...], indicators: [...], etc. }
+        // Search agent should return the correct format: { dataElements: [...], indicators: [...], etc. }
         const messageData = {
-            ...searchResult,
+            ...cleanSearchResult,
             displayType: 'search_results', // Flag for specialized rendering
             originalQuery,
             totalResults

@@ -96,11 +96,17 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
     };
 
     const renderDataContent = (data: any) => {
-        // Handle tabular results
-        if (data.results && Array.isArray(Object.values(data.results)[0])) {
+        // Handle tabular results - check for top-level object with arrays (search results) or nested results
+        const resultObject = data.results || data; // Fall back to data itself if no .results
+        const hasMultipleResults = resultObject &&
+            typeof resultObject === 'object' &&
+            !Array.isArray(resultObject) &&
+            Object.values(resultObject).some(val => Array.isArray(val));
+
+        if (hasMultipleResults) {
             return (
                 <div style={{ marginTop: '16px' }}>
-                    {Object.entries(data.results).map(([type, items]: [string, any]) => {
+                    {Object.entries(resultObject).map(([type, items]: [string, any]) => {
                         if (!Array.isArray(items) || items.length === 0) return null;
 
                         return (

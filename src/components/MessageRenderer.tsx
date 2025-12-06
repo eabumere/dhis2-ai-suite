@@ -141,6 +141,15 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                                     fontWeight: 'bold',
                                                     fontSize: '12px'
                                                 }}>
+                                                    ID
+                                                </th>
+                                                <th style={{
+                                                    padding: '8px 12px',
+                                                    textAlign: 'left',
+                                                    borderBottom: '1px solid #ddd',
+                                                    fontWeight: 'bold',
+                                                    fontSize: '12px'
+                                                }}>
                                                     Name
                                                 </th>
                                                 <th style={{
@@ -150,7 +159,7 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                                     fontWeight: 'bold',
                                                     fontSize: '12px'
                                                 }}>
-                                                    Code
+                                                    Description
                                                 </th>
                                             </tr>
                                         </thead>
@@ -159,6 +168,17 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                                 <tr key={item.id || index} style={{
                                                     backgroundColor: index % 2 === 0 ? 'white' : '#f9f9f9'
                                                 }}>
+                                                    <td style={{
+                                                        padding: '8px 12px',
+                                                        borderBottom: '1px solid #eee',
+                                                        fontFamily: 'monospace',
+                                                        fontSize: '12px',
+                                                        maxWidth: '150px',
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis'
+                                                    }}>
+                                                        {item.id || ''}
+                                                    </td>
                                                     <td style={{
                                                         padding: '8px 12px',
                                                         borderBottom: '1px solid #eee',
@@ -172,10 +192,12 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                                     <td style={{
                                                         padding: '8px 12px',
                                                         borderBottom: '1px solid #eee',
-                                                        fontFamily: 'monospace',
-                                                        fontSize: '12px'
+                                                        fontSize: '12px',
+                                                        maxWidth: '250px',
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis'
                                                     }}>
-                                                        {item.code || ''}
+                                                        {item.description || item.displayName || '-'}
                                                     </td>
                                                 </tr>
                                             ))}

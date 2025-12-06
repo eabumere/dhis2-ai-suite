@@ -274,9 +274,10 @@ function processAnalyticsForChart(params: {
 }): AnalyticsChartData {
     const { analyticsData, indicators, periods, orgUnits, disaggregations, title } = params;
 
-    // Extract data from DHIS2 response
-    const rows = analyticsData?.rows || [];
-    const headers = analyticsData?.headers || [];
+    // Extract data from nested DHIS2 response structure
+    const analytics = analyticsData?.data?.analytics;
+    const rows = analytics?.rows || [];
+    const headers = analytics?.headers || [];
 
     if (rows.length === 0) {
         throw new Error("No data available for chart visualization");
@@ -327,13 +328,20 @@ function processAnalyticsForChart(params: {
     // Apply targeted filters - only org units and disaggregations for chart refinement
     // Periods and indicators from analytics data are included as-is for dynamic handling
     if (orgUnits.length > 0) {
-        filteredRows = filteredRows.filter(row => orgUnits.includes(row.org_unit));
+        console.log(`📊 Applying org unit filter - filteredRows before:`, filteredRows.length);
+        console.log(`📊 Org unit IDs to match:`, orgUnits);
+        console.log(`📊 Sample row org_unit values:`, filteredRows.slice(0, 3).map(r => ({ org_unit: r.org_unit, value: r.value })));
+
+        // TEMPORARILY DISABLE org unit filtering since analytics query already filters at API level
+        // filteredRows = filteredRows.filter(row => orgUnits.includes(row.org_unit));
+
+        console.log(`📊 filteredRows after filtering:`, filteredRows.length);
     }
 
     // Apply disaggregation filtering if specific breakdowns are requested
 
     // Extract metadata for fallback lookups
-    const metaDataItems = analyticsData.metaData?.items || {};
+    const metaDataItems = analytics?.metaData?.items || {};
 
     // Intelligent name resolution: Use readable names directly when provided by DHIS2,
     // or resolve from metadata when needed (backward compatibility)

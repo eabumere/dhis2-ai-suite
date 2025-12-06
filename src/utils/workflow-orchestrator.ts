@@ -20,6 +20,10 @@ export interface WorkflowUIState {
     results?: any;
     resultsType?: string;
 
+    // Chart states
+    showChart: boolean;
+    chartData?: any;
+
     // Selection states
     showSelection: boolean;
     selectionOptions: SelectionOptions[];
@@ -41,6 +45,9 @@ export interface ComprehensiveWorkflowCallbacks {
     // Selection handling
     onSelection: (options: SelectionOptions[], callback: (selectedItems: SelectionOptions[]) => void) => void;
 
+    // Chart rendering
+    onChartRender: (chartData: any) => void;
+
     // Lifecycle events
     onWorkflowStart: (workflowId: string, flowType: string) => void;
     onWorkflowComplete: (workflowId: string, result: any) => void;
@@ -56,6 +63,7 @@ class WorkflowOrchestrator {
         queryEnabled: true,
         showProcessing: false,
         showResults: false,
+        showChart: false,
         showSelection: false,
         selectionOptions: [],
         selectionMultiple: true,
@@ -70,6 +78,7 @@ class WorkflowOrchestrator {
             queryEnabled: true,
             showProcessing: false,
             showResults: false,
+            showChart: false,
             showSelection: false,
             selectionOptions: [],
             selectionMultiple: true,
@@ -287,6 +296,16 @@ class WorkflowOrchestrator {
                 resolve(selectedItems);
             });
         });
+    }
+
+    // Request chart rendering
+    renderChart(chartData: any) {
+        console.log(`📊 Rendering chart:`, chartData);
+        this.updateUIState({
+            showChart: true,
+            chartData: chartData
+        });
+        this.uiCallbacks?.onChartRender(chartData);
     }
 
     // Get workflow status

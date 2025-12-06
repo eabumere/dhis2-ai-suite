@@ -32,6 +32,7 @@ const MyApp: FC = () => {
         queryEnabled: true,
         showProcessing: false,
         showResults: false,
+        showChart: false,
         showSelection: false,
         selectionOptions: [],
         selectionMultiple: true,
@@ -56,6 +57,17 @@ const MyApp: FC = () => {
             onSelection: (options, callback) => {
                 // Store callback for when user completes selection
                 pendingSelectionCallback.current = callback;
+            },
+
+            // Chart rendering
+            onChartRender: (chartData) => {
+                console.log('📊 Chart render callback called:', chartData);
+                // Store the chart data and show the chart
+                setUiState(prevState => ({
+                    ...prevState,
+                    showChart: true,
+                    chartData: chartData
+                }));
             },
 
             // Workflow lifecycle events
@@ -173,7 +185,7 @@ const MyApp: FC = () => {
 
             {/* Query Input Section - only show when orchestrator allows */}
             {uiState.showQueryInput && (
-                <div style={{marginTop: '40px', maxWidth: '600px', width: '100%'}}>
+                <div style={{marginTop: '40px', maxWidth: '1400px', width: '100%'}}>
                     <h3 style={{color: '#2c6693', borderBottom: '1px solid #e0e0e0', paddingBottom: '5px'}}>
                         {i18n.t('Ask Anything')}
                     </h3>
@@ -260,6 +272,19 @@ const MyApp: FC = () => {
                         originalQuery={uiState.queryText}
                         onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
                         allowMultiple={uiState.selectionMultiple}
+                    />
+                </div>
+            )}
+
+            {/* Chart Display - controlled by orchestrator */}
+            {uiState.showChart && uiState.chartData && (
+                <div style={{marginTop: '20px', maxWidth: '800px'}}>
+                    <AnalyticsChart
+                        chartData={uiState.chartData.data || uiState.chartData}
+                        chartId={(uiState.chartData.data || uiState.chartData).chart_id}
+                        title={(uiState.chartData.data || uiState.chartData).title}
+                        onFilter={(filters) => console.log('Chart filtered:', filters)}
+                        onExport={(format) => console.log('Chart exported as:', format)}
                     />
                 </div>
             )}
@@ -407,12 +432,12 @@ const MyApp: FC = () => {
                             )}
 
                             {/* Display analytics charts */}
-                            {uiState.results.chart_id && uiState.results.echarts_option && (
+                            {(uiState.results.data?.echarts_option || uiState.results.chart?.echarts_option) && (
                                 <div style={{marginTop: '20px'}}>
                                     <AnalyticsChart
-                                        chartData={uiState.results}
-                                        chartId={uiState.results.chart_id}
-                                        title={uiState.results.title}
+                                        chartData={uiState.results.data || uiState.results.chart || uiState.results}
+                                        chartId={uiState.results.data?.chart_id || uiState.results.chart?.chart_id}
+                                        title={uiState.results.data?.title || uiState.results.chart?.title || uiState.results.title}
                                         onFilter={(filters) => console.log('Chart filtered:', filters)}
                                         onExport={(format) => console.log('Chart exported as:', format)}
                                     />

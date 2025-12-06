@@ -153,10 +153,13 @@ function createRoutingTools(orchestrator: any) {
               });
 
               console.log('📊 StateGraph result:', result);
+              console.log('📊 Checking for finalResult:', result.finalResult);
+              console.log('📊 finalResult exists:', !!result.finalResult);
 
               // StateGraph returns final state with finalResult directly
               if (result.finalResult) {
                   const parsedResponse = result.finalResult;
+                  console.log('📊 Extracting finalResult:', parsedResponse);
 
                   // Add to conversation context
                   if (parsedResponse.success !== false) {
@@ -169,6 +172,7 @@ function createRoutingTools(orchestrator: any) {
 
                   return JSON.stringify(parsedResponse);
               } else if (result.error) {
+                  console.log('📊 StateGraph returned error:', result.error);
                   const errorResponse = {
                       success: false,
                       error: result.error,
@@ -178,11 +182,14 @@ function createRoutingTools(orchestrator: any) {
                   addConversation(userQuery, 'analytics', errorResponse);
                   return JSON.stringify(errorResponse);
               } else {
+                  console.log('📊 No finalResult returned from StateGraph');
                   const errorResponse = {
                       success: false,
                       message: 'No result returned from analytics StateGraph',
                       routedTo: "state_graph_analytics",
-                      originalQuery: userQuery
+                      originalQuery: userQuery,
+                      stateKeys: Object.keys(result),
+                      stateDump: result
                   };
                   addConversation(userQuery, 'analytics', errorResponse);
                   return JSON.stringify(errorResponse);

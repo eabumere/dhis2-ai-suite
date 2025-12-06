@@ -4,7 +4,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { buildAnalyticsChart, getDataElements, queryAnalytics } from '../utils/tools/metadata';
 
 // Import LLM-based org unit keyword extraction
-import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM } from '../utils/tools/metadata';
+import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM, extractDatePeriodLLM } from '../utils/tools/metadata';
 
 // Import 2-level search function
 import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
@@ -37,6 +37,10 @@ const GraphAnnotation = Annotation.Root({
 
 	// Analytics workflow state
 	metadata: Annotation<any>({
+		reducer: (left, right) => right,
+		default: () => null,
+	}),
+	datePeriodsMetadata: Annotation<any>({
 		reducer: (left, right) => right,
 		default: () => null,
 	}),
@@ -323,6 +327,17 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 			orgUnitIds.push(...state.orgUnitsMetadata.suggestions.map((suggestion: any) => suggestion.id));
 		}
 
+		// Extract date periods from resolved metadata
+		const periods: string[] = [];
+		if (state.datePeriodsMetadata?.periods?.length > 0) {
+			periods.push(...state.datePeriodsMetadata.periods);
+		} else {
+			// Fallback to current year if no periods extracted
+			const currentYear = new Date().getFullYear().toString();
+			periods.push(currentYear);
+			console.log('📊 No periods extracted, using current year fallback:', currentYear);
+		}
+
 		// Extract formatted disaggregation dimension strings from resolved metadata
 		const disaggregationDimensions: string[] = [];
 		if (state.disaggregationsMetadata?.suggestions?.length > 0) {
@@ -330,6 +345,7 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 		}
 
 		console.log('📊 Using org units for query:', orgUnitIds);
+		console.log('📊 Using periods for query:', periods);
 		console.log('📊 Using disaggregation dimensions for query:', disaggregationDimensions);
 
 		// Group suggestions by type to properly handle both indicators and dataElements
@@ -373,7 +389,7 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 		const result = await queryAnalytics.invoke({
 			indicators: dxDimensionIds,     // All IDs (indicators + dataElements) go to dx dimension
 			doc_type: primaryType,
-			periods: ['2024'], // Default
+			periods: periods, // Now using resolved date periods
 			org_units: orgUnitIds, // Now using resolved organisation units
 			disaggregations: disaggregationDimensions, // Now using resolved disaggregation dimensions
 			include_coc_dimension: includeCocDimension // Enable COC dimension for dataElement queries
@@ -481,12 +497,14 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 				type: 'analytics'
 			};
 
-			addConversation(state.query, 'analytics', finalResult);
-
-			// Explicitly trigger chart rendering through orchestrator
+			// Add final result to conversation via orchestrator and save to context
 			if (state.orchestrator) {
+				state.orchestrator.addAssistantMessage(finalResult.message || 'Analytics completed successfully', 'response', finalResult);
 				state.orchestrator.renderChart(finalResult);
 			}
+
+			// Also save to conversation context
+			addConversation(state.query, 'analytics', finalResult);
 
 			return {
 				chart,
@@ -1026,6 +1044,85 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 	}
 }
 
+// New date period resolution function
+async function searchDatePeriods(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+	try {
+		console.log('📅 Searching for date periods in query using LLM extraction');
+
+		// Extract date/period references using LLM-powered tool
+		const llmResult = await extractDatePeriodLLM.invoke({
+			query: state.query,
+			context: 'health analytics - extract time periods for data analysis'
+		});
+
+		const llmResponse = JSON.parse(llmResult as string);
+		console.log('📅 LLM date period extraction result:', llmResponse);
+
+		// Extract periods from LLM response
+		const extractedPeriods = llmResponse.periods || [];
+		console.log('📅 Extracted periods from LLM:', extractedPeriods);
+
+		// If no periods found by LLM, use default period (current year)
+		if (extractedPeriods.length === 0) {
+			console.log('📅 No periods found by LLM, using default current year');
+
+			const currentYear = new Date().getFullYear().toString();
+			const defaultPeriodMetadata = {
+				status: 'default_selected',
+				periods: [currentYear],
+				query: state.query,
+				method: 'default_fallback',
+				llmResponse: llmResponse
+			};
+
+			console.log('📅 Using default period:', currentYear);
+			return {
+				datePeriodsMetadata: defaultPeriodMetadata,
+				step: 'query_data'
+			};
+		}
+
+		// Create metadata object with extracted periods
+		const datePeriodsMetadata = {
+			status: 'extracted',
+			periods: extractedPeriods,
+			query: state.query,
+			method: 'llm_extraction',
+			llmResponse: llmResponse,
+			matchedPhrases: llmResponse.matchedPhrases || [],
+			periodTypes: llmResponse.periodTypes || [],
+			confidence: llmResponse.confidence || 'medium'
+		};
+
+		console.log('📅 Date periods metadata:', datePeriodsMetadata);
+
+		return {
+			datePeriodsMetadata,
+			step: 'query_data'
+		};
+
+	} catch (error) {
+		console.error('📅 Date period search failed:', error);
+
+		// Graceful fallback - use current year
+		console.log('📅 Using fallback period due to error');
+
+		const currentYear = new Date().getFullYear().toString();
+		const fallbackPeriodsMetadata = {
+			status: 'fallback_selected',
+			periods: [currentYear],
+			query: state.query,
+			method: 'error_fallback',
+			error: error.message
+		};
+
+		return {
+			datePeriodsMetadata: fallbackPeriodsMetadata,
+			step: 'query_data'
+		};
+	}
+}
+
 // Helper function to extract disaggregation keywords from query
 function extractDisaggregationKeywords(query: string): string[] {
 	const keywords: string[] = [];
@@ -1166,6 +1263,7 @@ const workflow = new StateGraph(GraphAnnotation);
 workflow.addNode('classify_intent', classifyIntent);
 workflow.addNode('parse_selected_metadata', parseSelectedMetadata);
 workflow.addNode('search_metadata', searchMetadata);
+workflow.addNode('search_date_periods', searchDatePeriods);
 workflow.addNode('search_org_units', searchOrgUnits);
 workflow.addNode('search_disaggregations', searchDisaggregations);
 workflow.addNode('query_data', queryData);
@@ -1196,7 +1294,9 @@ workflow.addConditionalEdges('classify_intent', (state) => {
 // @ts-ignore
 workflow.addEdge('parse_selected_metadata', 'query_data'); // Selected metadata always goes to data query
 // @ts-ignore
-workflow.addEdge('search_metadata', 'search_org_units');    // Always try org unit search after metadata search
+workflow.addEdge('search_metadata', 'search_date_periods'); // Always try date period search after metadata search
+// @ts-ignore
+workflow.addEdge('search_date_periods', 'search_org_units'); // Always try org unit search after date period search
 // @ts-ignore
 workflow.addEdge('search_org_units', 'search_disaggregations'); // Always try disaggregation search after org unit search
 // @ts-ignore

@@ -10,6 +10,7 @@ export {
     queryAnalytics,
     searchAnalyticsMetadata,
     extractOrgUnitKeywordsLLM,
+    extractDatePeriodLLM,
     filterCategoriesForDisaggregationLLM,
     getAllMetadata,
     getOrganisationUnits,
@@ -21,8 +22,6 @@ export {
 
     // Charting tools
     buildAnalyticsChart,
-    filterAnalyticsChart,
-    exportAnalyticsChart,
 
     // Search tools for analytics
     searchDhis2Indicators,

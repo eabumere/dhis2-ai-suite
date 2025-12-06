@@ -133,125 +133,159 @@ export const buildAnalyticsChart = tool(
 );
 
 /**
- * Interactive filtering for existing charts
+ * Extract Date Period References using LLM
+ * Uses AI understanding to identify date/period references and convert them to DHIS2 format
  */
-export const filterAnalyticsChart = tool(
-    async (input: {
-        chartId: string;
-        filters: {
-            indicators?: string[];
-            periods?: string[];
-            orgUnits?: string[];
-            disaggregations?: string[];
-        };
-    }) => {
+export const extractDatePeriodLLM = tool(
+    async (input: { query: string, context?: string }) => {
         try {
-            const { chartId, filters } = input;
+            console.log('📅 LLM date period extraction called for:', input.query);
 
-            // Retrieve stored chart
-            const chart = getAnalyticsChart(chartId);
-            if (!chart) {
-                return JSON.stringify({
-                    success: false,
-                    error: `Chart with ID '${chartId}' not found`
-                });
+            // Initialize Azure OpenAI LLM
+	        const env = (import.meta as any).env;
+	        const llm = new AzureChatOpenAI({
+		        model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
+		        temperature: 0.1, // Low temperature for consistent filtering
+		        maxTokens: 150,   // Longer output for period analysis
+		        azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
+		        azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
+		        azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+		        azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
+	        });
+
+            // Create comprehensive prompt for date/period extraction
+            const prompt = `
+Analyze this DHIS2 analytics query and extract date/period references, converting them to DHIS2 period format.
+
+DHIS2 PERIOD FORMATS:
+- Days: yyyyMMdd (20040315 = March 15, 2004)
+- Weeks: yyyyWn (2004W10 = Week 10, 2004)
+- Months: yyyyMM (200403 = March 2004)
+- Quarters: yyyyQn (2004Q1 = Jan-Mar 2004)
+- Six-month: yyyySn (2004S1 = Jan-Jun 2004)
+- Six-month April: yyyyAprilSn (2004AprilS1 = Apr-Sep 2004)
+- Years: yyyy (2004 = full year 2004)
+- Financial Year April: yyyyApril (2004April = Apr 2004 - Mar 2005)
+- Financial Year July: yyyyJuly (2004July = Jul 2004 - Jun 2005)
+- Financial Year Oct: yyyyOct (2004Oct = Oct 2004 - Sep 2005)
+
+RELATIVE PERIODS (relative to current date):
+- THIS_WEEK, LAST_WEEK, LAST_4_WEEKS, LAST_12_WEEKS, LAST_52_WEEKS
+- THIS_MONTH, LAST_MONTH, THIS_BIMONTH, LAST_BIMONTH
+- THIS_QUARTER, LAST_QUARTER, THIS_SIX_MONTH, LAST_SIX_MONTH
+- MONTHS_THIS_YEAR, QUARTERS_THIS_YEAR, THIS_YEAR, MONTHS_LAST_YEAR
+- QUARTERS_LAST_YEAR, LAST_YEAR, LAST_5_YEARS, LAST_12_MONTHS
+- LAST_3_MONTHS, LAST_6_BIMONTHS, LAST_4_QUARTERS, LAST_2_SIXMONTHS
+- THIS_FINANCIAL_YEAR, LAST_FINANCIAL_YEAR, LAST_5_FINANCIAL_YEARS
+
+QUERY: "${input.query}"
+CONTEXT: ${input.context || 'Health analytics query - extract time periods for data analysis'}
+
+EXAMPLES:
+"Show data for March 2024" → ["202403"]
+"HIV cases in 2023" → ["2023"]
+"Last month results" → ["LAST_MONTH"]
+"This week and last week" → ["THIS_WEEK", "LAST_WEEK"]
+"Quarterly trends for 2023" → ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
+"Financial year 2024April" → ["2024April"]
+"March 15, 2024 to April 15, 2024" → ["20240315", "20240415"]
+
+IMPORTANT RULES:
+- Convert explicit dates to exact DHIS2 format (remove hyphens, use compact form)
+- Use RELATIVE periods for phrases like "last month", "this year"
+- For date ranges, list individual periods chronologically
+- For year references (like "2023"), use full year format
+- For month names, combine with year: "March 2024" → "202403"
+- If multiple interpretations possible, prefer most specific format
+- Return empty array [] if no date/period references found
+
+Return ONLY a JSON object with:
+{
+  "periods": ["period1", "period2", ...],
+  "matchedPhrases": ["March 2024", "2023"],
+  "periodTypes": ["month", "year"],
+  "confidence": "high|medium|low",
+  "interpretation": "brief explanation of how periods were derived"
+}
+`;
+
+            // Make LLM call
+            const llmResponse = await llm.invoke([
+                { role: "system", content: prompt },
+                { role: "user", content: `Extract date periods: ${input.query}` }
+            ]);
+
+            console.log('📅 LLM response:', llmResponse.content);
+
+            // Parse LLM response
+            const content = (llmResponse.content as string).trim();
+            let periodResult: any;
+
+            try {
+                periodResult = JSON.parse(content);
+                // Validate expected structure
+                if (!periodResult.periods || !Array.isArray(periodResult.periods)) {
+                    throw new Error('Invalid response structure');
+                }
+            } catch (parseError) {
+                console.warn('⚠️ LLM returned invalid JSON, attempting extraction');
+                // Attempt basic extraction
+                const periodMatch = content.match(/periods["\s:]+(\[[^\]]*\])/);
+                if (periodMatch) {
+                    try {
+                        periodResult = { periods: JSON.parse(periodMatch[1]) };
+                    } catch (e) {
+                        periodResult = { periods: [] };
+                    }
+                } else {
+                    periodResult = { periods: [] };
+                }
             }
 
-            // Apply filters to chart data
-            const filteredData = applyChartFilters(chart, filters);
-            const updatedChart = { ...chart, filteredData };
+            // Clean and validate periods
+            const cleanPeriods = (periodResult.periods || [])
+                .filter((period: any) => typeof period === 'string' && period.length > 0)
+                .map((period: string) => period.trim())
+                .filter((period: string, index: number, arr: string[]) => arr.indexOf(period) === index) // Remove duplicates
+                .slice(0, 10); // Limit to 10 periods
 
-            // Generate new ECharts option
-            const echartsOption = buildEChartsOption(updatedChart);
+            console.log('📅 Extracted periods:', cleanPeriods);
 
             return JSON.stringify({
-                success: true,
-                chart_id: chartId,
-                echarts_option: echartsOption,
-                applied_filters: filters,
-                data_points: filteredData.length,
-                title: updatedChart.title
+                periods: cleanPeriods,
+                matchedPhrases: periodResult.matchedPhrases || [],
+                periodTypes: periodResult.periodTypes || [],
+                method: 'llm_extraction',
+                llmModel: (llm as any).modelName,
+                query: input.query,
+                context: input.context,
+                confidence: periodResult.confidence || (cleanPeriods.length > 0 ? 'high' : 'low'),
+                interpretation: periodResult.interpretation || 'Period extraction result'
             });
 
         } catch (error) {
-            console.error('Error filtering analytics chart:', error);
+            console.error('❌ Error in LLM date period extraction:', error);
+
+            // Graceful failure fallback
             return JSON.stringify({
-                success: false,
-                error: `Failed to filter chart: ${error.message}`,
-                chart_id: input.chartId
+                periods: [],
+                error: `Date period extraction failed: ${error.message}`,
+                method: 'failed_llm_extraction',
+                query: input.query,
+                fallback_available: true
             });
         }
     },
     {
-        name: "filter_analytics_chart",
-        description: "Apply interactive filters to existing analytics charts (indicators, periods, org units, disaggregations)",
+        name: "extract_date_period_llm",
+        description: "Extract date/period references from natural language queries and convert them to DHIS2 period format. Handles fixed periods (yyyyMMdd, yyyyWn, etc.) and relative periods (THIS_WEEK, LAST_MONTH, etc.) for analytics data queries.",
         schema: z.object({
-            chartId: z.string().describe("ID of the chart to filter"),
-            filters: z.object({
-                indicators: z.array(z.string()).optional().describe("Filter by specific indicators"),
-                periods: z.array(z.string()).optional().describe("Filter by time periods"),
-                orgUnits: z.array(z.string()).optional().describe("Filter by organization units"),
-                disaggregations: z.array(z.string()).optional().describe("Filter by category breakdowns")
-            }).describe("Filters to apply to the chart")
+            query: z.string().describe("The user's query text to analyze for date/period references"),
+            context: z.string().optional().describe("Optional context about the analytics query type")
         })
     }
 );
 
-/**
- * Export chart as image or data
- */
-export const exportAnalyticsChart = tool(
-    async (input: {
-        chartId: string;
-        format: 'png' | 'svg' | 'csv' | 'json';
-        filename?: string;
-    }) => {
-        try {
-            const { chartId, format, filename } = input;
-
-            // Retrieve stored chart
-            const chart = getAnalyticsChart(chartId);
-            if (!chart) {
-                return JSON.stringify({
-                    success: false,
-                    error: `Chart with ID '${chartId}' not found`
-                });
-            }
-
-            // Generate export data based on format
-            const exportData = generateChartExport(chart, format);
-            const downloadFilename = filename ||
-                `dhis2_analytics_${chart.title}_${Date.now()}.${format === 'csv' ? 'csv' : 'json'}`;
-
-            return JSON.stringify({
-                success: true,
-                chart_id: chartId,
-                export_format: format,
-                filename: downloadFilename,
-                data: exportData, // This would be handled by frontend for downloads
-                message: `Chart exported successfully as ${format.toUpperCase()}`
-            });
-
-        } catch (error) {
-            console.error('Error exporting analytics chart:', error);
-            return JSON.stringify({
-                success: false,
-                error: `Failed to export chart: ${error.message}`,
-                chart_id: input.chartId,
-                format: input.format
-            });
-        }
-    },
-    {
-        name: "export_analytics_chart",
-        description: "Export analytics charts as PNG/SVG images or CSV/JSON data files",
-        schema: z.object({
-            chartId: z.string().describe("ID of the chart to export"),
-            format: z.enum(['png', 'svg', 'csv', 'json']).describe("Export format"),
-            filename: z.string().optional().describe("Custom filename (auto-generated if not provided)")
-        })
-    }
-);
 
 // =============================================================================
 // ECHARTS DATA PROCESSING - INTERNAL FUNCTIONS
@@ -2959,6 +2993,7 @@ export const Dhis2StructuredTools = {
     queryAnalytics,
     searchAnalyticsMetadata,
     extractOrgUnitKeywordsLLM,
+    extractDatePeriodLLM,
     filterCategoriesForDisaggregationLLM,
     getAllMetadata,
     getOrganisationUnits,

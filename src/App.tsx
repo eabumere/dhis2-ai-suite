@@ -20,6 +20,7 @@ interface QueryResults {
 const query = {
     me: {
         resource: 'me',
+
     },
 }
 

@@ -411,19 +411,26 @@ class WorkflowOrchestrator {
         const totalResults = this.calculateTotalResults(searchResult);
         const content = `Found ${totalResults} metadata ${totalResults === 1 ? 'item' : 'items'} matching "${originalQuery}"`;
 
+        // Format results for MessageRenderer compatibility
+        // MessageRenderer expects data.results to be an object with categorized arrays
+        const formattedData = {
+            ...searchResult,
+            // Transform flat results array into the structure MessageRenderer expects
+            // Group all results under a generic "metadata" category since we don't have specific types
+            results: searchResult.results ? {
+                metadata: Array.isArray(searchResult.results) ? searchResult.results : [searchResult.results]
+            } : undefined,
+            displayType: 'search_results', // Flag for specialized rendering
+            originalQuery,
+            totalResults
+        };
+
         // Add the search result as a specialized message type
-        const message = this.addAssistantMessage(
+        return this.addAssistantMessage(
             content,
             'response',
-            {
-                ...searchResult,
-                displayType: 'search_results', // Flag for specialized rendering
-                originalQuery,
-                totalResults
-            }
+            formattedData
         );
-
-        return message;
     }
 
     // Calculate total results across all result categories
@@ -435,7 +442,7 @@ class WorkflowOrchestrator {
         if (searchResult.results) {
             return Object.values(searchResult.results).reduce((total: number, items: any) => {
                 return total + (Array.isArray(items) ? items.length : 0);
-            }, 0);
+            }, 0) as number;
         }
 
         if (searchResult.data && Array.isArray(searchResult.data)) {

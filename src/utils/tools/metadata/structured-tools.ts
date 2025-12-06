@@ -512,9 +512,14 @@ function groupChartData(data: any[], chartType: string): any {
             labels: Object.keys(periodGroups)
         };
     } else {
-        // For line/bar charts, organize by indicators over periods
+        // For line/bar charts, organize by indicators over periods with disaggregation support
         const periodOrder: string[] = [];
-        const indicatorSeries: Record<string, Record<string, number>> = {};
+        const seriesMap: Record<string, Record<string, number>> = {};
+
+        // Detect if data has category option columns (disaggregation)
+        const hasCategoryOptions = data.length > 0 && Object.keys(data[0]).some(key => key.startsWith('co_'));
+
+        console.log(`📊 Chart grouping - Has disaggregations: ${hasCategoryOptions}`);
 
         data.forEach(row => {
             const period = row.period || 'Unknown';
@@ -524,19 +529,45 @@ function groupChartData(data: any[], chartType: string): any {
                 periodOrder.push(period);
             }
 
-            if (!indicatorSeries[indicator]) {
-                indicatorSeries[indicator] = {};
+            // Build series key - include category option if present for disaggregation
+            let seriesKey = indicator;
+            
+            if (hasCategoryOptions) {
+                // Extract category option values from co_* columns
+                const categoryOptionValues: string[] = [];
+                
+                for (const [key, value] of Object.entries(row)) {
+                    if (key.startsWith('co_') && value) {
+                        categoryOptionValues.push(String(value));
+                    }
+                }
+
+                // If we found category options, append them to create unique series
+                if (categoryOptionValues.length > 0) {
+                    const categoryLabel = categoryOptionValues.join(' - ');
+                    seriesKey = `${indicator} (${categoryLabel})`;
+                    console.log(`📊 Creating disaggregated series: ${seriesKey}`);
+                }
             }
-            indicatorSeries[indicator][period] = (indicatorSeries[indicator][period] || 0) + (row.value || 0);
+
+            // Initialize series if needed
+            if (!seriesMap[seriesKey]) {
+                seriesMap[seriesKey] = {};
+            }
+
+            // Aggregate values by period for this series
+            seriesMap[seriesKey][period] = (seriesMap[seriesKey][period] || 0) + (row.value || 0);
         });
 
         // Sort periods chronologically
         periodOrder.sort();
 
+        console.log(`📊 Generated ${Object.keys(seriesMap).length} series with ${periodOrder.length} periods`);
+
         return {
             categories: periodOrder,
-            series: Object.entries(indicatorSeries).map(([indicator, periodData]) => ({
-                name: indicator,
+            series: Object.entries(seriesMap).map(([seriesName, periodData]) => ({
+                name: seriesName,
                 data: periodOrder.map(period => periodData[period] || 0)
             }))
         };
@@ -1543,7 +1574,7 @@ async function createDhis2ReportingFormAggregated({
 
 /**
  * Query Analytics Tool - Main analytics data retrieval using direct tool approach
- * Since this is a complex query operation with many parameters, use direct tool implementation
+ * Handles both indicators and dataElements with proper category dimension construction for disaggregation
  */
 export const queryAnalytics = tool(
     async (input: {
@@ -1563,8 +1594,32 @@ export const queryAnalytics = tool(
             // Import the DHIS2 API query function
             const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
 
+            // CRITICAL FIX: Automatically detect and re-route category dimension strings from indicators to disaggregations
+            // Pattern: "categoryId:optionId1;optionId2" should be in disaggregations, not indicators
+            let cleanIndicators = [...input.indicators];
+            let cleanDisaggregations = [...(input.disaggregations || [])];
+
+            // Check indicators for category dimension strings and move them to disaggregations
+            const categoryDimensionPattern = /^[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+(;[a-zA-Z0-9_-]+)*$/;
+            const misplacedDisaggregations: string[] = [];
+
+            for (let i = cleanIndicators.length - 1; i >= 0; i--) {
+                const indicator = cleanIndicators[i];
+                if (categoryDimensionPattern.test(indicator)) {
+                    console.log(`🔄 Detected category dimension string in indicators: ${indicator} → moving to disaggregations`);
+                    misplacedDisaggregations.push(indicator);
+                    cleanIndicators.splice(i, 1);
+                }
+            }
+
+            // Add misplaced disaggregations to the disaggregations array
+            if (misplacedDisaggregations.length > 0) {
+                cleanDisaggregations.push(...misplacedDisaggregations);
+                console.log(`✅ Auto-corrected ${misplacedDisaggregations.length} category dimension strings to disaggregations`);
+            }
+
             // Build dimension parameters
-            const indicator_string = input.indicators.join(";");
+            const indicator_string = cleanIndicators.join(";");
             const period_string = input.periods.join(";");
             const org_unit_string = input.org_units.join(";");
 
@@ -1574,30 +1629,46 @@ export const queryAnalytics = tool(
                 `ou:${org_unit_string}`
             ];
 
-            // Validate and add disaggregation dimensions if provided
-            const validDisaggregations: string[] = [];
+            // Handle disaggregation dimensions - convert category dimension strings to co dimension
+            let cocDimension = '';
+
             if (input.disaggregations && input.disaggregations.length > 0) {
-                for (const cat_id of input.disaggregations) {
-                    // Validate that the category exists by checking with API
-                    try {
-                        const { Dhis2Api: ValidateApi } = await import('../../app-runtime/dhis2-api');
-                        const validationResponse = await (ValidateApi as any).default.query({
-                            resource: `dimensions/${cat_id}`,
-                            params: {}
-                        });
-                        // Only include if validation succeeds (dimension exists)
-                        if (validationResponse) {
-                            dimensions.push(`${cat_id}`);
-                            validDisaggregations.push(cat_id);
-                        } else {
-                            console.warn(`Skipping invalid disaggregation dimension: ${cat_id}`);
+                try {
+                    // input.disaggregations contains category dimension strings like:
+                    // ["d7ZaswhlDjR:I85StqsPWlg;DH1RBcpzNqw"] (categoryId:optionId1;optionId2)
+
+                    const cocIds: string[] = [];
+
+                for (const disaggDim of input.disaggregations) {
+                    // Parse category dimension string: "categoryId:optionId1;optionId2"
+                        const [categoryId, optionIdsStr] = disaggDim.split(':');
+                        if (!categoryId || !optionIdsStr) continue;
+
+                        const optionIds = optionIdsStr.split(';').filter(id => id);
+
+                        // For dataElement disaggregation, put category option IDs in co dimension
+                        // DHIS2 co dimension expects category option IDs for disaggregation filtering
+                        if (optionIds.length > 0) {
+                            cocIds.push(...optionIds);
                         }
-                    } catch (error) {
-                        console.warn(`Dimension validation failed for ${cat_id}, skipping:`, error.message);
-                        // Skip this dimension if validation fails
                     }
+
+                    if (cocIds.length > 0) {
+                        cocDimension = `co:${cocIds.join(';')}`;
+                        console.log(`Generated co dimension: ${cocDimension} from ${input.disaggregations.length} disaggregation dimensions`);
+                    }
+                } catch (error) {
+                    console.warn('Failed to process disaggregation dimensions:', error);
                 }
-                console.log(`Validated disaggregations: ${validDisaggregations.length}/${input.disaggregations.length} dimensions are valid`);
+            }
+
+            // Add co dimension for disaggregated dataElements
+            if (cocDimension) {
+                dimensions.push(cocDimension);
+                console.log('Added category option combo (co) dimension:', cocDimension);
+            } else if (input.doc_type === 'dataElement' || input.include_coc_dimension === true) {
+                dimensions.push('co');
+                console.log('Added empty category option combo (co) dimension for dataElement queries');
             }
 
             // Build analytics query configuration
@@ -1669,6 +1740,205 @@ export const queryAnalytics = tool(
         })
     }
 );
+
+/**
+ * Filter Categories for Disaggregation using LLM
+ * Given available categories from dataElements and user query, select which categories to use for disaggregation
+ */
+export const filterCategoriesForDisaggregationLLM = tool(
+    async (input: { query: string, availableCategories: Array<{name: string, id: string}> }) => {
+        try {
+            console.log('🧠 Filtering categories for disaggregation:', {
+                query: input.query,
+                categoryCount: input.availableCategories.length
+            });
+
+            // Initialize Azure OpenAI LLM
+            const env = (import.meta as any).env;
+            const llm = new AzureChatOpenAI({
+                model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
+                temperature: 0.1, // Low temperature for consistent filtering
+                maxTokens: 200,   // Longer output for category analysis
+                azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
+                azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
+                azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+                azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
+            });
+
+            const categoryList = input.availableCategories.map(cat => `"${cat.name}" (${cat.id})`).join(', ');
+
+            // Create prompt for category filtering
+            const prompt = `
+Analyze this DHIS2 analytics query and determine which categories should be used for disaggregation.
+
+QUERY: "${input.query}"
+AVAILABLE CATEGORIES: [${categoryList}]
+
+TASK: Identify which categories match the user's disaggregation intent. Consider:
+- Natural language disaggregation: "by age group", "broken down by gender", "disaggregated by facility type"
+- Data analysis intent: showing breakdowns, comparisons across groups
+- Multi-dimensional analysis: user might want multiple categories
+
+EXAMPLES:
+Query: "Show HIV cases by age group and gender"
+Categories: ["Age groups (abc123)", "Gender (def456)", "Facility Type (ghi789)"]
+→ Select: ["Age groups", "Gender"]
+
+Query: "Malaria trends disaggregated by district"
+Categories: ["Age groups (abc123)", "Gender (def456)", "District (ghi789)"]  
+→ Select: [] (district is org unit, handled elsewhere)
+
+Query: "ART coverage by facility type"
+Categories: ["Age groups (abc123)", "Facility Ownership (def456)", "Facility Type (ghi789)"]
+→ Select: ["Facility Type"] (exact or close semantic match)
+
+Query: "Total HIV cases" (no disaggregation mentioned)
+Categories: ["Age groups (abc123)", "Gender (def456)"]
+→ Select: [] (no disaggregation requested)
+
+IMPORTANT RULES:
+- Return ONLY category names that clearly match disaggregation intent
+- IGNORE location categories (country, district, facility) - these are handled by org unit selection
+- IGNORE time-based categories that overlap with periods
+- Return empty array if no clear disaggregation intent
+- Prefer exact or very close matches over loose associations
+
+Return ONLY a JSON array of selected category names: ["Category Name 1", "Category Name 2", ...]
+`;
+
+            // Make LLM call
+            const llmResponse = await llm.invoke([
+                { role: "system", content: prompt },
+                { role: "user", content: `Return JSON array of selected category names for: ${input.query}` }
+            ]);
+
+            console.log('🧠 Category filtering LLM response:', llmResponse.content);
+
+            // Parse LLM response
+            const content = (llmResponse.content as string).trim();
+            let selectedCategories: string[];
+
+            try {
+                selectedCategories = JSON.parse(content);
+                if (!Array.isArray(selectedCategories)) {
+                    throw new Error('LLM returned non-array response');
+                }
+            } catch (parseError) {
+                console.warn('⚠️ Category filtering LLM returned non-JSON response, attempting fallback parsing');
+                const arrayMatch = content.match(/\[([^\]]*)\]/);
+                if (arrayMatch) {
+                    selectedCategories = arrayMatch[1].split(',')
+                        .map(item => item.replace(/['"]/g, '').trim())
+                        .filter(item => item.length > 0);
+                } else {
+                    selectedCategories = [];
+                }
+            }
+
+            // Map selected names back to full category objects
+            const selectedCategoryObjects = selectedCategories
+                .map(name => input.availableCategories.find(cat => cat.name === name))
+                .filter(cat => cat !== undefined);
+
+            console.log('🧠 Selected categories for disaggregation:', selectedCategoryObjects);
+
+            return JSON.stringify({
+                selectedCategories: selectedCategoryObjects,
+                method: 'llm_category_filtering',
+                llmModel: (llm as any).modelName,
+                query: input.query,
+                totalAvailable: input.availableCategories.length,
+                selectedCount: selectedCategoryObjects.length,
+                confidence: selectedCategoryObjects.length > 0 ? 'high' : 'low'
+            });
+
+        } catch (error) {
+            console.error('❌ Error in category filtering LLM:', error);
+
+            return JSON.stringify({
+                selectedCategories: [],
+                error: `Category filtering failed: ${error.message}`,
+                method: 'failed_llm_filtering',
+                query: input.query,
+                totalAvailable: input.availableCategories.length,
+                selectedCount: 0,
+                fallback_available: false
+            });
+        }
+    },
+    {
+        name: "filter_categories_for_disaggregation_llm",
+        description: "Given available categories from dataElements and user query, use LLM to determine which categories should be used for disaggregation. Avoids spelling issues by working with actual DHIS2 category names.",
+        schema: z.object({
+            query: z.string().describe("The user's query text"),
+            availableCategories: z.array(z.object({
+                name: z.string().describe("Category name"),
+                id: z.string().describe("Category ID")
+            })).describe("Available categories from the dataElements' category structure")
+        })
+    }
+);
+
+/**
+ * Helper function to extract disaggregation keywords from query using regex
+ */
+function extractDisaggregationKeywords(query: string): string[] {
+    const keywords: string[] = [];
+
+    // Convert to lowercase for matching
+    const queryLower = query.toLowerCase();
+
+    // Common disaggregation dimensions
+    const disaggregationTerms = [
+        // Demographic categories
+        'age group', 'age groups', 'age', 'ages', 'gender', 'sex',
+        // Health system categories
+        'facility type', 'facility types', 'service type', 'service types',
+        'ownership', 'ownership type', 'ownership types',
+        // Geographic categories (non-org unit)
+        'urban', 'rural', 'urban/rural', 'urban rural',
+        // Socioeconomic categories
+        'income level', 'income levels', 'economic status', 'socioeconomic',
+        'wealth quintile', 'wealth quintiles',
+        // Program categories
+        'treatment type', 'treatment types', 'intervention type', 'intervention types',
+        // Common category breakdowns
+        'category', 'categories', 'group', 'groups', 'breakdown', 'breakdowns'
+    ];
+
+    // Check for disaggregation keywords with "by" preposition
+    const byPattern = /by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi;
+    let match;
+    while ((match = byPattern.exec(queryLower)) !== null) {
+        const extracted = match[1].trim();
+        if (extracted.length > 2 && !/\b(and|or|the|a|an|for|in|at|of|with)\b/i.test(extracted)) {
+            keywords.push(extracted);
+        }
+    }
+
+    // Check for explicit disaggregation terms
+    for (const term of disaggregationTerms) {
+        if (queryLower.includes(term)) {
+            keywords.push(term.charAt(0).toUpperCase() + term.slice(1)); // Capitalize first letter
+        }
+    }
+
+    // Check for "disaggregated by" patterns
+    const disaggPattern = /disaggregated?\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi;
+    while ((match = disaggPattern.exec(queryLower)) !== null) {
+        const extracted = match[1].trim();
+        if (extracted.length > 2) {
+            keywords.push(extracted);
+        }
+    }
+
+    // Remove duplicates and clean up
+    return [...new Set(keywords)].filter(keyword =>
+        keyword.length > 2 &&
+        !/\b(month|year|quarter|period|date|time|week|day)\b/i.test(keyword) && // Filter out time dimensions
+        !/\b(country|countries|district|districts|province|provinces|region|regions|county|counties|facility|facilities|hospital|hospitals|clinic|clinics|centre|centers|center|centres)\b/i.test(keyword) // Filter out location dimensions
+    );
+}
 
 /**
  * Extract Organisation Unit Keywords using LLM
@@ -2118,7 +2388,7 @@ export const getOrganisationUnits = tool(
 export const getDataElements = tool(
     async (input: { filters?: Record<string, string> }) => {
         try {
-            const Dhis2Api = await import('../../app-runtime/dhis2-api');
+            const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
 
             const allItems = [];
             let page = 1;
@@ -2138,12 +2408,16 @@ export const getDataElements = tool(
                     });
                 }
 
-                const response = await (Dhis2Api as any).default.query({
-                    resource: 'dataElements.json',
-                    params: params
+                const response = await (Dhis2Api as any).query(
+	                {
+	                    dataElements:{
+		                    resource: 'dataElements.json',
+			                params: params
+	                }
                 });
 
-                const items = response.dataElements || [];
+                const items = response?.data?.dataElements?.dataElements || [];
+				console.log('Data Elements query:', items);
 
                 if (!items || items.length === 0) {
                     break;
@@ -2152,7 +2426,7 @@ export const getDataElements = tool(
                 allItems.push(...items);
 
                 // Check pagination info
-                const pager = response.pager || {};
+                const pager = response?.pager || {};
                 if (pager.page >= pager.pageCount) {
                     break;
                 }
@@ -2687,6 +2961,7 @@ export const Dhis2StructuredTools = {
     queryAnalytics,
     searchAnalyticsMetadata,
     extractOrgUnitKeywordsLLM,
+    filterCategoriesForDisaggregationLLM,
     getAllMetadata,
     getOrganisationUnits,
     getDataElements,

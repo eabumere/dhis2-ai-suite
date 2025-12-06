@@ -189,11 +189,14 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
         // Handle chart data
         if (data.data?.echarts_option || data.chart?.echarts_option || data.echarts_option) {
             const chartData = data.data || data.chart || data;
+            // Use stable chart ID based on message ID to prevent re-rendering
+            const stableChartId = chartData.chart_id || `chart_msg_${message.id}_${chartData.title || 'chart'}`.replace(/\s+/g, '_');
+
             return (
                 <div style={{ marginTop: '16px', maxWidth: '600px' }}>
                     <AnalyticsChart
                         chartData={chartData}
-                        chartId={chartData.chart_id || `chart_${Date.now()}`}
+                        chartId={stableChartId}
                         title={chartData.title || 'Analytics Chart'}
                         onFilter={(filters) => console.log('Chart filtered:', filters)}
                         onExport={(format) => console.log('Chart exported as:', format)}

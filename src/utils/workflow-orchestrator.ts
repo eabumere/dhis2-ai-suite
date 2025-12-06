@@ -411,15 +411,10 @@ class WorkflowOrchestrator {
         const totalResults = this.calculateTotalResults(searchResult);
         const content = `Found ${totalResults} metadata ${totalResults === 1 ? 'item' : 'items'} matching "${originalQuery}"`;
 
-        // Format results for MessageRenderer compatibility
-        // MessageRenderer expects data.results to be an object with categorized arrays
-        const formattedData = {
+        // Preserve the original multi-type structure that MessageRenderer expects
+        // Search agent already returns the correct format: { dataElements: [...], indicators: [...], etc. }
+        const messageData = {
             ...searchResult,
-            // Transform flat results array into the structure MessageRenderer expects
-            // Group all results under a generic "metadata" category since we don't have specific types
-            results: searchResult.results ? {
-                metadata: Array.isArray(searchResult.results) ? searchResult.results : [searchResult.results]
-            } : undefined,
             displayType: 'search_results', // Flag for specialized rendering
             originalQuery,
             totalResults
@@ -429,7 +424,7 @@ class WorkflowOrchestrator {
         return this.addAssistantMessage(
             content,
             'response',
-            formattedData
+            messageData
         );
     }
 

@@ -182,22 +182,16 @@ const MyApp: FC = () => {
                 }
             );
 
-            // Add assistant response to conversation (router agent now handles specialized rendering internally)
-            if (result?.success !== false) {
-                // Router agent has already handled specialized rendering for direct searches
-                // For other results, add a simple confirmation message
-                workflowOrchestrator.addAssistantMessage(
-                    result.message || 'Operation completed successfully',
-                    'response',
-                    result
-                );
-            } else {
+            // Add assistant response to conversation (only for non-specialized cases)
+            if (result?.success === false) {
+                // Only add error messages to conversation
                 workflowOrchestrator.addAssistantMessage(
                     result.error || 'Operation failed',
                     'error',
                     result
                 );
             }
+            // For successful operations, router agent handles specialized rendering (search, analytics, etc.)
 
         } catch (error) {
             console.error('Query submission error:', error);

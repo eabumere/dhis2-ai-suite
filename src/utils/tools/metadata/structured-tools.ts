@@ -1607,8 +1607,33 @@ async function createDhis2ReportingFormAggregated({
 // =============================================================================
 
 /**
+ * Helper function to detect if a period string is a date (yyyyMMdd format)
+ */
+function isDatePeriod(period: string): boolean {
+    return /^\d{8}$/.test(period);
+}
+
+/**
+ * Helper function to format date from yyyyMMdd to yyyy-MM-dd
+ */
+function formatDateWithHyphens(dateStr: string): string {
+    if (dateStr.length !== 8) {
+        throw new Error(`Invalid date format: ${dateStr}. Expected yyyyMMdd format.`);
+    }
+    const year = dateStr.substring(0, 4);
+    const month = dateStr.substring(4, 6);
+    const day = dateStr.substring(6, 8);
+    return `${year}-${month}-${day}`;
+}
+
+/**
  * Query Analytics Tool - Main analytics data retrieval using direct tool approach
  * Handles both indicators and dataElements with proper category dimension construction for disaggregation
+ * 
+ * PERIOD FILTERING SUPPORT:
+ * - Supports startDate/endDate parameter combination for specific date ranges (yyyy-MM-dd format)
+ * - Supports pe dimension for DHIS2 period codes (202403, 2023, LAST_MONTH, etc.)
+ * - Both methods are mutually exclusive - only one is used per query
  */
 export const queryAnalytics = tool(
     async (input: {
@@ -1654,14 +1679,41 @@ export const queryAnalytics = tool(
 
             // Build dimension parameters
             const indicator_string = cleanIndicators.join(";");
-            const period_string = input.periods.join(";");
             const org_unit_string = input.org_units.join(";");
 
             const dimensions = [
                 `dx:${indicator_string}`,
-                `pe:${period_string}`,
                 `ou:${org_unit_string}`
             ];
+
+            // Detect if periods are dates (yyyyMMdd) or DHIS2 period codes
+            const allDates = input.periods.every(p => isDatePeriod(p));
+            const someDates = input.periods.some(p => isDatePeriod(p));
+            const noDates = !someDates;
+
+            // DHIS2 Analytics API: startDate/endDate and pe are mutually exclusive
+            let startDate: string | undefined;
+            let endDate: string | undefined;
+
+            if (allDates && input.periods.length > 0) {
+                // All periods are dates - use startDate/endDate parameters
+                const sortedDates = [...input.periods].sort();
+                startDate = formatDateWithHyphens(sortedDates[0]);
+                endDate = formatDateWithHyphens(sortedDates[sortedDates.length - 1]);
+                
+                console.log(`📅 Using startDate/endDate parameters: ${startDate} to ${endDate} (${input.periods.length} date(s))`);
+                // Note: pe dimension is NOT added when using startDate/endDate
+            } else {
+                // Use pe dimension for DHIS2 period codes (default behavior)
+                const period_string = input.periods.join(";");
+                dimensions.push(`pe:${period_string}`);
+                
+                if (someDates && !allDates) {
+                    console.warn(`⚠️ Mixed date and period formats detected. Using pe dimension for all periods. Consider using consistent format.`);
+                }
+                
+                console.log(`📅 Using pe dimension: ${period_string}`);
+            }
 
             // Handle disaggregation dimensions - convert category dimension strings to co dimension
             let cocDimension = '';
@@ -1704,6 +1756,20 @@ export const queryAnalytics = tool(
             }
 
             // Build analytics query configuration
+            const baseParams: any = {
+                displayProperty: input.display_property || "NAME",
+                includeNumDen: input.include_num_den || false,
+                skipMeta: input.skip_meta === true, // Default false - INCLUDE metadata for analytics
+                skipData: input.skip_data || false,
+                outputIdScheme: input.output_id_scheme || "NAME"
+            };
+
+            // Add startDate/endDate if using date filtering (mutually exclusive with pe dimension)
+            if (startDate && endDate) {
+                baseParams.startDate = startDate;
+                baseParams.endDate = endDate;
+            }
+
             const analyticsConfig = {
                 analytics: {
                     resource: 'analytics',
@@ -1711,13 +1777,7 @@ export const queryAnalytics = tool(
                         params.dimension = params.dimension || [];
                         params.dimension.push(dimension);
                         return params;
-                    }, {
-                        displayProperty: input.display_property || "NAME",
-                        includeNumDen: input.include_num_den || false,
-                        skipMeta: input.skip_meta === true, // Default false - INCLUDE metadata for analytics
-                        skipData: input.skip_data || false,
-                        outputIdScheme: input.output_id_scheme || "NAME"
-                    })
+                    }, baseParams)
                 }
             };
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 
 interface AnalyticsChartProps {
@@ -37,6 +37,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     const [isFiltering, setIsFiltering] = useState(false);
     const [filterOptions, setFilterOptions] = useState<any>({});
     const [filtersExpanded, setFiltersExpanded] = useState(false);
+    const echartsRef = useRef<any>(null);
 
     useEffect(() => {
         if (chartData?.echarts_option) {
@@ -97,8 +98,12 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             // Update the chart options with filtered data
             const filteredOption = await generateFilteredChartOption(filteredChartData);
 
-            // Update the ECharts instance
-            setEchartsOption(filteredOption);
+            // Update the ECharts instance while preserving interactivity
+            if (echartsRef.current) {
+                echartsRef.current.getEchartsInstance().setOption(filteredOption, false, true);
+            } else {
+                setEchartsOption(filteredOption);
+            }
 
             onFilter?.(newFilters);
         } catch (error) {
@@ -122,8 +127,12 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             // Update the chart options with filtered data
             const filteredOption = await generateFilteredChartOption(filteredChartData);
 
-            // Update the ECharts instance
-            setEchartsOption(filteredOption);
+            // Update the ECharts instance while preserving interactivity
+            if (echartsRef.current) {
+                echartsRef.current.getEchartsInstance().setOption(filteredOption, false, true);
+            } else {
+                setEchartsOption(filteredOption);
+            }
 
             onFilter?.(newFilters);
         } catch (error) {
@@ -142,7 +151,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             return data;
         }
 
-        console.log(`📊 Filtering ${filteredData.length} data points with filters:`, filters);
+        console.log(`📊 Filtering ${filteredData.length} data points with filters:`, filters, data);
 
         let filteredRows = [...filteredData];
 
@@ -164,16 +173,16 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             console.log(`📊 Filtered by org units: ${filteredRows.length} points remaining`);
         }
 
-        // Filter by disaggregations (option IDs mapped to COCs using cocMapping)
+        // Filter by disaggregations (option IDs mapped to COCs using optionsToCocs)
         console.log(`📊 Checking disaggregations filter: ${filters.disaggregations?.length || 0} items`, data);
-        if (filters.disaggregations && filters.disaggregations.length > 0 && data?.cocMapping) {
+        if (filters.disaggregations && filters.disaggregations.length > 0 && data?.optionsToCocs) {
             console.log(`📊 Applying disaggregations filter: ${filters.disaggregations.join(', ')}`);
             const validCOCIds = new Set<string>();
 
-            // Map selected option IDs to their associated COCs using cocMapping directly
+            // Map selected option IDs to their associated COCs using optionsToCocs directly
             filters.disaggregations.forEach((optionId: string) => {
-                if (data.cocMapping[optionId]) {
-                    data.cocMapping[optionId].forEach(cocId => validCOCIds.add(cocId));
+                if (data.optionsToCocs[optionId]) {
+                    data.optionsToCocs[optionId].forEach(cocId => validCOCIds.add(cocId));
                 }
             });
 
@@ -188,84 +197,10 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 console.log(`📊 No valid COCs found for disaggregation filters - keeping all rows`);
             }
         } else if (filters.disaggregations && filters.disaggregations.length > 0) {
-            console.log(`📊 Disaggregations filter applied but no cocMapping available`);
+            console.log(`📊 Disaggregations filter applied but no optionsToCocs available`);
         } else {
             console.log(`📊 No disaggregations filter applied`);
         }
-
-        if (filters.categories && Object.keys(filters.categories).length > 0 && data?.cocMapping) {
-            const validCOCIds = new Set<string>();
-
-            for (const [categoryId, selectedOptions] of Object.entries(filters.categories)) {
-                if (!selectedOptions || selectedOptions.length === 0) continue;
-
-                // Find the category in filterGroups to map option names to option IDs
-                const categoryGroup = filterOptions.categories?.find(cat => cat.categoryId === categoryId);
-                if (!categoryGroup) continue;
-
-                // For each selected option name, find its ID and get associated COCs
-                selectedOptions.forEach((selectedOptionName: string) => {
-                    const option = categoryGroup.options.find(opt => opt.name === selectedOptionName);
-                    if (option && data.cocMapping[option.id]) {
-                        // Add all COCs that contain this option
-                        data.cocMapping[option.id].forEach(cocId => validCOCIds.add(cocId));
-                    }
-                });
-            }
-
-            if (validCOCIds.size > 0) {
-                // Filter rows to only include those with valid COC IDs
-                filteredRows = filteredRows.filter(row => {
-                    const rowCocId = row.co; // COC ID column
-	                console.log('Filtering row', row, rowCocId, validCOCIds);
-                    return rowCocId && validCOCIds.has(rowCocId);
-                });
-
-                console.log(`📊 Filtered by categories (${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
-            } else {
-                console.log(`📊 No valid COCs found for category filters - keeping all rows`);
-            }
-        } else if (filters.categories && Object.keys(filters.categories).length > 0 && data?.metaData?.items) {
-            // Fallback: parse COC names directly (legacy approach)
-            console.log('📊 Using fallback category filtering (COC name parsing)');
-            const metaDataItems = data.metaData.items;
-
-            const validCOCIds = new Set<string>();
-            for (const [categoryId, selectedOptions] of Object.entries(filters.categories)) {
-                if (!selectedOptions || selectedOptions.length === 0) continue;
-
-                const categoryGroup = filterOptions.categories?.find(cat => cat.categoryId === categoryId);
-                if (!categoryGroup) continue;
-
-                selectedOptions.forEach((selectedOptionName: string) => {
-                    Object.entries(metaDataItems).forEach(([itemId, itemData]: [string, any]) => {
-                        if (itemData?.name) {
-                            const cocName = itemData.name;
-                            const cocNameParts = cocName.split(',').map(part => part.trim());
-                            const hasMatch = cocNameParts.some(part =>
-                                part.toLowerCase() === selectedOptionName.toLowerCase()
-                            );
-
-                            if (hasMatch) {
-                                validCOCIds.add(itemId);
-                            }
-                        }
-                    });
-                });
-            }
-
-            if (validCOCIds.size > 0) {
-                filteredRows = filteredRows.filter(row => {
-                    const rowCocId = row.co;
-                    return rowCocId && validCOCIds.has(rowCocId);
-                });
-
-                console.log(`📊 Filtered by categories (fallback parsing, ${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
-            } else {
-                console.log(`📊 No valid COCs found for category filters (fallback) - keeping all rows`);
-            }
-        }
-
         // Return the original data but with filtered rows
         return {
             ...data,
@@ -280,10 +215,10 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         };
     };
 
-    // Generate chart option from filtered data by re-creating the chart using buildAnalyticsChart
+    // Generate chart option from filtered data by updating existing chart structure
     const generateFilteredChartOption = async (filteredData: any): Promise<any> => {
-        // Use the buildAnalyticsChart tool with filtered data to generate new chart options
-        const { buildAnalyticsChart } = await import('../utils/tools/metadata/structured-tools');
+        // Import buildEChartsOption directly for efficient regeneration
+        const { buildEChartsOption } = await import('../utils/tools/metadata/structured-tools');
 
         if (!filteredData || !filteredData.filteredData) {
             return null;
@@ -292,46 +227,17 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         console.log(`📊 Re-generating chart with filtered data: ${filteredData.filteredData.length} points`);
 
         try {
-            // Format data for buildAnalyticsChart tool
-            // Convert disaggregation objects back to dimension strings for the tool schema
-            const disaggregationDimensions = filteredData.dimensions?.disaggregations?.map((disaggGroup: any) =>
-                `${disaggGroup.categoryId}:${disaggGroup.options.map((opt: any) => opt.id).join(';')}`
-            ) || [];
-
-            const chartParams = {
-                userQuery: `Filtered chart: ${filteredData.title || 'Analytics'}`,
-                analyticsData: {
-                    data: {
-                        analytics: {
-                            rows: filteredData.filteredData,
-                            headers: [] // Headers are already processed into rows
-                        }
-                    }
-                },
-                chartType: filteredData.chartType || 'bar',
-                indicators: filteredData.dimensions?.indicators || [],
-                periods: filteredData.dimensions?.periods || [],
-                orgUnits: filteredData.dimensions?.orgUnits || [],
-                disaggregations: disaggregationDimensions, // Convert back to dimension strings for tool schema
-                filterOptions: filteredData.filterGroups || [], // Preserve filter options for category filtering
-                cocMapping: filteredData.cocMapping || {}, // Preserve accurate COC mapping for filtering
-                title: filteredData.title || 'Filtered Chart'
+            // Create a complete chart data object with chartType from original data
+            const completeChartData = {
+                ...filteredData,
+                chartType: chartData.chartType || 'bar' // Preserve chartType from original chartData
             };
 
-            // Call buildAnalyticsChart to get new options with filtered data
-            const result = await buildAnalyticsChart.invoke(chartParams);
+            // Regenerate the ECharts option with the complete chart data
+            const echartsOption = buildEChartsOption(completeChartData);
 
-            // Parse the result
-            if (typeof result === 'string') {
-                const parsed = JSON.parse(result);
-                if (parsed.echarts_option) {
-                    console.log('📊 Successfully generated filtered chart options');
-                    return parsed.echarts_option;
-                }
-            }
-
-            console.error('📊 Failed to generate filtered chart options');
-            return null;
+            console.log('📊 Successfully generated filtered chart options');
+            return echartsOption;
 
         } catch (error) {
             console.error('❌ Error generating filtered chart:', error);
@@ -763,6 +669,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 backgroundColor: 'white'
             }}>
                 <ReactECharts
+                    ref={echartsRef}
                     option={echartsOption}
                     style={{ height: '400px', width: '100%' }}
                     opts={{ renderer: 'canvas' }}

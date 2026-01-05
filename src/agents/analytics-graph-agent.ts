@@ -94,6 +94,11 @@ const GraphAnnotation = Annotation.Root({
 	cocMapping: Annotation<any>({
 		reducer: (left, right) => right,
 		default: () => {},
+	}),
+
+	optionsToCocs: Annotation<any>({
+		reducer: (left, right) => right,
+		default: () => {},
 	})
 });
 
@@ -464,7 +469,7 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 
 async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
-		console.log('📊 Building analytics chart using pure DHIS2 data');
+		console.log('📊 Building analytics chart using pure DHIS2 data', state);
 
 		// Check if we have analytics data to build chart from
 		if (!state.data || !state.data.data) {
@@ -500,6 +505,7 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 			disaggregations: state.data.disaggregations || [], // Pass the disaggregations from query data
 			filterOptions: state.disaggregationsMetadata?.filterOptions || [], // Pass category filter options for chart filtering
 			cocMapping: (state as any).cocMapping || {}, // Keep for backward compatibility
+			optionsToCocs: state.optionsToCocs
 		});
 
 		const chart = JSON.parse(result);
@@ -930,8 +936,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 					}
 				}
 
-
-
 			} catch (dataElementError) {
 				console.warn('🔢 Failed to fetch dataElement categories:', dataElementError.message);
 				availableCategories = [];
@@ -949,7 +953,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 		// Extract selected categories from LLM response
 		const selectedCategories = llmResponse.selectedCategories || [];
-		console.log('🔢 Selected categories from LLM:', selectedCategories);
+		console.log('🔢 Selected categories from LLM:', selectedCategories, state);
 
 		const hasAvailableCategories = availableCategories.length > 0;
 		const hasSelectedCategories = selectedCategories.length > 0;
@@ -968,6 +972,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 			return {
 				disaggregationsMetadata: noDisaggMetadata,
+				cocMapping: cocMapping,
 				step: 'query_data'
 			};
 		}
@@ -994,13 +999,11 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			});
 		}
 
-		console.log('🔢 Built optionToCocs mapping with', Object.keys(optionToCocs).length, 'validated options');
+		console.log('🔢 Built optionToCocs mapping with', Object.keys(optionToCocs).length, 'validated options', state);
 
 		// Store optionToCocs on state
 		(state as any).optionToCocs = optionToCocs;
 
-		// Build category dimension suggestions from selected categories
-		// Use already-available fullCategoryDetails instead of additional API calls
 		const suggestions: any[] = [];
 		const filterOptions: any[] = [];
 
@@ -1050,9 +1053,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				type: 'categoryFilter'
 			});
 		}
-
-		console.log(`🔢 Generated ${suggestions.length} category dimension suggestions`);
-		console.log(`🔢 Constructed ${filterOptions.length} category filter options from COCs`);
 
 		// optionToCocs will be built from cocMapping in buildAnalyticsChart
 
@@ -1121,6 +1121,8 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				// Continue with query_data using selected disaggregations
 				return {
 					disaggregationsMetadata: updatedDisaggMetadata,
+					cocMapping: cocMapping,
+					optionsToCocs: optionToCocs,
 					step: 'query_data'
 				};
 			} else {
@@ -1135,6 +1137,8 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 				return {
 					disaggregationsMetadata: cancelledDisaggMetadata,
+					cocMapping: cocMapping,
+					optionsToCocs: optionToCocs,
 					step: 'query_data'
 				};
 			}
@@ -1142,6 +1146,8 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			// Single match or auto-selected - proceed directly to query
 			return {
 				disaggregationsMetadata,
+				cocMapping: cocMapping,
+				optionsToCocs: optionToCocs,
 				step: 'query_data'
 			};
 		}

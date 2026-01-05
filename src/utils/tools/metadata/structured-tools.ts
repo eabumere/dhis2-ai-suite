@@ -68,6 +68,7 @@ export const buildAnalyticsChart = tool(
         disaggregations?: string[];
         filterOptions?: any[];
         cocMapping?: Record<string, string[]>;
+	    optionsToCocs?: Record<string, string[]>;
         title?: string;
     }) => {
         try {
@@ -114,6 +115,7 @@ export const buildAnalyticsChart = tool(
         filterGroups: chartData.filterGroups, // ✅ Include grouped filter structure
         metaData: input.analyticsData?.data?.metaData,  // ✅ Include metadata for proper filtering
         cocMapping: input.cocMapping || {},
+	    optionsToCocs: input.optionsToCocs,
         data_summary: {
             total_points: chartData.filteredData.length,
             indicators_count: chartData.dimensions.indicators.length,
@@ -147,7 +149,7 @@ export const buildAnalyticsChart = tool(
             disaggregations: z.array(z.string()).optional().describe("Selected category option values to filter by"),
             filterOptions: z.array(z.any()).optional().describe("Category filter options for chart filtering"),
             cocMapping: z.record(z.string(), z.array(z.string())).optional().describe("Accurate COC to category options mapping"),
-            optionToCocs: z.record(z.string(), z.array(z.string())).optional().describe("Pre-built option to COC mapping from disaggregation search"),
+            optionsToCocs: z.record(z.string(), z.array(z.string())).optional().describe("Pre-built option to COC mapping from disaggregation search"),
             title: z.string().optional().describe("Chart title (auto-generated if not provided)")
         })
     }
@@ -386,48 +388,6 @@ async function processAnalyticsForChart(params: {
 
     // Extract metadata for fallback lookups
     const metaDataItems = analytics?.metaData?.items || {};
-
-    const categoryGroups: Record<string, { name: string, options: string[] }> = {};
-
-    // Fallback: Try to extract category information from analytics data itself
-    // This handles cases where data already has category options in the rows
-    if (Object.keys(categoryGroups).length === 0) {
-        console.log('📊 No category groups from API, checking for category options in analytics data...');
-
-        // Look for category option columns in the processed data
-        const categoryOptionColumns: string[] = [];
-        if (filteredRows.length > 0) {
-            const firstRow = filteredRows[0];
-            Object.keys(firstRow).forEach(key => {
-                if (key.startsWith('co_')) {
-                    categoryOptionColumns.push(key);
-                }
-            });
-        }
-
-        console.log('📊 Found category option columns in data:', categoryOptionColumns);
-
-        // If we have category option columns but no category groups, create a fallback
-        if (categoryOptionColumns.length > 0) {
-            // Create a synthetic category group for any category options found
-            const fallbackCategoryName = 'Data Categories';
-            categoryGroups[fallbackCategoryName] = { name: fallbackCategoryName, options: [] };
-
-            // Collect all unique values from category option columns
-            const uniqueValues = new Set<string>();
-            filteredRows.forEach(row => {
-                categoryOptionColumns.forEach(col => {
-                    const value = row[col];
-                    if (value && typeof value === 'string') {
-                        uniqueValues.add(value);
-                    }
-                });
-            });
-
-            categoryGroups[fallbackCategoryName].options = Array.from(uniqueValues).sort();
-            console.log('📊 Created fallback category group:', categoryGroups[fallbackCategoryName]);
-        }
-    }
 
     // Intelligent name resolution: Use readable names directly when provided by DHIS2,
     // or resolve from metadata when needed (backward compatibility)

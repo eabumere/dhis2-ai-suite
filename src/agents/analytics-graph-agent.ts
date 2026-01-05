@@ -917,7 +917,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 								resource: 'categoryOptionCombos.json',
 								params: {
 									filter: `categoryCombo.id:in:[${categoryComboIds.join(',')}]`,
-									fields: 'id,name,categoryOptions[id,name]',
+									fields: 'id,categoryOptions[id]',
 									paging: false
 								}
 							}
@@ -925,7 +925,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 						const categoryOptionCombos = cocResponse?.data?.categoryOptionCombos?.categoryOptionCombos || [];
 
-						console.log('categoryOptionCombos', categoryOptionCombos);
 						categoryOptionCombos.forEach((coc: any) => {
 							coc.categoryOptions?.forEach((opt: any) => {
 								if (!cocMapping[opt.id]) cocMapping[opt.id] = [];

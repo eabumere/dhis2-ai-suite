@@ -14,6 +14,15 @@ interface ChartFilter {
     periods?: string[];
     orgUnits?: string[];
     disaggregations?: string[];
+    categories?: Record<string, string[]>; // categoryId -> selected option names
+}
+
+interface FilterGroup {
+    name: string;
+    type: 'orgUnits' | 'periods' | 'category';
+    options: Array<{name: string, id: string}>;
+    selected: string[];
+    categoryId?: string;
 }
 
 export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
@@ -39,6 +48,8 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
     const extractFilterOptions = (data: any) => {
         const options: any = {};
+
+        // Extract traditional dimension filters
         if (data.dimensions?.indicators?.length > 0) {
             options.indicators = data.dimensions.indicators;
         }
@@ -48,16 +59,32 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         if (data.dimensions?.orgUnits?.length > 0) {
             options.orgUnits = data.dimensions.orgUnits;
         }
+
+        // Extract disaggregation groups from dimensions.disaggregations first
         if (data.dimensions?.disaggregations?.length > 0) {
             options.disaggregations = data.dimensions.disaggregations;
         }
+
+        // Extract category filter groups from filterGroups, but exclude categories already used for disaggregation
+        if (data.filterGroups?.length > 0) {
+            const disaggregationCategoryIds = new Set(
+                (data.dimensions?.disaggregations || []).map((disagg: any) => disagg.categoryId)
+            );
+
+            options.categories = data.filterGroups.filter((group: any) =>
+                group.type === 'category' && !disaggregationCategoryIds.has(group.categoryId)
+            );
+        }
+
         setFilterOptions(options);
     };
 
     const handleFilterChange = async (filterType: keyof ChartFilter, values: string[]) => {
+	    console.log('Filters:', filterType, values);
         if (!chartData || !values.length) return;
 
         const newFilters = { ...filters, [filterType]: values };
+		console.log('Filters', newFilters);
         setFilters(newFilters);
         setIsFiltering(true);
 
@@ -76,6 +103,31 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             onFilter?.(newFilters);
         } catch (error) {
             console.error('❌ Error applying chart filter:', error);
+        } finally {
+            setIsFiltering(false);
+        }
+    };
+
+    const handleCategoryFilterChange = async (categoryId: string, values: string[], newFilters: ChartFilter) => {
+        if (!chartData) return;
+
+        setIsFiltering(true);
+
+        try {
+            console.log(`📊 Applying category filter: ${categoryId} = [${values.join(', ')}]`);
+
+            // Apply client-side filtering to the analytics data
+            const filteredChartData = await applyClientSideFiltering(chartData, newFilters);
+
+            // Update the chart options with filtered data
+            const filteredOption = await generateFilteredChartOption(filteredChartData);
+
+            // Update the ECharts instance
+            setEchartsOption(filteredOption);
+
+            onFilter?.(newFilters);
+        } catch (error) {
+            console.error('❌ Error applying category filter:', error);
         } finally {
             setIsFiltering(false);
         }
@@ -112,42 +164,106 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             console.log(`📊 Filtered by org units: ${filteredRows.length} points remaining`);
         }
 
-        // Filter by disaggregations (category option values)
-        if (filters.disaggregations && filters.disaggregations.length > 0) {
-            const coColumnRegex = /^co_/;
-            const coValuesToKeep = new Set(filters.disaggregations);
+        // Filter by disaggregations (option IDs mapped to COCs using cocMapping)
+        console.log(`📊 Checking disaggregations filter: ${filters.disaggregations?.length || 0} items`, data);
+        if (filters.disaggregations && filters.disaggregations.length > 0 && data?.cocMapping) {
+            console.log(`📊 Applying disaggregations filter: ${filters.disaggregations.join(', ')}`);
+            const validCOCIds = new Set<string>();
 
-            filteredRows = filteredRows.filter(row => {
-                // Check if any co_ column contains a value that matches our filter
-                let hasMatchingDisaggregation = false;
-
-                for (const [key, value] of Object.entries(row)) {
-                    if (coColumnRegex.test(key) && typeof value === 'string' && value.length > 0) {
-                        if (coValuesToKeep.has(value)) {
-                            hasMatchingDisaggregation = true;
-                            break;
-                        }
-                    }
+            // Map selected option IDs to their associated COCs using cocMapping directly
+            filters.disaggregations.forEach((optionId: string) => {
+                if (data.cocMapping[optionId]) {
+                    data.cocMapping[optionId].forEach(cocId => validCOCIds.add(cocId));
                 }
-
-                // If we have disaggregation filters but no matching disaggregation values found,
-                // keep rows without disaggregation (they might be "Unknown" category)
-                if (!hasMatchingDisaggregation && filters.disaggregations.length > 0) {
-                    // Check if this row has any disaggregation values
-                    const hasAnyDisaggregation = Object.keys(row).some(key =>
-                        coColumnRegex.test(key) && row[key] && String(row[key]).length > 0
-                    );
-
-                    // Keep rows without disaggregation if they exist
-                    if (!hasAnyDisaggregation) {
-                        return true;
-                    }
-                }
-
-                return hasMatchingDisaggregation;
             });
 
-            console.log(`📊 Filtered by disaggregations: ${filteredRows.length} points remaining`);
+            if (validCOCIds.size > 0) {
+                filteredRows = filteredRows.filter(row => {
+                    const rowCocId = row.co; // COC ID column
+                    return rowCocId && validCOCIds.has(rowCocId);
+                });
+
+                console.log(`📊 Filtered by disaggregations (${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
+            } else {
+                console.log(`📊 No valid COCs found for disaggregation filters - keeping all rows`);
+            }
+        } else if (filters.disaggregations && filters.disaggregations.length > 0) {
+            console.log(`📊 Disaggregations filter applied but no cocMapping available`);
+        } else {
+            console.log(`📊 No disaggregations filter applied`);
+        }
+
+        if (filters.categories && Object.keys(filters.categories).length > 0 && data?.cocMapping) {
+            const validCOCIds = new Set<string>();
+
+            for (const [categoryId, selectedOptions] of Object.entries(filters.categories)) {
+                if (!selectedOptions || selectedOptions.length === 0) continue;
+
+                // Find the category in filterGroups to map option names to option IDs
+                const categoryGroup = filterOptions.categories?.find(cat => cat.categoryId === categoryId);
+                if (!categoryGroup) continue;
+
+                // For each selected option name, find its ID and get associated COCs
+                selectedOptions.forEach((selectedOptionName: string) => {
+                    const option = categoryGroup.options.find(opt => opt.name === selectedOptionName);
+                    if (option && data.cocMapping[option.id]) {
+                        // Add all COCs that contain this option
+                        data.cocMapping[option.id].forEach(cocId => validCOCIds.add(cocId));
+                    }
+                });
+            }
+
+            if (validCOCIds.size > 0) {
+                // Filter rows to only include those with valid COC IDs
+                filteredRows = filteredRows.filter(row => {
+                    const rowCocId = row.co; // COC ID column
+	                console.log('Filtering row', row, rowCocId, validCOCIds);
+                    return rowCocId && validCOCIds.has(rowCocId);
+                });
+
+                console.log(`📊 Filtered by categories (${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
+            } else {
+                console.log(`📊 No valid COCs found for category filters - keeping all rows`);
+            }
+        } else if (filters.categories && Object.keys(filters.categories).length > 0 && data?.metaData?.items) {
+            // Fallback: parse COC names directly (legacy approach)
+            console.log('📊 Using fallback category filtering (COC name parsing)');
+            const metaDataItems = data.metaData.items;
+
+            const validCOCIds = new Set<string>();
+            for (const [categoryId, selectedOptions] of Object.entries(filters.categories)) {
+                if (!selectedOptions || selectedOptions.length === 0) continue;
+
+                const categoryGroup = filterOptions.categories?.find(cat => cat.categoryId === categoryId);
+                if (!categoryGroup) continue;
+
+                selectedOptions.forEach((selectedOptionName: string) => {
+                    Object.entries(metaDataItems).forEach(([itemId, itemData]: [string, any]) => {
+                        if (itemData?.name) {
+                            const cocName = itemData.name;
+                            const cocNameParts = cocName.split(',').map(part => part.trim());
+                            const hasMatch = cocNameParts.some(part =>
+                                part.toLowerCase() === selectedOptionName.toLowerCase()
+                            );
+
+                            if (hasMatch) {
+                                validCOCIds.add(itemId);
+                            }
+                        }
+                    });
+                });
+            }
+
+            if (validCOCIds.size > 0) {
+                filteredRows = filteredRows.filter(row => {
+                    const rowCocId = row.co;
+                    return rowCocId && validCOCIds.has(rowCocId);
+                });
+
+                console.log(`📊 Filtered by categories (fallback parsing, ${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
+            } else {
+                console.log(`📊 No valid COCs found for category filters (fallback) - keeping all rows`);
+            }
         }
 
         // Return the original data but with filtered rows
@@ -177,6 +293,11 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
         try {
             // Format data for buildAnalyticsChart tool
+            // Convert disaggregation objects back to dimension strings for the tool schema
+            const disaggregationDimensions = filteredData.dimensions?.disaggregations?.map((disaggGroup: any) =>
+                `${disaggGroup.categoryId}:${disaggGroup.options.map((opt: any) => opt.id).join(';')}`
+            ) || [];
+
             const chartParams = {
                 userQuery: `Filtered chart: ${filteredData.title || 'Analytics'}`,
                 analyticsData: {
@@ -191,7 +312,9 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 indicators: filteredData.dimensions?.indicators || [],
                 periods: filteredData.dimensions?.periods || [],
                 orgUnits: filteredData.dimensions?.orgUnits || [],
-                disaggregations: filteredData.dimensions?.disaggregations || [],
+                disaggregations: disaggregationDimensions, // Convert back to dimension strings for tool schema
+                filterOptions: filteredData.filterGroups || [], // Preserve filter options for category filtering
+                cocMapping: filteredData.cocMapping || {}, // Preserve accurate COC mapping for filtering
                 title: filteredData.title || 'Filtered Chart'
             };
 
@@ -391,7 +514,13 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                 📊 Filters
                             </span>
                             {/* Show active filter count */}
-                            {Object.keys(filters).some(key => filters[key as keyof ChartFilter]?.length) && (
+                            {Object.keys(filters).some(key => {
+                                const filterValue = filters[key as keyof ChartFilter];
+                                if (key === 'categories' && filterValue) {
+                                    return Object.values(filterValue as Record<string, string[]>).some(arr => arr?.length > 0);
+                                }
+                                return (filterValue as string[])?.length > 0;
+                            }) && (
                                 <span style={{
                                     backgroundColor: '#007bff',
                                     color: 'white',
@@ -400,7 +529,13 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                     fontSize: '11px',
                                     fontWeight: 'bold'
                                 }}>
-                                    {Object.values(filters).reduce((count, arr) => count + (arr?.length || 0), 0)} active
+                                    {Object.keys(filters).reduce((count, key) => {
+                                        const filterValue = filters[key as keyof ChartFilter];
+                                        if (key === 'categories' && filterValue) {
+                                            return count + Object.values(filterValue as Record<string, string[]>).reduce((catCount, arr) => catCount + (arr?.length || 0), 0);
+                                        }
+                                        return count + ((filterValue as string[])?.length || 0);
+                                    }, 0)} active
                                 </span>
                             )}
                         </div>
@@ -422,6 +557,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                             borderTop: '1px solid #e9ecef'
                         }}>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
+                                {/* Indicators filter */}
                                 {filterOptions.indicators && filterOptions.indicators.length > 1 && (
                                     <div>
                                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
@@ -452,7 +588,8 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                     </div>
                                 )}
 
-                                {filterOptions.periods && filterOptions.periods.length > 1 && (
+                                {/* Periods filter */}
+                                {filterOptions.periods && filterOptions.periods.length > 0 && (
                                     <div>
                                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
                                             Periods:
@@ -482,6 +619,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                     </div>
                                 )}
 
+                                {/* Organization Units filter */}
                                 {filterOptions.orgUnits && filterOptions.orgUnits.length > 1 && (
                                     <div>
                                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
@@ -512,16 +650,20 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                     </div>
                                 )}
 
-                                {filterOptions.disaggregations && filterOptions.disaggregations.length > 1 && (
-                                    <div>
+                                {/* Disaggregation filter controls - shown independently like categories */}
+                                {filterOptions.disaggregations && filterOptions.disaggregations.length > 0 && filterOptions.disaggregations.map((disaggGroup: any) => (
+                                    <div key={disaggGroup.categoryId}>
                                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
-                                            Disaggregations:
+                                            {disaggGroup.categoryName}:
                                         </label>
                                         <select
                                             multiple
                                             disabled={isFiltering}
                                             onChange={(e) => {
                                                 const values = Array.from(e.target.selectedOptions, opt => opt.value);
+                                                // Update the disaggregations filter with option IDs
+                                                const newFilters = { ...filters, disaggregations: values };
+                                                setFilters(newFilters);
                                                 handleFilterChange('disaggregations', values);
                                             }}
                                             style={{
@@ -533,17 +675,52 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                                 fontSize: '11px'
                                             }}
                                         >
-                                            {filterOptions.disaggregations.map((disagg: string) => (
-                                                <option key={disagg} value={disagg}>
-                                                    {disagg.length > 20 ? disagg.substring(0, 17) + '...' : disagg}
+                                            {disaggGroup.options.map((option: {name: string, id: string}) => (
+                                                <option key={option.id} value={option.id}>
+                                                    {option.name.length > 20 ? option.name.substring(0, 17) + '...' : option.name}
                                                 </option>
                                             ))}
                                         </select>
                                     </div>
-                                )}
+                                ))}
+
+                                {/* Category-specific filter controls - shown independently */}
+                                {filterOptions.categories && filterOptions.categories.length > 0 && filterOptions.categories.map((categoryGroup: any) => (
+                                    <div key={categoryGroup.categoryId}>
+                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
+                                            {categoryGroup.name}:
+                                        </label>
+                                        <select
+                                            multiple
+                                            disabled={isFiltering}
+                                            onChange={(e) => {
+                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
+                                                // Update the categories filter
+                                                const newCategories = { ...filters.categories, [categoryGroup.categoryId]: values };
+                                                const newFilters = { ...filters, categories: newCategories };
+                                                setFilters(newFilters);
+                                                handleCategoryFilterChange(categoryGroup.categoryId, values, newFilters);
+                                            }}
+                                            style={{
+                                                minWidth: '120px',
+                                                padding: '4px',
+                                                border: '1px solid #ccc',
+                                                borderRadius: '3px',
+                                                minHeight: '50px',
+                                                fontSize: '11px'
+                                            }}
+                                        >
+                                            {categoryGroup.options.map((option: {name: string, id: string}) => (
+                                                <option key={option.id} value={option.name}>
+                                                    {option.name.length > 20 ? option.name.substring(0, 17) + '...' : option.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ))}
 
                                 {/* Reset Filters Button */}
-                                {(filters.indicators?.length || filters.periods?.length || filters.orgUnits?.length || filters.disaggregations?.length) && (
+                                {(filters.indicators?.length || filters.periods?.length || filters.orgUnits?.length || filters.disaggregations?.length || (filters.categories && Object.values(filters.categories).some(arr => arr?.length > 0))) && (
                                     <div style={{
                                         display: 'flex',
                                         alignItems: 'flex-end',

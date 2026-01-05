@@ -39,8 +39,15 @@ interface AnalyticsChartData {
         indicators: string[];
         periods: string[];
         orgUnits: string[];
-        disaggregations: string[];
+        disaggregations: any;
     };
+    filterGroups: Array<{
+        name: string;
+        type: 'orgUnits' | 'periods' | 'category';
+        options: Array<{name: string, id: string}>;
+        selected: string[];
+        categoryId?: string;
+    }>;
     metadata: {
         indicators: any[];
         orgUnits: any[];
@@ -59,6 +66,8 @@ export const buildAnalyticsChart = tool(
         periods?: string[];
         orgUnits?: string[];
         disaggregations?: string[];
+        filterOptions?: any[];
+        cocMapping?: Record<string, string[]>;
         title?: string;
     }) => {
         try {
@@ -73,15 +82,19 @@ export const buildAnalyticsChart = tool(
                 title
             } = input;
 
+            const addedCoDimension = disaggregations && disaggregations.length > 0;
+
             // Process analytics data to chart format
-            const chartData = processAnalyticsForChart({
+            const chartData = await processAnalyticsForChart({
                 analyticsData,
                 chartType,
                 indicators,
                 periods,
                 orgUnits,
                 disaggregations,
-                title: title || `Analytics Chart: ${userQuery}`
+                filterOptions: input.filterOptions,
+                title: title || `Analytics Chart: ${userQuery}`,
+                hasCoDimension: addedCoDimension
             });
 
             // Store chart configuration for persistence
@@ -91,21 +104,26 @@ export const buildAnalyticsChart = tool(
             const echartsOption = buildEChartsOption(chartData);
             console.log('Generated ECharts option:', JSON.stringify(echartsOption, null, 2));
 
-            return JSON.stringify({
-                success: true,
-                chart_id: chartId,
-                chart_type: chartType,
-                echarts_option: echartsOption,
-                data_summary: {
-                    total_points: chartData.filteredData.length,
-                    indicators_count: chartData.dimensions.indicators.length,
-                    periods_count: chartData.dimensions.periods.length,
-                    org_units_count: chartData.dimensions.orgUnits.length,
-                    disaggregations_count: chartData.dimensions.disaggregations.length
-                },
-                title: chartData.title,
-                export_available: true
-            });
+    return JSON.stringify({
+        success: true,
+        chart_id: chartId,
+        chart_type: chartType,
+        echarts_option: echartsOption,
+        filteredData: chartData.filteredData, // ✅ Include raw data for client-side filtering
+        dimensions: chartData.dimensions,      // ✅ Include actual disaggregation values for filter dropdowns
+        filterGroups: chartData.filterGroups, // ✅ Include grouped filter structure
+        metaData: input.analyticsData?.data?.metaData,  // ✅ Include metadata for proper filtering
+        cocMapping: input.cocMapping || {},
+        data_summary: {
+            total_points: chartData.filteredData.length,
+            indicators_count: chartData.dimensions.indicators.length,
+            periods_count: chartData.dimensions.periods.length,
+            org_units_count: chartData.dimensions.orgUnits.length,
+            disaggregations_count: chartData.dimensions.disaggregations.length
+        },
+        title: chartData.title,
+        export_available: true
+    });
 
         } catch (error) {
             console.error('Error building analytics chart:', error);
@@ -126,7 +144,10 @@ export const buildAnalyticsChart = tool(
             indicators: z.array(z.string()).optional().describe("Selected indicators to display"),
             periods: z.array(z.string()).optional().describe("Selected time periods"),
             orgUnits: z.array(z.string()).optional().describe("Selected organization units"),
-            disaggregations: z.array(z.string()).optional().describe("Category breakdowns to include"),
+            disaggregations: z.array(z.string()).optional().describe("Selected category option values to filter by"),
+            filterOptions: z.array(z.any()).optional().describe("Category filter options for chart filtering"),
+            cocMapping: z.record(z.string(), z.array(z.string())).optional().describe("Accurate COC to category options mapping"),
+            optionToCocs: z.record(z.string(), z.array(z.string())).optional().describe("Pre-built option to COC mapping from disaggregation search"),
             title: z.string().optional().describe("Chart title (auto-generated if not provided)")
         })
     }
@@ -297,15 +318,17 @@ const MAX_CHARTS = 10; // Keep last 10 charts
 /**
  * Process analytics data for chart visualization
  */
-function processAnalyticsForChart(params: {
+async function processAnalyticsForChart(params: {
     analyticsData: any;
     chartType: 'line' | 'bar' | 'pie';
     indicators: string[];
     periods: string[];
     orgUnits: string[];
     disaggregations: string[];
+    filterOptions?: any[];
     title: string;
-}): AnalyticsChartData {
+    hasCoDimension?: boolean;
+}): Promise<AnalyticsChartData> {
     const { analyticsData, indicators, periods, orgUnits, disaggregations, title } = params;
 
     // Extract data from nested DHIS2 response structure
@@ -359,23 +382,52 @@ function processAnalyticsForChart(params: {
         return rowObj;
     });
 
-    // Apply targeted filters - only org units and disaggregations for chart refinement
-    // Periods and indicators from analytics data are included as-is for dynamic handling
-    if (orgUnits.length > 0) {
-        console.log(`📊 Applying org unit filter - filteredRows before:`, filteredRows.length);
-        console.log(`📊 Org unit IDs to match:`, orgUnits);
-        console.log(`📊 Sample row org_unit values:`, filteredRows.slice(0, 3).map(r => ({ org_unit: r.org_unit, value: r.value })));
-
-        // TEMPORARILY DISABLE org unit filtering since analytics query already filters at API level
-        // filteredRows = filteredRows.filter(row => orgUnits.includes(row.org_unit));
-
-        console.log(`📊 filteredRows after filtering:`, filteredRows.length);
-    }
-
     // Apply disaggregation filtering if specific breakdowns are requested
 
     // Extract metadata for fallback lookups
     const metaDataItems = analytics?.metaData?.items || {};
+
+    const categoryGroups: Record<string, { name: string, options: string[] }> = {};
+
+    // Fallback: Try to extract category information from analytics data itself
+    // This handles cases where data already has category options in the rows
+    if (Object.keys(categoryGroups).length === 0) {
+        console.log('📊 No category groups from API, checking for category options in analytics data...');
+
+        // Look for category option columns in the processed data
+        const categoryOptionColumns: string[] = [];
+        if (filteredRows.length > 0) {
+            const firstRow = filteredRows[0];
+            Object.keys(firstRow).forEach(key => {
+                if (key.startsWith('co_')) {
+                    categoryOptionColumns.push(key);
+                }
+            });
+        }
+
+        console.log('📊 Found category option columns in data:', categoryOptionColumns);
+
+        // If we have category option columns but no category groups, create a fallback
+        if (categoryOptionColumns.length > 0) {
+            // Create a synthetic category group for any category options found
+            const fallbackCategoryName = 'Data Categories';
+            categoryGroups[fallbackCategoryName] = { name: fallbackCategoryName, options: [] };
+
+            // Collect all unique values from category option columns
+            const uniqueValues = new Set<string>();
+            filteredRows.forEach(row => {
+                categoryOptionColumns.forEach(col => {
+                    const value = row[col];
+                    if (value && typeof value === 'string') {
+                        uniqueValues.add(value);
+                    }
+                });
+            });
+
+            categoryGroups[fallbackCategoryName].options = Array.from(uniqueValues).sort();
+            console.log('📊 Created fallback category group:', categoryGroups[fallbackCategoryName]);
+        }
+    }
 
     // Intelligent name resolution: Use readable names directly when provided by DHIS2,
     // or resolve from metadata when needed (backward compatibility)
@@ -397,11 +449,107 @@ function processAnalyticsForChart(params: {
         return metaDataItems[value]?.name || metaDataItems[value]?.displayName || value;
     });
 
-    // Debug logging
-    console.log(`Chart processing: ${rows.length} raw rows, ${filteredRows.length} filtered rows`);
-    console.log(`Available indicators: ${Array.from(allIndicators)} → ${resolveIndicatorNames}`);
-    console.log(`Available periods: ${Array.from(allPeriods)}`);
-    console.log(`Available org units: ${Array.from(allOrgUnits)} → ${resolveOrgUnitNames}`);
+    // Build grouped filter structure
+    const filterGroups: Array<{
+        name: string;
+        type: 'orgUnits' | 'periods' | 'category';
+        options: Array<{name: string, id: string}>;
+        selected: string[];
+        categoryId?: string;
+    }> = [];
+
+    // Create a mapping of org unit IDs to names
+    const orgUnitNameMap = new Map<string, string>();
+    Array.from(allOrgUnits).forEach((id, index) => {
+        orgUnitNameMap.set(id, resolveOrgUnitNames[index] || id);
+    });
+
+    // Add organization units filter group
+    filterGroups.push({
+        name: 'Organization Units',
+        type: 'orgUnits',
+        options: Array.from(allOrgUnits).map(id => ({
+            name: orgUnitNameMap.get(id) || id,
+            id: id
+        })),
+        selected: []
+    });
+
+    // Add periods filter group
+    filterGroups.push({
+        name: 'Periods',
+        type: 'periods',
+        options: Array.from(allPeriods).map(period => ({
+            name: period,
+            id: period
+        })),
+        selected: []
+    });
+
+    // Add category filter groups from passed filterOptions
+    if (params.filterOptions && params.filterOptions.length > 0) {
+        // Use the filterOptions passed from disaggregations metadata (these are the COCs we constructed)
+        params.filterOptions.forEach((filterOption: any) => {
+            // Convert arrays to objects for cleaner structure
+            const options: Array<{name: string, id: string}> = filterOption.options.map((name: string, id: string) => ({
+                name,
+                id
+            }));
+
+            filterGroups.push({
+                name: filterOption.name,
+                type: 'category' as const,
+                options,
+                selected: [],
+                categoryId: filterOption.categoryId
+            });
+        });
+    }
+
+    // Build disaggregations structure from dimension strings
+    const disaggregationGroups: Array<{
+        categoryId: string;
+        categoryName: string;
+        options: Array<{name: string, id: string}>;
+    }> = [];
+
+    // Parse disaggregation dimensions to extract option IDs and build proper structure
+    if (params.disaggregations && params.disaggregations.length > 0) {
+        params.disaggregations.forEach((dimensionStr: string) => {
+            // Parse dimension string like "categoryId:optionId1;optionId2"
+            const [categoryId, optionIdsStr] = dimensionStr.split(':');
+            if (!categoryId || !optionIdsStr) return;
+
+            const optionIds = optionIdsStr.split(';').filter(id => id.length > 0);
+
+            // Find category in filterOptions to get category name and option details
+            const categoryFilterOption = params.filterOptions?.find((fo: any) =>
+                fo.categoryId === categoryId || fo.categoryId === categoryId
+            );
+
+            if (categoryFilterOption && optionIds.length > 0) {
+                // Build options array with names and IDs
+                const options: Array<{name: string, id: string}> = [];
+                optionIds.forEach(optionId => {
+                    // Find option name from category filter options
+                    const optionIndex = categoryFilterOption.optionIds?.indexOf(optionId);
+                    const optionName = optionIndex !== -1 && categoryFilterOption.options ?
+                        categoryFilterOption.options[optionIndex] : optionId;
+
+                    options.push({
+                        name: optionName,
+                        id: optionId
+                    });
+                });
+
+                disaggregationGroups.push({
+                    categoryId,
+                    categoryName: categoryFilterOption.categoryName || `Category ${categoryId}`,
+                    options
+                });
+            }
+        });
+    }
 
     return {
         id: generateAnalyticsMemoryId(),
@@ -414,11 +562,12 @@ function processAnalyticsForChart(params: {
             indicators: Array.from(allIndicators), // Always use what's actually in the data
             periods: Array.from(allPeriods),       // Always use what's actually in the data
             orgUnits: orgUnits.length > 0 ? orgUnits : Array.from(allOrgUnits),
-            disaggregations
+            disaggregations: disaggregationGroups  // Now contains proper structure with option IDs
         },
+        filterGroups,
         metadata: {
             indicators: resolveIndicatorNames, // Human-readable indicator names
-            orgUnits: resolveOrgUnitNames     // Human-readable org unit names
+            orgUnits: resolveOrgUnitNames       // Human-readable org unit names
         }
     };
 }
@@ -623,7 +772,18 @@ function applyChartFilters(chart: AnalyticsChartData, filters: any): any[] {
     if (filters.orgUnits && filters.orgUnits.length > 0) {
         filteredData = filteredData.filter(row => filters.orgUnits.includes(row.org_unit));
     }
-    // Add disaggregation filtering if needed
+    // Filter by selected category options in co_* columns (disaggregation filtering)
+    if (filters.disaggregations && filters.disaggregations.length > 0) {
+        filteredData = filteredData.filter(row => {
+            // Check if any co_* column in this row contains any of the selected disaggregation options
+            for (const [key, value] of Object.entries(row)) {
+                if (key.startsWith('co_') && value && filters.disaggregations.includes(value)) {
+                    return true; // Include this row if it has a matching category option
+                }
+            }
+            return false; // Exclude this row if no matching category options found
+        });
+    }
 
     return filteredData;
 }
@@ -933,6 +1093,7 @@ export const searchDhis2OrganisationUnits = createDhis2SearchTool("organisationU
 export const searchDhis2Categories = createDhis2SearchTool("categories", "Categories");
 export const searchDhis2CategoryCombos = createDhis2SearchTool("categoryCombos", "Category Combinations");
 export const searchDhis2CategoryOptions = createDhis2SearchTool("categoryOptions", "Category Options");
+export const searchDhis2CategoryOptionCombos = createDhis2SearchTool("categoryOptionCombos", "Category Option Combinations");
 export const searchDhis2OrganisationUnitGroups = createDhis2SearchTool("organisationUnitGroups", "Organisation Unit Groups");
 export const searchDhis2OrganisationUnitGroupSets = createDhis2SearchTool("organisationUnitGroupSets", "Organisation Unit Group Sets");
 export const searchDhis2DataSets = createDhis2SearchTool("dataSets", "Data Sets");
@@ -1653,7 +1814,6 @@ export const queryAnalytics = tool(
             // Import the DHIS2 API query function
             const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
 
-            // CRITICAL FIX: Automatically detect and re-route category dimension strings from indicators to disaggregations
             // Pattern: "categoryId:optionId1;optionId2" should be in disaggregations, not indicators
             let cleanIndicators = [...input.indicators];
             let cleanDisaggregations = [...(input.disaggregations || [])];
@@ -1715,35 +1875,15 @@ export const queryAnalytics = tool(
                 console.log(`📅 Using pe dimension: ${period_string}`);
             }
 
-            // Handle disaggregation dimensions - convert category dimension strings to co dimension
+            // Handle disaggregation dimensions - use COC IDs directly in co dimension
             let cocDimension = '';
 
+			console.log('Input', input)
             if (input.disaggregations && input.disaggregations.length > 0) {
-                try {
-
-                    const cocIds: string[] = [];
-
-                for (const disaggDim of input.disaggregations) {
-                    // Parse category dimension string: "categoryId:optionId1;optionId2"
-                        const [categoryId, optionIdsStr] = disaggDim.split(':');
-                        if (!categoryId || !optionIdsStr) continue;
-
-                        const optionIds = optionIdsStr.split(';').filter(id => id);
-
-                        // For dataElement disaggregation, put category option IDs in co dimension
-                        // DHIS2 co dimension expects category option IDs for disaggregation filtering
-                        if (optionIds.length > 0) {
-                            cocIds.push(...optionIds);
-                        }
-                    }
-
-                    if (cocIds.length > 0) {
-                        cocDimension = `co:${cocIds.join(';')}`;
-                        console.log(`Generated co dimension: ${cocDimension} from ${input.disaggregations.length} disaggregation dimensions`);
-                    }
-                } catch (error) {
-                    console.warn('Failed to process disaggregation dimensions:', error);
-                }
+                // Disaggregations are now Category Option Combo (COC) IDs directly
+                // No parsing needed - just use them as-is in the co dimension
+                cocDimension = `co:${input.disaggregations.join(';')}`;
+                console.log(`Using COC IDs directly: ${cocDimension} from ${input.disaggregations.length} disaggregation dimensions`);
             }
 
             // Add co dimension for disaggregated dataElements
@@ -1793,12 +1933,16 @@ export const queryAnalytics = tool(
                 response
             );
 
+            // Determine if co dimensions were actually added to the query
+            const hasCoDimension = !!(input.disaggregations?.length > 0) || input.doc_type === 'dataElement' || input.include_coc_dimension === true;
+
             return JSON.stringify({
                 url: `analytics?${dimensions.map(dim => `dimension=${encodeURIComponent(dim)}`).join('&')}`,
                 data: response,
                 memory_id: memoryId,
                 doc_type: input.doc_type || 'indicator',
                 disaggregations: input.disaggregations || [],
+                hasCoDimension: hasCoDimension,
                 indicators: input.indicators,
                 periods: input.periods,
                 org_units: input.org_units
@@ -1822,7 +1966,7 @@ export const queryAnalytics = tool(
             doc_type: z.enum(['indicator', 'dataElement']).default('indicator').describe("Type of resource being queried"),
             periods: z.array(z.string()).describe("Array of period identifiers (e.g., ['202301', '202302'])"),
             org_units: z.array(z.string()).describe("Array of organization unit IDs"),
-            disaggregations: z.array(z.string()).optional().describe("Array of category IDs for disaggregation (optional)"),
+            disaggregations: z.array(z.string()).optional().describe("Array of Category Option Combo (COC) IDs for filtering by category options"),
             include_coc_dimension: z.boolean().optional().describe("Whether to include category option combo dimension"),
             skip_meta: z.boolean().default(false).describe("Whether to skip metadata in response"),
             display_property: z.string().default("NAME").describe("Display property format"),
@@ -2031,6 +2175,131 @@ function extractDisaggregationKeywords(query: string): string[] {
         !/\b(country|countries|district|districts|province|provinces|region|regions|county|counties|facility|facilities|hospital|hospitals|clinic|clinics|centre|centers|center|centres)\b/i.test(keyword) // Filter out location dimensions
     );
 }
+
+/**
+ * Extract Indicator/Data Element Keywords using LLM
+ * Uses AI understanding to identify indicator and data element related terms from natural language queries
+ */
+export const extractIndicatorKeywordsLLM = tool(
+    async (input: { query: string, context?: string }) => {
+        try {
+            console.log('📊 LLM indicator extraction called for:', input.query);
+
+            // Initialize Azure OpenAI LLM
+	        const env = (import.meta as any).env;
+            const llm = new AzureChatOpenAI({
+                model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
+                temperature: 0.1, // Low temperature for consistent extraction
+                maxTokens: 150,   // Longer output for indicator analysis
+                azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
+                azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
+                azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+                azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
+            });
+
+            // Create comprehensive prompt for indicator/data element extraction
+            const prompt = `
+Analyze this DHIS2 analytics query and extract potential indicator and data element related terms.
+Focus on measurable health metrics, program indicators, and data collection elements that could be DHIS2 indicators or data elements.
+
+QUERY: "${input.query}"
+CONTEXT: ${input.context || 'Health analytics context - focus on measurable indicators and data elements'}
+
+EXAMPLES:
+"Show HIV prevalence rates" → ["HIV prevalence", "prevalence"]
+"HIV testing coverage and ART initiation" → ["HIV testing coverage", "ART initiation"]
+"Malaria cases reported this month" → ["Malaria cases"]
+"Vaccination coverage for children under 5" → ["Vaccination coverage"]
+"ANC visits and deliveries" → ["ANC visits", "deliveries"]
+"TB treatment success rate" → ["TB treatment success rate"]
+"Number of patients screened" → ["patients screened"]
+"Immunization rates" → ["Immunization rates"]
+
+IMPORTANT RULES:
+- Extract specific indicator names and data element concepts
+- Include common health metrics and program indicators
+- Focus on measurable quantities and rates
+- Return relevant keywords that would match DHIS2 indicators/data elements
+- IGNORE: locations, time periods, general verbs ("show", "analyze", "calculate")
+- Be specific about health conditions, services, and outcomes
+- Return empty array [] if no indicator/data element terms found
+
+Return ONLY a JSON array of unique indicator/data element strings: ["indicator1", "indicator2", ...]
+`;
+
+            // Make LLM call
+            const llmResponse = await llm.invoke([
+                { role: "system", content: prompt },
+                { role: "user", content: `Extract indicator keywords: ${input.query}` }
+            ]);
+
+            console.log('📊 LLM response:', llmResponse.content);
+
+            // Parse LLM response - handle various formats
+            const content = (llmResponse.content as string).trim();
+            let keywordCandidates: string[];
+
+            try {
+                // Try to parse as JSON
+                keywordCandidates = JSON.parse(content);
+                if (!Array.isArray(keywordCandidates)) {
+                    throw new Error('LLM returned non-array response');
+                }
+            } catch (parseError) {
+                // Fallback parsing for non-JSON responses
+                console.warn('⚠️ Indicator LLM returned non-JSON response, attempting fallback parsing');
+
+                // Try to extract array-like content between brackets
+                const arrayMatch = content.match(/\[([^\]]*)\]/);
+                if (arrayMatch) {
+	                keywordCandidates = arrayMatch[1].split(',')
+	                    .map(item => item.replace(/['"]/g, '').trim())
+	                    .filter(item => item.length > 0);
+                } else {
+                    keywordCandidates = [];
+                }
+            }
+
+            // Clean and filter results
+            keywordCandidates = keywordCandidates
+                .filter(item => typeof item === 'string' && item.length > 1) // Remove empty/short strings
+                .map(item => item.trim()) // Clean whitespace
+                .filter((item, index, arr) => arr.indexOf(item) === index) // Remove duplicates
+                .slice(0, 10); // Limit to 10 for safety
+
+            console.log('📊 Extracted indicator keywords:', keywordCandidates);
+
+            return JSON.stringify({
+                keywordCandidates,
+                method: 'llm_extraction',
+                llmModel: (llm as any).modelName,
+                query: input.query,
+                context: input.context,
+                confidence: keywordCandidates.length > 0 ? 'high' : 'low'
+            });
+
+        } catch (error) {
+            console.error('❌ Error in LLM indicator extraction:', error);
+
+            // Return graceful failure with empty array (fallback to direct search)
+            return JSON.stringify({
+                keywordCandidates: [], // Will trigger direct search fallback
+                error: `LLM extraction failed: ${error.message}`,
+                method: 'failed_llm_extraction',
+                query: input.query,
+                fallback_available: true
+            });
+        }
+    },
+    {
+        name: "extract_indicator_keywords_llm",
+        description: "Extract potential DHIS2 indicator and data element names from natural language queries using AI understanding. Focuses on measurable health metrics, program indicators, and data collection elements while filtering out locations, time periods, and general terms.",
+        schema: z.object({
+            query: z.string().describe("The user's query text to analyze for indicator/data element references"),
+            context: z.string().optional().describe("Optional context about the analytics query type")
+        })
+    }
+);
 
 /**
  * Extract Organisation Unit Keywords using LLM
@@ -3054,6 +3323,7 @@ export const Dhis2StructuredTools = {
     searchAnalyticsMetadata,
     extractOrgUnitKeywordsLLM,
     extractDatePeriodLLM,
+    extractIndicatorKeywordsLLM,
     filterCategoriesForDisaggregationLLM,
     getAllMetadata,
     getOrganisationUnits,

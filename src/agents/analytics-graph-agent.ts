@@ -1,10 +1,10 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 
 // Import analytics tools
-import { buildAnalyticsChart, getDataElements, queryAnalytics } from '../utils/tools/metadata';
+import { buildAnalyticsChart, getDataElements, queryAnalytics, searchDhis2CategoryOptionCombos } from '../utils/tools/metadata';
 
-// Import LLM-based org unit keyword extraction
-import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM, extractDatePeriodLLM } from '../utils/tools/metadata';
+// Import LLM-based keyword extraction tools
+import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM, extractDatePeriodLLM, extractIndicatorKeywordsLLM } from '../utils/tools/metadata';
 
 // Import 2-level search function
 import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
@@ -90,6 +90,11 @@ const GraphAnnotation = Annotation.Root({
 		reducer: (left, right) => right,
 		default: () => null,
 	}),
+
+	cocMapping: Annotation<any>({
+		reducer: (left, right) => right,
+		default: () => {},
+	})
 });
 
 // Node functions for the StateGraph
@@ -180,11 +185,34 @@ async function parseSelectedMetadata(state: typeof GraphAnnotation.State): Promi
 
 async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
-		console.log('📊 Searching for analytics metadata using 2-level search (external + DHIS2 fallback)');
+		console.log('📊 Searching for analytics metadata using LLM extraction and 2-level search');
+
+		// First, extract indicator/data element keywords using LLM
+		const llmResult = await extractIndicatorKeywordsLLM.invoke({
+			query: state.query,
+			context: 'health analytics - extract measurable indicators and data elements'
+		});
+
+		const llmResponse = JSON.parse(llmResult as string);
+		console.log('📊 LLM indicator extraction result:', llmResponse);
+
+		// Extract keywords from LLM response
+		const indicatorKeywords = llmResponse.keywordCandidates || [];
+		console.log('📊 Extracted indicator keywords from LLM:', indicatorKeywords);
+
+		// Create search query from extracted keywords
+		let searchQuery = state.query; // Fallback to original query
+		if (indicatorKeywords.length > 0) {
+			// Use extracted keywords for more targeted search
+			searchQuery = indicatorKeywords.join(' ');
+			console.log('📊 Using LLM-extracted keywords for search:', searchQuery);
+		} else {
+			console.log('📊 No keywords extracted by LLM, using original query for search');
+		}
 
 		// Search for indicators and data elements using 2-level search (external API first, then DHIS2)
-		const indicators = await searchDhis2Metadata('indicators', state.query);
-		const dataElements = await searchDhis2Metadata('dataElements', state.query);
+		const indicators = await searchDhis2Metadata('indicators', searchQuery);
+		const dataElements = await searchDhis2Metadata('dataElements', searchQuery);
 
 		console.log(`📊 Found ${indicators.length} indicators and ${dataElements.length} data elements`);
 
@@ -338,15 +366,11 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 			console.log('📊 No periods extracted, using current year fallback:', currentYear);
 		}
 
-		// Extract formatted disaggregation dimension strings from resolved metadata
-		const disaggregationDimensions: string[] = [];
+		// Extract disaggregation metadata for filtering structure
+		let disaggregationDimensions: string[] = [];
 		if (state.disaggregationsMetadata?.suggestions?.length > 0) {
-			disaggregationDimensions.push(...state.disaggregationsMetadata.suggestions.map((suggestion: any) => suggestion.formattedDimension));
+			disaggregationDimensions = state.disaggregationsMetadata.suggestions.map((suggestion: any) => suggestion.formattedDimension);
 		}
-
-		console.log('📊 Using org units for query:', orgUnitIds);
-		console.log('📊 Using periods for query:', periods);
-		console.log('📊 Using disaggregation dimensions for query:', disaggregationDimensions);
 
 		// Group suggestions by type to properly handle both indicators and dataElements
 		const groupedSuggestions = {
@@ -380,8 +404,6 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 		// Determine primary type and include coc dimension when using dataElements
 		const primaryType = hasIndicators ? 'indicator' : 'dataElement';
 		const includeCocDimension = hasDataElements && !hasIndicators; // Add COC for dataElement-only queries
-
-		console.log(`📊 Query setup - Indicators: ${indicators.length}, DataElements: ${dataElements.length}, Primary: ${primaryType}, COC dimension: ${includeCocDimension}`);
 
 		// OPTION A: Merge dataElements into indicators since DHIS2 dx dimension accepts mixed ID types
 		const dxDimensionIds = [...indicators, ...dataElements];
@@ -468,9 +490,6 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 				finalResult: noDataResult
 			};
 		}
-
-		// CRITICAL: Use ONLY structured DHIS2 data for chart building
-		// Avoid any mixing with LLM interpretation data
 		const result = await buildAnalyticsChart.invoke({
 			userQuery: state.query,
 			analyticsData: state.data.data, // Pure DHIS2 structured data only
@@ -478,7 +497,9 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 			indicators: state.data.indicators || [],
 			periods: state.data.periods || ['2024'],
 			orgUnits: state.data.org_units || [],
-			disaggregations: state.data.disaggregations || []
+			disaggregations: state.data.disaggregations || [], // Pass the disaggregations from query data
+			filterOptions: state.disaggregationsMetadata?.filterOptions || [], // Pass category filter options for chart filtering
+			cocMapping: (state as any).cocMapping || {}, // Keep for backward compatibility
 		});
 
 		const chart = JSON.parse(result);
@@ -534,7 +555,7 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 					series: [{
 						name: 'Count',
 						type: 'bar',
-						data: [parseFloat(state.data.data?.rows?.[0]?.[6] || '0') || 0], // Extract value from raw analytics data
+            data: [parseFloat(state.data.data?.rows?.[0]?.[6] || '0') || 1], // Extract value from raw analytics data (minimum 1 for visibility)
 						itemStyle: { color: '#ff9800' } // Orange color for fallback
 					}]
 				},
@@ -828,10 +849,12 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 	}
 }
 
-// New disaggregation resolution function
 async function searchDisaggregations(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
 		console.log('🔢 Searching for disaggregations in query using LLM extraction');
+
+		// Initialize cocMapping for the entire function scope
+		let cocMapping: Record<string, string[]> = state.cocMapping || {};
 
 		// Extract available categories directly from dataElements categoryCombo (no extra API calls needed)
 		let availableCategories: Array<{name: string, id: string}> = [];
@@ -871,6 +894,43 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				// Store full category details for later dimension generation
 				// @ts-ignore - Adding non-property to state
 				state.fullCategoryDetails = categoryMap;
+
+				// Query for COCs that belong to the categoryCombos used by these dataElements
+				const categoryComboIds = [...new Set(dataElementsWithCategories.dataElements?.map((de: any) => de.categoryCombo?.id).filter(id => id))];
+
+				if (categoryComboIds.length > 0) {
+					try {
+						// Use direct API call instead of search tool for categoryCombo filtering
+						const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+
+						const cocResponse = await (Dhis2Api as any).query({
+							categoryOptionCombos: {
+								resource: 'categoryOptionCombos.json',
+								params: {
+									filter: `categoryCombo.id:in:[${categoryComboIds.join(',')}]`,
+									fields: 'id,name,categoryOptions[id,name]',
+									paging: false
+								}
+							}
+						});
+
+						const categoryOptionCombos = cocResponse?.data?.categoryOptionCombos?.categoryOptionCombos || [];
+
+						console.log('categoryOptionCombos', categoryOptionCombos);
+						categoryOptionCombos.forEach((coc: any) => {
+							coc.categoryOptions?.forEach((opt: any) => {
+								if (!cocMapping[opt.id]) cocMapping[opt.id] = [];
+								cocMapping[opt.id].push(coc.id);
+							});
+						});
+						state.cocMapping = cocMapping;
+						console.log('🔢 Built accurate COC to category options mapping from categoryOptionCombos API');
+					} catch (cocError) {
+						console.warn('🔢 Failed to fetch categoryOptionCombos:', cocError.message);
+					}
+				}
+
+
 
 			} catch (dataElementError) {
 				console.warn('🔢 Failed to fetch dataElement categories:', dataElementError.message);
@@ -912,9 +972,37 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			};
 		}
 
+		// Build optionToCocs mapping only for validated options from selected categories
+		const optionToCocs: Record<string, string[]> = {};
+
+		// Only include options that were validated/selected during disaggregation search
+		for (const selectedCategory of selectedCategories) {
+			const fullCategoryInfo = (state as any).fullCategoryDetails?.get(selectedCategory.id);
+			if (!fullCategoryInfo) continue;
+
+			const { categoryOptions: allOptions } = fullCategoryInfo;
+
+			// Get valid options (those that appear in COCs)
+			const validOptions = allOptions.filter((opt: any) => {
+				// Check if this option appears in any COC
+				return Object.keys(cocMapping).includes(opt.id);
+			});
+
+			// Build optionToCocs for valid options only
+			validOptions.forEach((opt: any) => {
+				optionToCocs[opt.id] = [...cocMapping[opt.id]];
+			});
+		}
+
+		console.log('🔢 Built optionToCocs mapping with', Object.keys(optionToCocs).length, 'validated options');
+
+		// Store optionToCocs on state
+		(state as any).optionToCocs = optionToCocs;
+
 		// Build category dimension suggestions from selected categories
 		// Use already-available fullCategoryDetails instead of additional API calls
 		const suggestions: any[] = [];
+		const filterOptions: any[] = [];
 
 		// @ts-ignore - Access the stored full category details
 		const fullCategoryDetails = state.fullCategoryDetails || new Map();
@@ -924,29 +1012,56 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			const fullCategoryInfo = fullCategoryDetails.get(selectedCategory.id);
 			if (!fullCategoryInfo) continue;
 
-			const { name: categoryName, categoryOptions: options } = fullCategoryInfo;
+			const { name: categoryName, categoryOptions: allOptions } = fullCategoryInfo;
 
-			// Create dimension suggestion with category_id and all option_ids
-			const optionIds = options.map((opt: any) => opt.id).join(';');
+			// Cross-reference with cocMapping to only include options that appear in COCs
+			const validOptions = allOptions.filter((opt: any) => {
+				// Check if this option appears in any COC
+				return Object.keys(cocMapping).includes(opt.id);
+			});
+
+			console.log(`🔢 Category ${categoryName}: ${allOptions.length} total options, ${validOptions.length} valid options in COCs`);
+
+			if (validOptions.length === 0) {
+				console.log(`🔢 Skipping category ${categoryName} - no options appear in COCs`);
+				continue;
+			}
+
+			// Create dimension suggestion with category_id and valid option_ids only
+			const optionIds = validOptions.map((opt: any) => opt.id).join(';');
 			suggestions.push({
 				name: `Disaggregate by ${categoryName}`,
 				id: `dimension_${selectedCategory.id}`, // Composite ID for the category dimension
 				categoryId: selectedCategory.id, // Actual DHIS2 category ID
 				categoryName: categoryName,
 				optionIds: optionIds,
-				optionCount: options.length,
+				optionCount: validOptions.length,
 				type: 'categoryDimension',
 				formattedDimension: `${selectedCategory.id}:${optionIds}`
+			});
+
+			// Construct category options for filtering - only include options that appear in COCs
+			const categoryOptionNames = validOptions.map((opt: any) => opt.name || opt.displayName || opt.id);
+			filterOptions.push({
+				categoryId: selectedCategory.id,
+				categoryName: categoryName,
+				options: categoryOptionNames,
+				optionIds: validOptions.map((opt: any) => opt.id),
+				type: 'categoryFilter'
 			});
 		}
 
 		console.log(`🔢 Generated ${suggestions.length} category dimension suggestions`);
+		console.log(`🔢 Constructed ${filterOptions.length} category filter options from COCs`);
+
+		// optionToCocs will be built from cocMapping in buildAnalyticsChart
 
 		// Determine status based on results
 		const disaggregationsMetadata = {
 			status: suggestions.length > 3 ? 'multiple_matches' : // Allow more for disagg since they can be combined
 				suggestions.length === 1 ? 'auto_selected' : 'no_match',
 			suggestions,
+			filterOptions, // Include the constructed category options for filtering
 			query: state.query,
 			rawSearchResults: suggestions, // Use actual generated suggestions
 			selectedCategories: selectedCategories,
@@ -1121,72 +1236,6 @@ async function searchDatePeriods(state: typeof GraphAnnotation.State): Promise<P
 			step: 'query_data'
 		};
 	}
-}
-
-// Helper function to extract disaggregation keywords from query
-function extractDisaggregationKeywords(query: string): string[] {
-	const keywords: string[] = [];
-
-	// Convert to lowercase for matching
-	const queryLower = query.toLowerCase();
-
-	// Common disaggregation dimensions
-	const disaggregationTerms = [
-		// Demographic categories
-		'age group', 'age groups', 'age', 'ages', 'gender', 'sex',
-		// Health system categories
-		'facility type', 'facility types', 'service type', 'service types',
-		'ownership', 'ownership type', 'ownership types',
-		// Geographic categories (non-org unit)
-		'urban', 'rural', 'urban/rural', 'urban rural',
-		// Socioeconomic categories
-		'income level', 'income levels', 'economic status', 'socioeconomic',
-		'wealth quintile', 'wealth quintiles',
-		// Program categories
-		'treatment type', 'treatment types', 'intervention type', 'intervention types',
-		// Common category breakdowns
-		'category', 'categories', 'group', 'groups', 'breakdown', 'breakdowns'
-	];
-
-	// Check for disaggregation keywords with "by" preposition
-	const byPattern = /by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi;
-	let match;
-	while ((match = byPattern.exec(queryLower)) !== null) {
-		const extracted = match[1].trim();
-		if (extracted.length > 2 && !/\b(and|or|the|a|an|for|in|at|of|with)\b/i.test(extracted)) {
-			keywords.push(extracted);
-		}
-	}
-
-	// Check for explicit disaggregation terms
-	for (const term of disaggregationTerms) {
-		if (queryLower.includes(term)) {
-			keywords.push(term.charAt(0).toUpperCase() + term.slice(1)); // Capitalize first letter
-		}
-	}
-
-	// Check for "disaggregated by" or "broken down by" patterns
-	const disaggPatterns = [
-		/disaggregated?\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi,
-		/broken\s+down\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi,
-		/grouped\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi
-	];
-
-	for (const pattern of disaggPatterns) {
-		while ((match = pattern.exec(queryLower)) !== null) {
-			const extracted = match[1].trim();
-			if (extracted.length > 2) {
-				keywords.push(extracted);
-			}
-		}
-	}
-
-	// Remove duplicates and clean up
-	return [...new Set(keywords)].filter(keyword =>
-		keyword.length > 2 &&
-		!/\b(month|year|quarter|period|date|time|week|day)\b/i.test(keyword) && // Filter out time dimensions
-		!/\b(country|countries|district|districts|province|provinces|region|regions|county|counties|facility|facilities|hospital|hospitals|clinic|clinics|centre|centers|center|centres)\b/i.test(keyword) // Filter out location dimensions
-	);
 }
 
 // Helper function to extract organisation unit keywords from query

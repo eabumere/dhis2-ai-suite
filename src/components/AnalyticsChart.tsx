@@ -33,6 +33,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     onExport
 }) => {
     const [echartsOption, setEchartsOption] = useState<any>(null);
+    const [fullChartData, setFullChartData] = useState<any>(null);
     const [filters, setFilters] = useState<ChartFilter>({});
     const [isFiltering, setIsFiltering] = useState(false);
     const [filterOptions, setFilterOptions] = useState<any>({});
@@ -40,10 +41,13 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     const echartsRef = useRef<any>(null);
 
     useEffect(() => {
-        if (chartData?.echarts_option) {
-            setEchartsOption(chartData.echarts_option);
-            // Extract filter options from chart data
-            extractFilterOptions(chartData);
+        if (chartData) {
+            setFullChartData(chartData);
+            if (chartData.echarts_option) {
+                setEchartsOption(chartData.echarts_option);
+                // Extract filter options from chart data
+                extractFilterOptions(chartData);
+            }
         }
     }, [chartData]);
 
@@ -85,7 +89,6 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         if (!chartData || !values.length) return;
 
         const newFilters = { ...filters, [filterType]: values };
-		console.log('Filters', newFilters);
         setFilters(newFilters);
         setIsFiltering(true);
 
@@ -227,10 +230,11 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         console.log(`📊 Re-generating chart with filtered data: ${filteredData.filteredData.length} points`);
 
         try {
-            // Create a complete chart data object with chartType from original data
+            // Create a complete chart data object with chartType and metadata from filtered data (like optionsToCocs)
             const completeChartData = {
                 ...filteredData,
-                chartType: chartData.chartType || 'bar' // Preserve chartType from original chartData
+                chartType: filteredData.chartType || chartData.chartType || 'bar', // Preserve chartType
+                metaData: filteredData.metaData || fullChartData?.metaData || chartData.metaData // Use metadata preserved through filtering (like optionsToCocs)
             };
 
             // Regenerate the ECharts option with the complete chart data

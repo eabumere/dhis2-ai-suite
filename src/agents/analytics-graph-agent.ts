@@ -56,6 +56,10 @@ const GraphAnnotation = Annotation.Root({
 		reducer: (left, right) => right,
 		default: () => null,
 	}),
+	metaData: Annotation<any>({
+		reducer: (left, right) => right,
+		default: () => null,
+	}),
 	chart: Annotation<any>({
 		reducer: (left, right) => right,
 		default: () => null,
@@ -504,7 +508,7 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 			orgUnits: state.data.org_units || [],
 			disaggregations: state.data.disaggregations || [], // Pass the disaggregations from query data
 			filterOptions: state.disaggregationsMetadata?.filterOptions || [], // Pass category filter options for chart filtering
-			optionsToCocs: state.optionsToCocs
+			optionsToCocs: state.optionsToCocs,
 		});
 
 		const chart = JSON.parse(result);

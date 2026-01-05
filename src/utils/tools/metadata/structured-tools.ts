@@ -48,9 +48,11 @@ interface AnalyticsChartData {
         selected: string[];
         categoryId?: string;
     }>;
-    metadata: {
+    metaData: {
         indicators: any[];
         orgUnits: any[];
+        periods: any[];
+        items: Record<string, any>;
     };
 }
 
@@ -94,7 +96,7 @@ export const buildAnalyticsChart = tool(
                 disaggregations,
                 filterOptions: input.filterOptions,
                 title: title || `Analytics Chart: ${userQuery}`,
-                hasCoDimension: addedCoDimension
+                hasCoDimension: addedCoDimension,
             });
 
             // Store chart configuration for persistence
@@ -112,7 +114,7 @@ export const buildAnalyticsChart = tool(
         filteredData: chartData.filteredData, // ✅ Include raw data for client-side filtering
         dimensions: chartData.dimensions,      // ✅ Include actual disaggregation values for filter dropdowns
         filterGroups: chartData.filterGroups, // ✅ Include grouped filter structure
-        metaData: input.analyticsData?.data?.metaData,  // ✅ Include metadata for proper filtering
+        metaData: input.analyticsData?.data?.analytics.metaData,  // ✅ Include metadata for proper filtering
 	    optionsToCocs: input.optionsToCocs,
         data_summary: {
             total_points: chartData.filteredData.length,
@@ -147,7 +149,8 @@ export const buildAnalyticsChart = tool(
             disaggregations: z.array(z.string()).optional().describe("Selected category option values to filter by"),
             filterOptions: z.array(z.any()).optional().describe("Category filter options for chart filtering"),
             optionsToCocs: z.record(z.string(), z.array(z.string())).optional().describe("Pre-built option to COC mapping from disaggregation search"),
-            title: z.string().optional().describe("Chart title (auto-generated if not provided)")
+            title: z.string().optional().describe("Chart title (auto-generated if not provided)"),
+	        metaData: z.array(z.any()).optional().describe("Meta Data"),
         })
     }
 );
@@ -383,8 +386,9 @@ async function processAnalyticsForChart(params: {
 
     // Apply disaggregation filtering if specific breakdowns are requested
 
-    // Extract metadata for fallback lookups
+    // Extract metadata for fallback lookups and display names
     const metaDataItems = analytics?.metaData?.items || {};
+    const metaDataPeriods = analytics?.metaData?.dimensions?.pe || [];
 
     // Intelligent name resolution: Use readable names directly when provided by DHIS2,
     // or resolve from metadata when needed (backward compatibility)
@@ -432,14 +436,17 @@ async function processAnalyticsForChart(params: {
         selected: []
     });
 
-    // Add periods filter group
+    // Add periods filter group - use display names from metadata
     filterGroups.push({
         name: 'Periods',
         type: 'periods',
-        options: Array.from(allPeriods).map(period => ({
-            name: period,
-            id: period
-        })),
+        options: Array.from(allPeriods).map(period => {
+            const item = metaDataItems[period];
+            return {
+                name: item?.name || item?.displayName || period,
+                id: period
+            };
+        }),
         selected: []
     });
 
@@ -522,9 +529,11 @@ async function processAnalyticsForChart(params: {
             disaggregations: disaggregationGroups  // Now contains proper structure with option IDs
         },
         filterGroups,
-        metadata: {
+        metaData: {
             indicators: resolveIndicatorNames, // Human-readable indicator names
-            orgUnits: resolveOrgUnitNames       // Human-readable org unit names
+            orgUnits: resolveOrgUnitNames,     // Human-readable org unit names
+            periods: Array.from(allPeriods),   // Period IDs for internal use
+            items: metaDataItems               // Full metadata mapping for display names
         }
     };
 }
@@ -539,8 +548,8 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
         return { title: { text: 'No Data Available' } };
     }
 
-    // Group data by dimensions for charting
-    const dataByDimension = groupChartData(filteredData, chartType);
+    // Group data by dimensions for charting - use display names for periods
+    const dataByDimension = groupChartData(filteredData, chartType, chartData.metaData);
 
     const baseOption = {
         title: {
@@ -633,9 +642,99 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
 }
 
 /**
+ * Sort DHIS2 periods chronologically
+ * Handles various period formats: YYYYMM, YYYYQX, YYYY, YYYYWX, etc.
+ */
+function sortPeriodsChronologically(a: string, b: string): number {
+    // Handle different period formats by converting to comparable values
+
+    // Monthly periods: YYYYMM (e.g., 202401, 202402)
+    if (/^\d{6}$/.test(a) && /^\d{6}$/.test(b)) {
+        const yearA = parseInt(a.substring(0, 4));
+        const monthA = parseInt(a.substring(4, 6));
+        const yearB = parseInt(b.substring(0, 4));
+        const monthB = parseInt(b.substring(4, 6));
+
+        if (yearA !== yearB) return yearA - yearB;
+        return monthA - monthB;
+    }
+
+    // Quarterly periods: YYYYQX (e.g., 2024Q1, 2024Q2)
+    if (/^\d{4}Q[1-4]$/.test(a) && /^\d{4}Q[1-4]$/.test(b)) {
+        const yearA = parseInt(a.substring(0, 4));
+        const quarterA = parseInt(a.substring(5));
+        const yearB = parseInt(b.substring(0, 4));
+        const quarterB = parseInt(b.substring(5));
+
+        if (yearA !== yearB) return yearA - yearB;
+        return quarterA - quarterB;
+    }
+
+    // Six-month periods: YYYYSX (e.g., 2024S1, 2024S2)
+    if (/^\d{4}S[1-2]$/.test(a) && /^\d{4}S[1-2]$/.test(b)) {
+        const yearA = parseInt(a.substring(0, 4));
+        const semesterA = parseInt(a.substring(5));
+        const yearB = parseInt(b.substring(0, 4));
+        const semesterB = parseInt(b.substring(5));
+
+        if (yearA !== yearB) return yearA - yearB;
+        return semesterA - semesterB;
+    }
+
+    // Financial year periods: YYYYApril, YYYYJuly, YYYYOct (e.g., 2024April)
+    if (/^\d{4}(April|July|Oct)$/.test(a) && /^\d{4}(April|July|Oct)$/.test(b)) {
+        const yearA = parseInt(a.substring(0, 4));
+        const monthA = a.substring(4).toLowerCase();
+        const yearB = parseInt(b.substring(0, 4));
+        const monthB = b.substring(4).toLowerCase();
+
+        // Map financial year start months to numbers
+        const monthOrder: Record<string, number> = { 'april': 1, 'july': 2, 'oct': 3 };
+
+        if (yearA !== yearB) return yearA - yearB;
+        return monthOrder[monthA] - monthOrder[monthB];
+    }
+
+    // Weekly periods: YYYYWX (e.g., 2024W01, 2024W52)
+    if (/^\d{4}W\d{2}$/.test(a) && /^\d{4}W\d{2}$/.test(b)) {
+        const yearA = parseInt(a.substring(0, 4));
+        const weekA = parseInt(a.substring(5));
+        const yearB = parseInt(b.substring(0, 4));
+        const weekB = parseInt(b.substring(5));
+
+        if (yearA !== yearB) return yearA - yearB;
+        return weekA - weekB;
+    }
+
+    // Six-month April periods: YYYYAprilSX (e.g., 2024AprilS1)
+    if (/^\d{4}AprilS[1-2]$/.test(a) && /^\d{4}AprilS[1-2]$/.test(b)) {
+        const yearA = parseInt(a.substring(0, 4));
+        const semesterA = parseInt(a.substring(10));
+        const yearB = parseInt(b.substring(0, 4));
+        const semesterB = parseInt(b.substring(10));
+
+        if (yearA !== yearB) return yearA - yearB;
+        return semesterA - semesterB;
+    }
+
+    // Daily periods: YYYYMMDD (e.g., 20240115)
+    if (/^\d{8}$/.test(a) && /^\d{8}$/.test(b)) {
+        return a.localeCompare(b); // String comparison works for YYYYMMDD format
+    }
+
+    // Yearly periods: YYYY (e.g., 2023, 2024)
+    if (/^\d{4}$/.test(a) && /^\d{4}$/.test(b)) {
+        return parseInt(a) - parseInt(b);
+    }
+
+    // Relative periods or other formats - fall back to alphabetical sorting
+    return a.localeCompare(b);
+}
+
+/**
  * Group chart data by appropriate dimensions
  */
-function groupChartData(data: any[], chartType: string): any {
+function groupChartData(data: any[], chartType: string, metadata?: any): any {
     if (chartType === 'pie') {
         // For pie charts, group by periods/quarters
         const periodGroups: Record<string, number> = {};
@@ -699,16 +798,59 @@ function groupChartData(data: any[], chartType: string): any {
             seriesMap[seriesKey][period] = (seriesMap[seriesKey][period] || 0) + (row.value || 0);
         });
 
-        // Sort periods chronologically
-        periodOrder.sort();
+        // Sort periods chronologically by their DHIS2 period IDs
+        // Helper function to get period ID from period (which might be ID or display name)
+        const getPeriodId = (period: string): string => {
+            if (metadata?.items) {
+                // If period is already an ID, return it
+                if (metadata.items[period]) {
+                    return period;
+                }
+                // Otherwise, find the ID by display name
+                for (const [key, item] of Object.entries(metadata.items)) {
+                    if (item['name'] === period) {
+                        return key;
+                    }
+                }
+            }
+            return period;
+        };
 
-        console.log(`📊 Generated ${Object.keys(seriesMap).length} series with ${periodOrder.length} periods`);
+        periodOrder.sort((a, b) => {
+            const idA = getPeriodId(a);
+            const idB = getPeriodId(b);
+            return sortPeriodsChronologically(idA, idB);
+        });
+
+        // Create display names in the same order as sorted period IDs
+        const displayNames = periodOrder.map(periodId => {
+            const item = metadata?.items?.[periodId];
+            return item?.name || item?.displayName || periodId;
+        });
+
+        // Create mapping from period ID to display name
+        const periodToDisplayMap = new Map<string, string>();
+        periodOrder.forEach((periodId, index) => {
+            periodToDisplayMap.set(periodId, displayNames[index]);
+        });
+
+        // Transform series data to use display names as keys instead of period IDs
+        const displaySeriesMap: Record<string, Record<string, number>> = {};
+        Object.entries(seriesMap).forEach(([seriesName, periodData]) => {
+            displaySeriesMap[seriesName] = {};
+            Object.entries(periodData).forEach(([periodId, value]) => {
+                const displayName = periodToDisplayMap.get(periodId) || periodId;
+                displaySeriesMap[seriesName][displayName] = value;
+            });
+        });
+
+        console.log(`📊 Generated ${Object.keys(displaySeriesMap).length} series with ${displayNames.length} periods (using display names)`);
 
         return {
-            categories: periodOrder,
-            series: Object.entries(seriesMap).map(([seriesName, periodData]) => ({
+            categories: displayNames,  // Use display names for x-axis labels
+            series: Object.entries(displaySeriesMap).map(([seriesName, periodData]) => ({
                 name: seriesName,
-                data: periodOrder.map(period => periodData[period] || 0)
+                data: displayNames.map(displayName => periodData[displayName] || 0)
             }))
         };
     }

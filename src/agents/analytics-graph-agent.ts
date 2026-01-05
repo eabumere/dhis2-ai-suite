@@ -504,7 +504,6 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 			orgUnits: state.data.org_units || [],
 			disaggregations: state.data.disaggregations || [], // Pass the disaggregations from query data
 			filterOptions: state.disaggregationsMetadata?.filterOptions || [], // Pass category filter options for chart filtering
-			cocMapping: (state as any).cocMapping || {}, // Keep for backward compatibility
 			optionsToCocs: state.optionsToCocs
 		});
 
@@ -972,7 +971,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 			return {
 				disaggregationsMetadata: noDisaggMetadata,
-				cocMapping: cocMapping,
 				step: 'query_data'
 			};
 		}
@@ -1121,7 +1119,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				// Continue with query_data using selected disaggregations
 				return {
 					disaggregationsMetadata: updatedDisaggMetadata,
-					cocMapping: cocMapping,
 					optionsToCocs: optionToCocs,
 					step: 'query_data'
 				};
@@ -1137,7 +1134,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 				return {
 					disaggregationsMetadata: cancelledDisaggMetadata,
-					cocMapping: cocMapping,
 					optionsToCocs: optionToCocs,
 					step: 'query_data'
 				};
@@ -1146,7 +1142,6 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			// Single match or auto-selected - proceed directly to query
 			return {
 				disaggregationsMetadata,
-				cocMapping: cocMapping,
 				optionsToCocs: optionToCocs,
 				step: 'query_data'
 			};

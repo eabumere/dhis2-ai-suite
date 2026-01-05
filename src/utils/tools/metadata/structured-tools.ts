@@ -67,7 +67,6 @@ export const buildAnalyticsChart = tool(
         orgUnits?: string[];
         disaggregations?: string[];
         filterOptions?: any[];
-        cocMapping?: Record<string, string[]>;
 	    optionsToCocs?: Record<string, string[]>;
         title?: string;
     }) => {
@@ -114,7 +113,6 @@ export const buildAnalyticsChart = tool(
         dimensions: chartData.dimensions,      // ✅ Include actual disaggregation values for filter dropdowns
         filterGroups: chartData.filterGroups, // ✅ Include grouped filter structure
         metaData: input.analyticsData?.data?.metaData,  // ✅ Include metadata for proper filtering
-        cocMapping: input.cocMapping || {},
 	    optionsToCocs: input.optionsToCocs,
         data_summary: {
             total_points: chartData.filteredData.length,
@@ -148,7 +146,6 @@ export const buildAnalyticsChart = tool(
             orgUnits: z.array(z.string()).optional().describe("Selected organization units"),
             disaggregations: z.array(z.string()).optional().describe("Selected category option values to filter by"),
             filterOptions: z.array(z.any()).optional().describe("Category filter options for chart filtering"),
-            cocMapping: z.record(z.string(), z.array(z.string())).optional().describe("Accurate COC to category options mapping"),
             optionsToCocs: z.record(z.string(), z.array(z.string())).optional().describe("Pre-built option to COC mapping from disaggregation search"),
             title: z.string().optional().describe("Chart title (auto-generated if not provided)")
         })

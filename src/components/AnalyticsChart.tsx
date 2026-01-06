@@ -38,11 +38,13 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     const [isFiltering, setIsFiltering] = useState(false);
     const [filterOptions, setFilterOptions] = useState<any>({});
     const [filtersExpanded, setFiltersExpanded] = useState(false);
+    const [chartType, setChartType] = useState<string>('bar');
     const echartsRef = useRef<any>(null);
 
     useEffect(() => {
         if (chartData) {
             setFullChartData(chartData);
+            setChartType(chartData.chartType || 'bar');
             if (chartData.echarts_option) {
                 setEchartsOption(chartData.echarts_option);
                 // Extract filter options from chart data
@@ -233,7 +235,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             // Create a complete chart data object with chartType and metadata from filtered data (like optionsToCocs)
             const completeChartData = {
                 ...filteredData,
-                chartType: filteredData.chartType || chartData.chartType || 'bar', // Preserve chartType
+                chartType: filteredData.chartType, // Use chartType from the passed data (which may be updated)
                 metaData: filteredData.metaData || fullChartData?.metaData || chartData.metaData // Use metadata preserved through filtering (like optionsToCocs)
             };
 
@@ -246,6 +248,37 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         } catch (error) {
             console.error('❌ Error generating filtered chart:', error);
             return null;
+        }
+    };
+
+    // Handle chart type change
+    const handleChartTypeChange = async (newChartType: string) => {
+        if (!chartData || newChartType === chartType) return;
+
+        console.log(`📊 Changing chart type from ${chartType} to ${newChartType}`);
+        setChartType(newChartType);
+        setIsFiltering(true);
+
+        try {
+            // Create modified chart data with new chart type
+            const updatedChartData = {
+                ...fullChartData,
+                chartType: newChartType
+            };
+
+            // Regenerate chart options with new type
+            const newOption = await generateFilteredChartOption(updatedChartData);
+
+            // Update the ECharts instance
+            if (echartsRef.current) {
+                echartsRef.current.getEchartsInstance().setOption(newOption, false, true);
+            } else {
+                setEchartsOption(newOption);
+            }
+        } catch (error) {
+            console.error('❌ Error changing chart type:', error);
+        } finally {
+            setIsFiltering(false);
         }
     };
 
@@ -274,20 +307,109 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         if (!chartId) return;
 
         try {
-            // For now, disable direct export - use main input instead
-            // TODO: Implement proper export through main conversation interface
             console.log(`Export chart ${chartId} as ${format}: Generating download...`);
 
-            // Simulate basic PNG/SVG export using ECharts
             if (format === 'png' || format === 'svg') {
-                // ECharts provides built-in export functionality
-                console.log('Use ECharts built-in export for visual formats');
+                // Use ECharts built-in export functionality
+                if (echartsRef.current) {
+                    const echartsInstance = echartsRef.current.getEchartsInstance();
+
+                    let dataURL: string;
+                    if (format === 'svg') {
+                        // Temporarily switch to SVG renderer for proper SVG export
+                        echartsInstance.setOption({}, false, { renderer: 'svg' });
+                        dataURL = echartsInstance.getDataURL({
+                            type: 'svg',
+                            backgroundColor: '#ffffff'
+                        });
+                        // Restore canvas renderer
+                        echartsInstance.setOption({}, false, { renderer: 'canvas' });
+                    } else {
+                        // PNG export with canvas renderer
+                        dataURL = echartsInstance.getDataURL({
+                            type: 'png',
+                            pixelRatio: 2, // Higher quality
+                            backgroundColor: '#ffffff'
+                        });
+                    }
+
+                    // Create download link
+                    const link = document.createElement('a');
+                    link.href = dataURL;
+                    link.download = `chart-${chartId}.${format}`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+
+                    console.log(`✅ Chart exported as ${format.toUpperCase()}`);
+                }
+            } else if (format === 'csv') {
+                // Generate CSV from chart data
+                const csvData = generateCSVData();
+                const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `chart-${chartId}.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+
+                console.log('✅ Chart data exported as CSV');
+            } else if (format === 'json') {
+                // Export chart data as JSON
+                const jsonData = {
+                    chartId,
+                    title: title || chartData.title || 'Analytics Chart',
+                    chartType,
+                    data: fullChartData,
+                    filters: filters,
+                    exportDate: new Date().toISOString()
+                };
+
+                const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `chart-${chartId}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+
+                console.log('✅ Chart data exported as JSON');
             }
 
             onExport?.(format);
         } catch (error) {
             console.error('Error exporting chart:', error);
         }
+    };
+
+    const generateCSVData = (): string => {
+        if (!fullChartData?.filteredData || !Array.isArray(fullChartData.filteredData)) {
+            return 'No data available';
+        }
+
+        const headers = Object.keys(fullChartData.filteredData[0] || {});
+        const csvRows = [headers.join(',')];
+
+        fullChartData.filteredData.forEach(row => {
+            const values = headers.map(header => {
+                const value = row[header];
+                // Escape commas and quotes in CSV
+                if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+                    return `"${value.replace(/"/g, '""')}"`;
+                }
+                return value || '';
+            });
+            csvRows.push(values.join(','));
+        });
+
+        return csvRows.join('\n');
     };
 
     const downloadFile = (data: any, filename: string, format: string) => {
@@ -327,78 +449,11 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
     return (
         <div style={{ marginBottom: '30px' }}>
-            {/* Chart Header */}
-            <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '15px',
-                paddingBottom: '10px',
-                borderBottom: '1px solid #e0e0e0'
-            }}>
+            {/* Title */}
+            <div style={{ marginBottom: '15px' }}>
                 <h3 style={{ margin: 0, color: '#2c6693' }}>
                     {title || chartData.title || 'Analytics Chart'}
                 </h3>
-
-                {/* Export Buttons */}
-                <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                        onClick={() => handleExport('png')}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#4CAF50',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        PNG
-                    </button>
-                    <button
-                        onClick={() => handleExport('svg')}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#2196F3',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        SVG
-                    </button>
-                    <button
-                        onClick={() => handleExport('csv')}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#FF9800',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        CSV
-                    </button>
-                    <button
-                        onClick={() => handleExport('json')}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#9C27B0',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        JSON
-                    </button>
-                </div>
             </div>
 
             {/* Collapsed/Expanded Filter Controls */}
@@ -664,6 +719,106 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                     )}
                 </div>
             )}
+
+            {/* Chart Type and Export Controls */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '15px',
+                padding: '10px 15px',
+                backgroundColor: '#f8f9fa',
+                border: '1px solid #e0e0e0',
+                borderRadius: '4px'
+            }}>
+                {/* Chart Type Dropdown */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#2c6693' }}>
+                        Chart Type:
+                    </label>
+                    <select
+                        value={chartType}
+                        onChange={(e) => handleChartTypeChange(e.target.value)}
+                        disabled={isFiltering}
+                        style={{
+                            padding: '6px 8px',
+                            border: '1px solid #ccc',
+                            borderRadius: '3px',
+                            backgroundColor: 'white',
+                            fontSize: '12px',
+                            minWidth: '80px'
+                        }}
+                    >
+                        <option value="bar">Bar</option>
+                        <option value="line">Line</option>
+                        <option value="pie">Pie</option>
+                    </select>
+                </div>
+
+                {/* Export Buttons */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                        onClick={() => handleExport('png')}
+                        disabled={isFiltering}
+                        style={{
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            backgroundColor: '#4CAF50',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        PNG
+                    </button>
+                    <button
+                        onClick={() => handleExport('svg')}
+                        disabled={isFiltering}
+                        style={{
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            backgroundColor: '#2196F3',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        SVG
+                    </button>
+                    <button
+                        onClick={() => handleExport('csv')}
+                        disabled={isFiltering}
+                        style={{
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            backgroundColor: '#FF9800',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        CSV
+                    </button>
+                    <button
+                        onClick={() => handleExport('json')}
+                        disabled={isFiltering}
+                        style={{
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            backgroundColor: '#9C27B0',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        JSON
+                    </button>
+                </div>
+            </div>
 
             {/* Chart Display */}
             <div style={{

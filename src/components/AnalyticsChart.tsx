@@ -193,7 +193,9 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
             if (validCOCIds.size > 0) {
                 filteredRows = filteredRows.filter(row => {
-                    const rowCocId = row.co; // COC ID column
+                    // Find COC ID column - could be 'co', 'co_0', etc.
+                    const cocColumn = Object.keys(row).find(key => key.startsWith('co'));
+                    const rowCocId = cocColumn ? row[cocColumn] : undefined;
                     return rowCocId && validCOCIds.has(rowCocId);
                 });
 
@@ -235,7 +237,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             // Create a complete chart data object with chartType and metadata from filtered data (like optionsToCocs)
             const completeChartData = {
                 ...filteredData,
-                chartType: filteredData.chartType, // Use chartType from the passed data (which may be updated)
+                chartType: filteredData.chartType || filteredData['chart_type'], // Use chartType from the passed data or current state
                 metaData: filteredData.metaData || fullChartData?.metaData || chartData.metaData // Use metadata preserved through filtering (like optionsToCocs)
             };
 
@@ -292,9 +294,13 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         try {
             console.log('🔄 Resetting chart filters');
 
-            // Re-generate the original chart options
-            if (chartData.echarts_option) {
-                setEchartsOption(chartData.echarts_option);
+            // Regenerate chart options with original unfiltered data
+            const originalOption = await generateFilteredChartOption(fullChartData);
+            setEchartsOption(originalOption);
+
+            // Update the ECharts instance
+            if (echartsRef.current) {
+                echartsRef.current.getEchartsInstance().setOption(originalOption, false, true);
             }
         } catch (error) {
             console.error('❌ Error resetting filters:', error);

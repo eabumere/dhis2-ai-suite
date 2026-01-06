@@ -756,7 +756,7 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
         const seriesMap: Record<string, Record<string, number>> = {};
 
         // Detect if data has category option columns (disaggregation)
-        const hasCategoryOptions = data.length > 0 && Object.keys(data[0]).some(key => key.startsWith('co_'));
+        const hasCategoryOptions = data.length > 0 && Object.keys(data[0]).some(key => key.startsWith('co'));
 
         console.log(`📊 Chart grouping - Has disaggregations: ${hasCategoryOptions}`);
 
@@ -871,12 +871,12 @@ function applyChartFilters(chart: AnalyticsChartData, filters: any): any[] {
     if (filters.orgUnits && filters.orgUnits.length > 0) {
         filteredData = filteredData.filter(row => filters.orgUnits.includes(row.org_unit));
     }
-    // Filter by selected category options in co_* columns (disaggregation filtering)
+    // Filter by selected category options in co* columns (disaggregation filtering)
     if (filters.disaggregations && filters.disaggregations.length > 0) {
         filteredData = filteredData.filter(row => {
-            // Check if any co_* column in this row contains any of the selected disaggregation options
+            // Check if any co* column in this row contains any of the selected disaggregation options
             for (const [key, value] of Object.entries(row)) {
-                if (key.startsWith('co_') && value && filters.disaggregations.includes(value)) {
+                if (key.startsWith('co') && value && filters.disaggregations.includes(value as string)) {
                     return true; // Include this row if it has a matching category option
                 }
             }

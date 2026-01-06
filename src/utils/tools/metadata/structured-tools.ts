@@ -857,72 +857,6 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 }
 
 /**
- * Apply filters to chart data
- */
-function applyChartFilters(chart: AnalyticsChartData, filters: any): any[] {
-    let filteredData = [...chart.filteredData];
-
-    if (filters.indicators && filters.indicators.length > 0) {
-        filteredData = filteredData.filter(row => filters.indicators.includes(row.dx));
-    }
-    if (filters.periods && filters.periods.length > 0) {
-        filteredData = filteredData.filter(row => filters.periods.includes(row.period));
-    }
-    if (filters.orgUnits && filters.orgUnits.length > 0) {
-        filteredData = filteredData.filter(row => filters.orgUnits.includes(row.org_unit));
-    }
-    // Filter by selected category options in co* columns (disaggregation filtering)
-    if (filters.disaggregations && filters.disaggregations.length > 0) {
-        filteredData = filteredData.filter(row => {
-            // Check if any co* column in this row contains any of the selected disaggregation options
-            for (const [key, value] of Object.entries(row)) {
-                if (key.startsWith('co') && value && filters.disaggregations.includes(value as string)) {
-                    return true; // Include this row if it has a matching category option
-                }
-            }
-            return false; // Exclude this row if no matching category options found
-        });
-    }
-
-    return filteredData;
-}
-
-/**
- * Generate export data in requested format
- */
-function generateChartExport(chart: AnalyticsChartData, format: string): any {
-    switch (format) {
-        case 'csv':
-            // Convert chart data to CSV
-            if (!chart.filteredData || chart.filteredData.length === 0) {
-                return 'No data available';
-            }
-            const headers = Object.keys(chart.filteredData[0]);
-            const csvRows = [headers.join(',')];
-            chart.filteredData.forEach(row => {
-                const values = headers.map(h => row[h] || '');
-                csvRows.push(values.join(','));
-            });
-            return csvRows.join('\n');
-
-        case 'json':
-            return JSON.stringify(chart, null, 2);
-
-        case 'png':
-        case 'svg':
-            // For image exports, this would need frontend canvas handling
-            return {
-                chartId: chart.id,
-                title: chart.title,
-                message: 'Image export requires frontend ECharts component'
-            };
-
-        default:
-            throw new Error(`Unsupported export format: ${format}`);
-    }
-}
-
-/**
  * Store analytics chart for persistence and follow-up queries
  */
 function storeAnalyticsChart(chart: AnalyticsChartData): string {
@@ -1858,10 +1792,6 @@ async function createDhis2ReportingFormAggregated({
     }
 }
 
-// REMOVED: Migration completed - now using LLM-first version above
-
-    // REMOVED: Migration completed - legacy tools replaced with LLM-first versions above
-
 // =============================================================================
 // ANALYTICS TOOLS - DATA QUERYING AND COMPUTATION
 // =============================================================================
@@ -2213,67 +2143,6 @@ Return ONLY a JSON array of selected category names: ["Category Name 1", "Catego
         })
     }
 );
-
-/**
- * Helper function to extract disaggregation keywords from query using regex
- */
-function extractDisaggregationKeywords(query: string): string[] {
-    const keywords: string[] = [];
-
-    // Convert to lowercase for matching
-    const queryLower = query.toLowerCase();
-
-    // Common disaggregation dimensions
-    const disaggregationTerms = [
-        // Demographic categories
-        'age group', 'age groups', 'age', 'ages', 'gender', 'sex',
-        // Health system categories
-        'facility type', 'facility types', 'service type', 'service types',
-        'ownership', 'ownership type', 'ownership types',
-        // Geographic categories (non-org unit)
-        'urban', 'rural', 'urban/rural', 'urban rural',
-        // Socioeconomic categories
-        'income level', 'income levels', 'economic status', 'socioeconomic',
-        'wealth quintile', 'wealth quintiles',
-        // Program categories
-        'treatment type', 'treatment types', 'intervention type', 'intervention types',
-        // Common category breakdowns
-        'category', 'categories', 'group', 'groups', 'breakdown', 'breakdowns'
-    ];
-
-    // Check for disaggregation keywords with "by" preposition
-    const byPattern = /by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi;
-    let match;
-    while ((match = byPattern.exec(queryLower)) !== null) {
-        const extracted = match[1].trim();
-        if (extracted.length > 2 && !/\b(and|or|the|a|an|for|in|at|of|with)\b/i.test(extracted)) {
-            keywords.push(extracted);
-        }
-    }
-
-    // Check for explicit disaggregation terms
-    for (const term of disaggregationTerms) {
-        if (queryLower.includes(term)) {
-            keywords.push(term.charAt(0).toUpperCase() + term.slice(1)); // Capitalize first letter
-        }
-    }
-
-    // Check for "disaggregated by" patterns
-    const disaggPattern = /disaggregated?\s+by\s+([a-zA-Z\s]+?)(?:\s|$|[,.;:!?])/gi;
-    while ((match = disaggPattern.exec(queryLower)) !== null) {
-        const extracted = match[1].trim();
-        if (extracted.length > 2) {
-            keywords.push(extracted);
-        }
-    }
-
-    // Remove duplicates and clean up
-    return [...new Set(keywords)].filter(keyword =>
-        keyword.length > 2 &&
-        !/\b(month|year|quarter|period|date|time|week|day)\b/i.test(keyword) && // Filter out time dimensions
-        !/\b(country|countries|district|districts|province|provinces|region|regions|county|counties|facility|facilities|hospital|hospitals|clinic|clinics|centre|centers|center|centres)\b/i.test(keyword) // Filter out location dimensions
-    );
-}
 
 /**
  * Extract Indicator/Data Element Keywords using LLM
@@ -3376,18 +3245,15 @@ export const Dhis2StructuredTools = {
     createDhis2IndicatorType,
     createDhis2RelationshipType,
     createDhis2Relationship,
-
-    // Legacy tools (not yet migrated - still available for now)
-    // Program tools (now migrated to LLM-first)
-    // createDhis2Program, // Now migrated
-    // createDhis2TrackedEntityType, // Now migrated
-    // createDhis2TrackedEntityAttribute, // Now migrated
-    // createDhis2ProgramStage, // Now migrated
-    // createDhis2ProgramRule, // Now migrated
-    // createDhis2ProgramIndicator, // Now migrated
+    createDhis2Program, 
+    createDhis2TrackedEntityType, 
+    createDhis2TrackedEntityAttribute, 
+    createDhis2ProgramStage, 
+    createDhis2ProgramRule, 
+    createDhis2ProgramIndicator, 
     createDhis2Indicator, // Complex tool with legacy parsing
-    // createDhis2ValidationRule, // Now migrated
-    // createDhis2DashboardItem, // Now migrated
+    // createDhis2ValidationRule, 
+    // createDhis2DashboardItem, 
     createDhis2TrackedEntityInstance,
     createDhis2Enrollment,
     createDhis2Event,

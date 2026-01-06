@@ -1,4 +1,6 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
+import { AzureChatOpenAI } from '@langchain/openai';
+import { HumanMessage } from '@langchain/core/messages';
 
 // Import analytics tools
 import { buildAnalyticsChart, getDataElements, queryAnalytics, searchDhis2CategoryOptionCombos } from '../utils/tools/metadata';
@@ -10,7 +12,18 @@ import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM, extrac
 import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 
 // Import conversation context
-import { addConversation } from '../utils/conversation-context';
+import { addConversation, conversationContext, createAnalyticsDataContext } from '../utils/conversation-context';
+
+// Initialize the ChatOpenAI model with Azure configuration
+const model = new AzureChatOpenAI({
+	model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
+	temperature: 0,
+	maxTokens: undefined,
+	azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
+	azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
+	azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
+	azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
+});
 
 // Define the state using Annotation API (as per LangGraph official docs)
 const GraphAnnotation = Annotation.Root({
@@ -106,42 +119,213 @@ const GraphAnnotation = Annotation.Root({
 	})
 });
 
-// Node functions for the StateGraph
+// LLM-based intent classification with conversation context awareness
 async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
-	console.log('🔍 Classifying intent for query:', state.query);
+	console.log('🤖 Classifying intent with LLM for query:', state.query);
 
 	// Extract query from messages if not set
 	const query = state.query || state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🔍 Extracted query:', query);
 
-	const queryLower = query.toLowerCase();
-	const analyticsKeywords = ['analyze', 'calculate', 'compute', 'aggregate', 'trend', 'compare', 'query', 'extract', 'retrieve data values', 'analytics', 'reporting', 'sum', 'average', 'min', 'max', 'total', 'percentage', 'rate', 'coverage', 'performance', 'insights', 'time series', 'monthly', 'quarterly', 'yearly', 'time periods', 'over time', 'how many', 'what is the total', 'calculations', 'data analysis'];
+	// Get recent conversation context to understand if this is a follow-up
+	const context = conversationContext.findRelevantContext(query);
 
-	const isAnalytics = analyticsKeywords.some(keyword => queryLower.includes(keyword));
+	console.log('📚 Conversation context:', {
+		hasLastAnalytics: !!context.lastAnalyticsData,
+		relevantContexts: context.relevantDataContexts.length,
+		lastAnalyticsSummary: context.lastAnalyticsData?.summary
+	});
 
-	// Check if query already includes selected metadata (follow-up query)
-	const hasSelectedMetadata = queryLower.includes('selected metadata:') ||
-		queryLower.includes('analyze using these') ||
-		queryLower.includes('indicator:') && queryLower.includes('(id:');
+	// Build context summary for LLM
+	let contextSummary = '';
+	if (context.lastAnalyticsData) {
+		contextSummary = `Recent analytics summary: ${context.lastAnalyticsData.summary}`;
+	} else if (context.relevantDataContexts.length > 0) {
+		const latestContext = context.relevantDataContexts[context.relevantDataContexts.length - 1];
+		contextSummary = `Previous context: ${latestContext.summary}`;
+	}
 
-	if (!isAnalytics) {
+	const prompt = `
+Analyze this query in the context of DHIS2 analytics. Consider the conversation history.
+
+${contextSummary ? `CONVERSATION CONTEXT:\n${contextSummary}\n\n` : ''}CURRENT QUERY: "${query}"
+
+Classify the intent as one of:
+- new_analytics_query: New analytics request requiring data search and visualization
+- followup_data_analysis: Follow-up question about existing analytics data (asking about months, values, highest/lowest, trends, etc.)
+- non_analytics: Not related to analytics
+
+Return only a JSON object with:
+{
+  "intent": "new_analytics_query|followup_data_analysis|non_analytics",
+  "confidence": "high|medium|low",
+  "reasoning": "brief explanation"
+}`;
+
+	try {
+		const result = await model.invoke([new HumanMessage(prompt)]);
+		const response = (result.content as string).trim();
+
+		console.log('🤖 LLM classification response:', response);
+
+		const classification = JSON.parse(response);
+		console.log('📊 Parsed classification:', classification);
+
+		if (classification.intent === 'non_analytics') {
+			return {
+				query,
+				step: 'completed',
+				finalResult: {
+					success: false,
+					message: 'Query is not analytics related',
+					type: 'non_analytics',
+					classification
+				}
+			};
+		}
+
+		// Check if query already includes selected metadata (follow-up query)
+		const hasSelectedMetadata = query.toLowerCase().includes('selected metadata:') ||
+			query.toLowerCase().includes('analyze using these') ||
+			(query.toLowerCase().includes('indicator:') && query.toLowerCase().includes('(id:'));
+
+		if (classification.intent === 'followup_data_analysis' || hasSelectedMetadata) {
+			console.log('🔄 Follow-up analytics query detected');
+			return {
+				query,
+				step: hasSelectedMetadata ? 'parse_selected_metadata' : 'analyze_existing_data'
+			};
+		} else {
+			console.log('🆕 New analytics query detected');
+			return {
+				query,
+				step: 'search_metadata'
+			};
+		}
+
+	} catch (error) {
+		console.error('🤖 LLM classification failed:', error);
+		// Pure LLM-only fallback - no keywords, multilingual support
+		console.log('🔄 LLM classification failed - using intelligent context-based fallback');
+
+		// If we have recent analytics context, assume this is a follow-up query
+		// This works regardless of language since we're in analytics workflow
+		if (context.lastAnalyticsData) {
+			console.log('📊 Recent analytics context found - treating as follow-up analysis');
+			return {
+				query,
+				step: 'analyze_existing_data'
+			};
+		}
+
+		// Check if query includes selected metadata (works across languages with pattern matching)
+		const hasSelectedMetadata = query.toLowerCase().includes('selected metadata:') ||
+			query.toLowerCase().includes('analyze using these') ||
+			(query.toLowerCase().includes('indicator:') && query.toLowerCase().includes('(id:'));
+
+		if (hasSelectedMetadata) {
+			console.log('📋 Selected metadata pattern detected - parsing selection');
+			return {
+				query,
+				step: 'parse_selected_metadata'
+			};
+		}
+
+		// No context and no special patterns - assume new analytics query
+		// Since we're in the analytics agent, user likely wants analytics
+		console.log('🆕 No special context - defaulting to new analytics query');
 		return {
 			query,
+			step: 'search_metadata'
+		};
+	}
+}
+
+// Follow-up data analysis function for existing chart data
+async function analyzeExistingData(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+	console.log('🔍 Analyzing existing chart data for follow-up query');
+
+	const query = state.query;
+	const context = conversationContext.findRelevantContext(query);
+
+	if (!context.lastAnalyticsData) {
+		return {
 			step: 'completed',
 			finalResult: {
 				success: false,
-				message: 'Query is not analytics related',
-				type: 'non_analytics'
+				message: 'No previous analytics data available to analyze',
+				type: 'analytics'
 			}
 		};
 	}
 
-	console.log('📊 Analytics query detected, includes selected metadata:', hasSelectedMetadata);
+	const lastResult = context.lastAnalyticsData.data;
+	console.log('📊 Last analytics result:', lastResult);
 
-	return {
-		query,
-		step: hasSelectedMetadata ? 'parse_selected_metadata' : 'search_metadata'
-	};
+	if (!lastResult?.data) {
+		return {
+			step: 'completed',
+			finalResult: {
+				success: false,
+				message: 'Previous analytics result has no chart data to analyze',
+				type: 'analytics'
+			}
+		};
+	}
+
+	// Use LLM to analyze the existing chart data based on the follow-up question
+	const analysisPrompt = `
+Analyze this follow-up question about existing analytics data and provide insights.
+
+FOLLOW-UP QUESTION: "${query}"
+
+PREVIOUS ANALYTICS CONTEXT:
+- Chart data available: ${JSON.stringify(lastResult.data, null, 2)}
+
+Provide a natural language answer to the follow-up question based on the chart data. Focus on:
+- Finding highest/lowest values
+- Identifying trends or patterns
+- Comparing different categories or time periods
+- Extracting specific insights requested
+
+Answer directly and conversationally, as if you're explaining the data to the user.`;
+
+	try {
+		const result = await model.invoke([new HumanMessage(analysisPrompt)]);
+		const analysis = (result.content as string).trim();
+
+		console.log('📊 Data analysis result:', analysis);
+
+		const analysisResult = {
+			success: true,
+			message: analysis,
+			data: lastResult.data, // Include the original chart data
+			metadata: lastResult.metadata,
+			queryData: lastResult.queryData,
+			type: 'analytics',
+			isFollowUpAnalysis: true,
+			followUpQuery: query
+		};
+
+		// Add to conversation context
+		addConversation(query, 'analytics', analysisResult);
+
+		return {
+			step: 'completed',
+			finalResult: analysisResult
+		};
+
+	} catch (error) {
+		console.error('❌ Data analysis failed:', error);
+		return {
+			step: 'completed',
+			finalResult: {
+				success: false,
+				error: `Failed to analyze chart data: ${error.message}`,
+				type: 'analytics'
+			}
+		};
+	}
 }
 
 async function parseSelectedMetadata(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
@@ -533,8 +717,9 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 				state.orchestrator.renderChart(finalResult);
 			}
 
-			// Also save to conversation context
-			addConversation(state.query, 'analytics', finalResult);
+			// Also save to conversation context with proper DataContext structure
+			const dataContext = createAnalyticsDataContext(finalResult);
+			addConversation(state.query, 'analytics', finalResult, dataContext);
 
 			return {
 				chart,
@@ -1314,6 +1499,7 @@ const workflow = new StateGraph(GraphAnnotation);
 
 // Add nodes
 workflow.addNode('classify_intent', classifyIntent);
+workflow.addNode('analyze_existing_data', analyzeExistingData);
 workflow.addNode('parse_selected_metadata', parseSelectedMetadata);
 workflow.addNode('search_metadata', searchMetadata);
 workflow.addNode('search_date_periods', searchDatePeriods);
@@ -1340,6 +1526,7 @@ workflow.addEdge(START, 'classify_intent');
 workflow.addConditionalEdges('classify_intent', (state) => {
 	if (state.step === 'search_metadata') return 'search_metadata';
 	if (state.step === 'parse_selected_metadata') return 'parse_selected_metadata';
+	if (state.step === 'analyze_existing_data') return 'analyze_existing_data';
 	return END;
 });
 
@@ -1358,6 +1545,8 @@ workflow.addEdge('search_disaggregations', 'query_data');   // Always proceed to
 workflow.addEdge('query_data', 'build_chart');             // Always try chart building after data query
 // @ts-ignore
 workflow.addEdge('build_chart', END);
+// @ts-ignore
+workflow.addEdge('analyze_existing_data', END);            // Follow-up analysis completes workflow
 
 // Compile the workflow
 const stateGraphAgent = workflow.compile();

@@ -4,6 +4,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { searchAgent } from './search-agent';
 import { crudAgent } from './crud-agent';
 import { analyticsGraphAgent } from './analytics-graph-agent';
+import { createRoutedDataEntryAgent } from './routed-data-entry-agent';
 import { addConversation, createMutationDataContext, createSearchDataContext } from '../utils/conversation-context';
 
 // Define Router State - tracks workflow context and orchestrator reference
@@ -186,6 +187,41 @@ async function invoke_crud_agent(state: typeof RouterAnnotation.State): Promise<
 	}
 }
 
+// 5. Data entry workflow - invoke routed data entry agent
+async function invoke_data_entry_router(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
+	console.log('📝 Router: Invoking data entry router');
+
+	try {
+		const dataEntryAgent = createRoutedDataEntryAgent(state.orchestrator);
+		const result = await dataEntryAgent.invoke({
+			messages: [{ role: 'user', content: state.originalQuery }]
+		});
+
+		const responseContent = result.messages[result.messages.length - 1].content as string;
+
+		// Parse response - data entry router returns the final result directly
+		let parsedResponse;
+		try {
+			parsedResponse = JSON.parse(responseContent);
+		} catch (parseError) {
+			parsedResponse = { rawResponse: responseContent };
+		}
+
+		// Note: Conversation context is already handled by the data entry router
+
+		return { finalResult: parsedResponse };
+	} catch (error) {
+		console.error('📝 Router: Data entry router error:', error);
+		const errorResponse = {
+			success: false,
+			error: `Data entry routing failed: ${error.message}`
+		};
+		addConversation(state.originalQuery, 'data_entry', errorResponse);
+
+		return { finalResult: errorResponse };
+	}
+}
+
 // LLM-based workflow type classification
 async function detectWorkflowTypeLLM(query: string): Promise<string> {
 	try {
@@ -198,6 +234,7 @@ Categories:
 - direct_search: User wants to find/browse/search existing metadata (indicators, dataElements, orgUnits, etc.)
 - analytics_routing: User wants analytics/data analysis/calculations/visualizations/reports
 - crud: User wants to create/modify/delete metadata objects
+- data_entry: User wants to create or configure data entry structures (programs, data sets, data elements for data collection)
 
 Query: "${query}"
 
@@ -208,7 +245,8 @@ Category:`;
 
 		return category.includes('search') ? 'direct_search' :
 			category.includes('analytics') ? 'analytics_routing' :
-				category.includes('crud') ? 'crud' : 'unknown';
+				category.includes('crud') ? 'crud' :
+					category.includes('data_entry') ? 'data_entry' : 'unknown';
 	} catch (error) {
 		console.error('🤖 Router: LLM classification failed, using fallback');
 		// Simple keyword fallback
@@ -232,6 +270,7 @@ routerWorkflow.addNode('classify_intent', classify_intent);
 routerWorkflow.addNode('invoke_search_agent', invoke_search_agent);
 routerWorkflow.addNode('invoke_analytics_agent', invoke_analytics_agent);
 routerWorkflow.addNode('invoke_crud_agent', invoke_crud_agent);
+routerWorkflow.addNode('invoke_data_entry_router', invoke_data_entry_router);
 
 // Add edges
 // @ts-ignore
@@ -243,6 +282,7 @@ routerWorkflow.addConditionalEdges('classify_intent', (state) => {
 	if (state.workflowType === 'direct_search') return 'invoke_search_agent';
 	if (state.workflowType === 'analytics_routing') return 'invoke_analytics_agent';
 	if (state.workflowType === 'crud') return 'invoke_crud_agent';
+	if (state.workflowType === 'data_entry') return 'invoke_data_entry_router';
 	return END;
 });
 
@@ -253,6 +293,8 @@ routerWorkflow.addEdge('invoke_search_agent', END);
 routerWorkflow.addEdge('invoke_analytics_agent', END);
 // @ts-ignore
 routerWorkflow.addEdge('invoke_crud_agent', END);
+// @ts-ignore
+routerWorkflow.addEdge('invoke_data_entry_router', END);
 
 // Compile the workflow
 const routerStateGraph = routerWorkflow.compile();

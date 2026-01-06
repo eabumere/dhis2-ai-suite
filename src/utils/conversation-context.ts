@@ -9,7 +9,7 @@ export interface ConversationEntry {
     id: string;
     timestamp: number;
     query: string;
-    agent: 'search' | 'crud' | 'analytics' | 'router';
+    agent: 'search' | 'crud' | 'analytics' | 'router' | 'data_entry' | 'data_entry_aggregate' | 'data_entry_events' | 'data_entry_tracker';
     response: any;
     dataContext?: DataContext;
     summary?: string; // LLM-generated summary for future context

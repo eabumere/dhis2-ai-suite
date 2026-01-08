@@ -3,7 +3,7 @@
 // External libraries (alphabetically)
 import {tool} from '@langchain/core/tools';
 import {z} from 'zod';
-import {AzureChatOpenAI} from '@langchain/openai';
+import { ChatModels } from '../../chat-model-factory';
 
 // Local imports (alphabetically by module)
 import {
@@ -165,16 +165,9 @@ export const extractDatePeriodLLM = tool(
             console.log('📅 LLM date period extraction called for:', input.query);
 
             // Initialize Azure OpenAI LLM
-	        const env = (import.meta as any).env;
-	        const llm = new AzureChatOpenAI({
-		        model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
-		        temperature: 0.1, // Low temperature for consistent filtering
-		        maxTokens: 150,   // Longer output for period analysis
-		        azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
-		        azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
-		        azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-		        azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
-	        });
+            const llm = ChatModels.createExtractionModel({
+                maxTokens: 150,   // Longer output for period analysis
+            });
 
             // Create comprehensive prompt for date/period extraction
             const prompt = `
@@ -2019,16 +2012,7 @@ export const filterCategoriesForDisaggregationLLM = tool(
             });
 
             // Initialize Azure OpenAI LLM
-            const env = (import.meta as any).env;
-            const llm = new AzureChatOpenAI({
-                model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
-                temperature: 0.1, // Low temperature for consistent filtering
-                maxTokens: 200,   // Longer output for category analysis
-                azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
-                azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
-                azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-                azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
-            });
+            const llm = ChatModels.createAnalysisModel();
 
             const categoryList = input.availableCategories.map(cat => `"${cat.name}" (${cat.id})`).join(', ');
 
@@ -2154,15 +2138,8 @@ export const extractIndicatorKeywordsLLM = tool(
             console.log('📊 LLM indicator extraction called for:', input.query);
 
             // Initialize Azure OpenAI LLM
-	        const env = (import.meta as any).env;
-            const llm = new AzureChatOpenAI({
-                model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
-                temperature: 0.1, // Low temperature for consistent extraction
+            const llm = ChatModels.createExtractionModel({
                 maxTokens: 150,   // Longer output for indicator analysis
-                azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
-                azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
-                azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-                azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
             });
 
             // Create comprehensive prompt for indicator/data element extraction
@@ -2279,15 +2256,8 @@ export const extractOrgUnitKeywordsLLM = tool(
             console.log('🧠 LLM extraction called for:', input.query);
 
             // Initialize Azure OpenAI LLM
-	        const env = (import.meta as any).env;
-            const llm = new AzureChatOpenAI({
-                model: env.DHIS2_OPENAI_MODEL || 'gpt-4',
-                temperature: 0.1, // Low temperature for consistent extraction
+            const llm = ChatModels.createExtractionModel({
                 maxTokens: 100,   // Limit output for focused responses
-                azureOpenAIApiKey: env.DHIS2_AZURE_KEY,
-                azureOpenAIEndpoint: env.DHIS2_AZURE_ENDPOINT,
-                azureOpenAIApiDeploymentName: env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-                azureOpenAIApiVersion: env.DHIS2_AZURE_API_VERSION,
             });
 
             // Create prompt for organization unit extraction

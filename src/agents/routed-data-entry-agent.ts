@@ -1,6 +1,6 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
-import { AzureChatOpenAI } from '@langchain/openai';
 import { HumanMessage } from '@langchain/core/messages';
+import { ChatModels } from '../utils/chat-model-factory';
 import { aggregateDataAgent } from './aggregate-data-agent';
 import { eventsAgent } from './events-agent';
 import { trackerAgent } from './tracker-agent';
@@ -38,15 +38,7 @@ const DataEntryRouterAnnotation = Annotation.Root({
 });
 
 // Initialize the ChatOpenAI model with Azure configuration
-const model = new AzureChatOpenAI({
-	model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
-	temperature: 0,
-	maxTokens: undefined,
-	azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
-	azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
-	azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-	azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
-});
+const model = ChatModels.createAgentModel();
 
 // StateGraph Workflow Nodes
 

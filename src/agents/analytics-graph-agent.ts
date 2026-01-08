@@ -1,5 +1,5 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
-import { AzureChatOpenAI } from '@langchain/openai';
+import { ChatModels } from '../utils/chat-model-factory';
 import { HumanMessage } from '@langchain/core/messages';
 
 // Import analytics tools
@@ -15,15 +15,7 @@ import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 import { addConversation, conversationContext, createAnalyticsDataContext } from '../utils/conversation-context';
 
 // Initialize the ChatOpenAI model with Azure configuration
-const model = new AzureChatOpenAI({
-	model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
-	temperature: 0,
-	maxTokens: undefined,
-	azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
-	azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
-	azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-	azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
-});
+const model = ChatModels.createAgentModel();
 
 // Define the state using Annotation API (as per LangGraph official docs)
 const GraphAnnotation = Annotation.Root({

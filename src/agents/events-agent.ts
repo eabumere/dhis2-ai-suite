@@ -1,5 +1,5 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { AzureChatOpenAI } from '@langchain/openai';
+import { ChatModels } from '../utils/chat-model-factory';
 import {
     // Event program and data management tools
     createDhis2Program,
@@ -25,15 +25,7 @@ import {
 } from '../utils/tools/metadata';
 
 // Initialize the ChatOpenAI model with Azure configuration
-const model = new AzureChatOpenAI({
-    model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
-    temperature: 0,
-    maxTokens: undefined,
-    azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
-    azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
-    azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-    azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
-});
+const model = ChatModels.createAgentModel();
 
 // Create the events agent with tools for event-based data entry
 export const eventsAgent = createReactAgent({

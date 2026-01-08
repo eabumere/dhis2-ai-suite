@@ -6,6 +6,7 @@ import { crudAgent } from './crud-agent';
 import { analyticsGraphAgent } from './analytics-graph-agent';
 import { createRoutedDataEntryAgent } from './routed-data-entry-agent';
 import { addConversation, createMutationDataContext, createSearchDataContext } from '../utils/conversation-context';
+import { clarificationService, Interpretation } from '../utils/clarification-service';
 
 // Define Router State - tracks workflow context and orchestrator reference
 const RouterAnnotation = Annotation.Root({
@@ -43,13 +44,57 @@ const model = ChatModels.createAgentModel();
 
 // StateGraph Workflow Nodes
 
-// 1. LLM-based workflow classification
+// 1. LLM-based workflow classification with clarification
 async function classify_intent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
 	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🤖 Router: Classifying workflow type for query:', query);
 
+	// Generate multiple interpretations for clarification service
+	const interpretations = await generateIntentInterpretations(query);
+	console.log('🤖 Router: Generated interpretations:', interpretations.map(i => `${i.intent} (${i.confidence})`));
+
+	// Check if clarification is needed using the global clarification service
+	const clarificationDecision = await clarificationService.shouldSeekClarification(
+		query,
+		interpretations,
+		{
+			domain: 'general',
+			attemptCount: 0,
+			conversationHistory: state.messages
+		}
+	);
+
+	console.log('🤖 Router: Clarification decision:', clarificationDecision);
+
+	if (clarificationDecision.seek) {
+		console.log('🤔 Router: Seeking clarification for ambiguous query');
+
+		// Generate clarification request
+		const clarificationRequest = await clarificationService.generateClarificationRequest(
+			query,
+			interpretations,
+			{
+				domain: 'general',
+				attemptCount: 0,
+				conversationHistory: state.messages
+			}
+		);
+
+		// Return clarification result instead of proceeding with routing
+		return {
+			workflowType: 'clarification_needed',
+			originalQuery: query,
+			finalResult: {
+				type: 'clarification_needed',
+				clarification: clarificationRequest,
+				reason: clarificationDecision.reason
+			}
+		};
+	}
+
+	// No clarification needed - proceed with normal classification
 	const workflowType = await detectWorkflowTypeLLM(query);
-	console.log(`🔄 Router: Classified as "${workflowType}"`);
+	console.log(`🔄 Router: Proceeding with "${workflowType}"`);
 
 	return {
 		workflowType,
@@ -214,6 +259,131 @@ async function invoke_data_entry_router(state: typeof RouterAnnotation.State): P
 	}
 }
 
+// 6. Handle clarification requests
+async function handle_clarification(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
+	console.log('🤔 Router: Handling clarification request');
+
+	// The clarification result is already prepared in finalResult from classify_intent
+	// Just return it as-is - the orchestrator will handle displaying the clarification UI
+	return {
+		finalResult: state.finalResult
+	};
+}
+
+// Generate multiple intent interpretations for clarification service
+async function generateIntentInterpretations(query: string): Promise<Interpretation[]> {
+	try {
+		console.log('🤖 Router: Generating multiple interpretations for:', query);
+
+		const interpretationPrompt = `
+Analyze this DHIS2 query and provide up to 4 possible interpretations with confidence scores.
+
+Query: "${query}"
+
+Return a JSON array of interpretations, each with:
+- intent: The workflow type (direct_search, analytics_routing, crud, data_entry)
+- confidence: Number between 0-1 indicating certainty
+- reasoning: Brief explanation of why this interpretation fits
+
+Focus on DHIS2-specific workflows:
+- direct_search: Finding/showing existing metadata
+- analytics_routing: Analysis, calculations, visualizations
+- crud: Creating/modifying/deleting metadata objects
+- data_entry: Setting up data collection structures
+
+Example output format:
+[
+  {
+    "intent": "analytics_routing",
+    "confidence": 0.8,
+    "reasoning": "Query contains analysis keywords and visualization requests"
+  }
+]`;
+
+		const result = await model.invoke([new HumanMessage(interpretationPrompt)]);
+		const responseContent = (result.content as string).trim();
+
+		const interpretations = JSON.parse(responseContent) as Interpretation[];
+
+		// Validate and normalize interpretations
+		return interpretations
+			.filter(i => i.intent && typeof i.confidence === 'number')
+			.map(i => ({
+				...i,
+				confidence: Math.max(0, Math.min(1, i.confidence)), // Clamp to 0-1
+				domain: 'general' as const
+			}))
+			.sort((a, b) => b.confidence - a.confidence); // Sort by confidence descending
+
+	} catch (error) {
+		console.error('🤖 Router: Failed to generate interpretations:', error);
+
+		// Fallback to simple keyword-based interpretations
+		const queryLower = query.toLowerCase();
+		const interpretations: Interpretation[] = [];
+
+		// Check for analytics patterns
+		if (['analyze', 'calculate', 'sum', 'total', 'trend', 'chart', 'graph'].some(k => queryLower.includes(k))) {
+			interpretations.push({
+				intent: 'analytics_routing',
+				confidence: 0.7,
+				reasoning: 'Contains analytics keywords',
+				domain: 'general'
+			});
+		}
+
+		// Check for search patterns
+		if (['find', 'search', 'show', 'list', 'get', 'lookup'].some(k => queryLower.includes(k))) {
+			interpretations.push({
+				intent: 'direct_search',
+				confidence: 0.7,
+				reasoning: 'Contains search keywords',
+				domain: 'general'
+			});
+		}
+
+		// Check for CRUD patterns
+		if (['create', 'add', 'update', 'delete', 'modify', 'change'].some(k => queryLower.includes(k))) {
+			interpretations.push({
+				intent: 'crud',
+				confidence: 0.7,
+				reasoning: 'Contains CRUD keywords',
+				domain: 'general'
+			});
+		}
+
+		// Check for data entry patterns
+		if (['enter', 'input', 'submit', 'record', 'data entry', 'program', 'data set'].some(k => queryLower.includes(k))) {
+			interpretations.push({
+				intent: 'data_entry',
+				confidence: 0.6,
+				reasoning: 'Contains data entry keywords',
+				domain: 'general'
+			});
+		}
+
+		// If no specific interpretations, add general ones with lower confidence
+		if (interpretations.length === 0) {
+			interpretations.push(
+				{
+					intent: 'direct_search',
+					confidence: 0.4,
+					reasoning: 'Default search interpretation',
+					domain: 'general'
+				},
+				{
+					intent: 'analytics_routing',
+					confidence: 0.3,
+					reasoning: 'Possible analytics interpretation',
+					domain: 'general'
+				}
+			);
+		}
+
+		return interpretations;
+	}
+}
+
 // LLM-based workflow type classification
 async function detectWorkflowTypeLLM(query: string): Promise<string> {
 	try {
@@ -259,6 +429,7 @@ const routerWorkflow = new StateGraph(RouterAnnotation);
 
 // Add nodes
 routerWorkflow.addNode('classify_intent', classify_intent);
+routerWorkflow.addNode('handle_clarification', handle_clarification);
 routerWorkflow.addNode('invoke_search_agent', invoke_search_agent);
 routerWorkflow.addNode('invoke_analytics_agent', invoke_analytics_agent);
 routerWorkflow.addNode('invoke_crud_agent', invoke_crud_agent);
@@ -268,17 +439,20 @@ routerWorkflow.addNode('invoke_data_entry_router', invoke_data_entry_router);
 // @ts-ignore
 routerWorkflow.addEdge(START, 'classify_intent');
 
-// Conditional routing based on workflow type
-// @ts-ignore
-routerWorkflow.addConditionalEdges('classify_intent', (state) => {
-	if (state.workflowType === 'direct_search') return 'invoke_search_agent';
-	if (state.workflowType === 'analytics_routing') return 'invoke_analytics_agent';
-	if (state.workflowType === 'crud') return 'invoke_crud_agent';
-	if (state.workflowType === 'data_entry') return 'invoke_data_entry_router';
-	return END;
-});
+	// Conditional routing based on workflow type
+	// @ts-ignore
+	routerWorkflow.addConditionalEdges('classify_intent', (state) => {
+		if (state.workflowType === 'clarification_needed') return 'handle_clarification';
+		if (state.workflowType === 'direct_search') return 'invoke_search_agent';
+		if (state.workflowType === 'analytics_routing') return 'invoke_analytics_agent';
+		if (state.workflowType === 'crud') return 'invoke_crud_agent';
+		if (state.workflowType === 'data_entry') return 'invoke_data_entry_router';
+		return END;
+	});
 
 // Terminal nodes don't need additional edges
+// @ts-ignore
+routerWorkflow.addEdge('handle_clarification', END);
 // @ts-ignore
 routerWorkflow.addEdge('invoke_search_agent', END);
 // @ts-ignore

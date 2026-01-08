@@ -2,6 +2,8 @@ import React, { FC } from 'react';
 import { ConversationMessage } from '../utils/workflow-orchestrator';
 import AnalyticsChart from './AnalyticsChart';
 import MetadataSelector, { MetadataOption } from './MetadataSelector';
+import AggregateDataGrid from './AggregateDataGrid';
+import ResolutionSelector from './ResolutionSelector';
 
 interface MessageRendererProps {
     message: ConversationMessage;
@@ -86,6 +88,68 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                     allowMultiple={message.data.allowMultiple !== false}
                                 />
                             </div>
+                        )}
+                    </div>
+                );
+
+            case 'data_grid':
+                return (
+                    <div>
+                        <div style={{ marginBottom: '8px' }}>{message.content}</div>
+                        {message.data && (
+                            <AggregateDataGrid
+                                headers={message.data.headers || []}
+                                rows={message.data.rows || []}
+                                resolutionState={message.data.resolutionState || []}
+                                onResolveAll={() => {
+                                    console.log('Resolve all triggered');
+                                    // This would be handled by the orchestrator
+                                }}
+                                onEditCell={(rowIndex, colIndex, newValue) => {
+                                    console.log('Edit cell:', rowIndex, colIndex, newValue);
+                                    // This would be handled by the orchestrator
+                                }}
+                                onDeleteRow={(rowIndex) => {
+                                    console.log('Delete row:', rowIndex);
+                                    // This would be handled by the orchestrator
+                                }}
+                                onConfirmSubmit={() => {
+                                    console.log('Confirm submit triggered');
+                                    // This would be handled by the orchestrator
+                                }}
+                                onResolveItem={(rowIndex, colIndex) => {
+                                    console.log('Resolve item:', rowIndex, colIndex);
+                                    // This would be handled by the orchestrator
+                                }}
+                            />
+                        )}
+                    </div>
+                );
+
+            case 'resolution_selection':
+                return (
+                    <div>
+                        <div style={{ marginBottom: '8px' }}>{message.content}</div>
+                        {message.data && (
+                            <ResolutionSelector
+                                fieldType={message.data.fieldType}
+                                searchQuery={message.data.searchQuery}
+                                options={message.data.options || []}
+                                rowIndex={message.data.rowIndex}
+                                colIndex={message.data.colIndex}
+                                onSelection={(selectedId, rowIndex, colIndex) => {
+                                    console.log('Resolution selection:', selectedId, rowIndex, colIndex);
+                                    // This would be handled by the orchestrator
+                                }}
+                                onSkip={(rowIndex, colIndex) => {
+                                    console.log('Resolution skip:', rowIndex, colIndex);
+                                    // This would be handled by the orchestrator
+                                }}
+                                onRetry={(rowIndex, colIndex) => {
+                                    console.log('Resolution retry:', rowIndex, colIndex);
+                                    // This would be handled by the orchestrator
+                                }}
+                            />
                         )}
                     </div>
                 );

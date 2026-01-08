@@ -6,6 +6,7 @@ import { DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
 import MetadataSelector, { MetadataOption } from './components/MetadataSelector';
 
 import MessageContainer from './components/MessageContainer';
+import EnhancedInput, { FileAttachment } from './components/EnhancedInput';
 
 // Import the comprehensive workflow orchestrator
 import { workflowOrchestrator, WorkflowUIState, ConversationMessage } from './utils/workflow-orchestrator';
@@ -209,6 +210,103 @@ const MyApp: FC = () => {
         setUiState(prevState => ({ ...prevState, queryText: newText }));
     };
 
+    // Handle enhanced query submission with file attachments
+    const handleEnhancedQuerySubmit = async (text: string, attachments: FileAttachment[]) => {
+        if (!text.trim() && attachments.length === 0) {
+            workflowOrchestrator.updateUIState({
+                showError: true,
+                errorMessage: 'Please enter a query or attach files'
+            });
+            return;
+        }
+
+        const queryText = text.trim();
+
+        try {
+            // Add user message to conversation with attachments
+            workflowOrchestrator.addUserMessage(queryText, 'query', { attachments });
+
+            // Clear the query input
+            setUiState(prevState => ({ ...prevState, queryText: '' }));
+
+            // Prepare messages with file content for agents that need it
+            const messages = [{ role: 'user', content: queryText }];
+
+            // Add file content to messages for agents that can process files
+            if (attachments.length > 0) {
+                for (const attachment of attachments) {
+                    try {
+                        // Read file content as text for now (could be enhanced for binary files)
+                        const fileContent = await attachment.file.text();
+
+                        // Add file content to messages (embed in content to avoid type issues)
+                        messages.push({
+                            role: 'user',
+                            content: `File: ${attachment.name}\nContent:\n${fileContent}`
+                        });
+                    } catch (fileError) {
+                        console.warn(`Could not read file ${attachment.name}:`, fileError);
+                        // Still include the message but without file content
+                        messages.push({
+                            role: 'user',
+                            content: `File attached: ${attachment.name} (${attachment.type}, ${attachment.size} bytes)`
+                        });
+                    }
+                }
+            }
+
+            // Start workflow with enhanced input
+            const result = await workflowOrchestrator.startWorkflow(
+                'analytics',
+                {
+                    flow: 'analytics_query',
+                    input: { messages },
+                    orchestrator: workflowOrchestrator
+                },
+                async (input) => {
+                    // Router agent routes to appropriate agent based on content + files
+                    console.log('🚀 Invoking context-aware router agent with messages and attachments:', input.input?.messages);
+                    const agentResult = await contextRouterAgent?.invoke({ messages: input.input?.messages });
+                    console.log('📦 Router agent result:', agentResult);
+
+                    const lastMessage = agentResult.messages[agentResult.messages.length - 1];
+                    const responseContent = lastMessage.content as string;
+
+                    try {
+                        const parsed = JSON.parse(responseContent);
+                        console.log('✅ JSON parse successful:', parsed);
+                        return parsed;
+                    } catch (parseError) {
+                        console.error('❌ JSON parse error:', parseError);
+                        return {
+                            success: false,
+                            error: `JSON parse error: ${parseError.message}`,
+                            rawResponse: responseContent,
+                            type: 'parse_error'
+                        };
+                    }
+                }
+            );
+
+            // Handle response
+            if (result?.success === false) {
+                workflowOrchestrator.addAssistantMessage(
+                    result.error || 'Operation failed',
+                    'error',
+                    result
+                );
+            }
+
+        } catch (error) {
+            console.error('Enhanced query submission error:', error);
+            workflowOrchestrator.addAssistantMessage(
+                `Error: ${error.message}`,
+                'error',
+                { error: error.message }
+            );
+        }
+    };
+
     // Handle selection completion - call stored callback and add to conversation
     const handleSelectionComplete = (selectedItems: MetadataOption[]) => {
         if (pendingSelectionCallback.current) {
@@ -322,46 +420,20 @@ const MyApp: FC = () => {
                     </div>
                 )}
 
-                {/* Query Input Section - Always at the bottom */}
+                {/* Enhanced Input Section - Always at the bottom */}
                 <div style={{
                     borderTop: '1px solid #e0e0e0',
                     padding: '16px',
                     backgroundColor: '#f8f9fa'
                 }}>
-                    <div style={{display: 'flex', gap: '10px', maxWidth: '1200px', margin: '0 auto'}}>
-                        <input
-                            type="text"
+                    <div style={{maxWidth: '1200px', margin: '0 auto'}}>
+                        <EnhancedInput
                             value={uiState.queryText}
-                            onChange={(e) => handleQueryChange(e.target.value)}
-                            placeholder={i18n.t('Ask me anything about DHIS2...')}
+                            onChange={handleQueryChange}
+                            onSubmit={(text, attachments) => handleEnhancedQuerySubmit(text, attachments)}
                             disabled={!uiState.queryEnabled}
-                            onKeyPress={(e) => e.key === 'Enter' && handleQuerySubmit()}
-                            style={{
-                                flex: 1,
-                                padding: '12px 16px',
-                                fontSize: '16px',
-                                border: '1px solid #ccc',
-                                borderRadius: '8px',
-                                outline: 'none'
-                            }}
+                            isProcessing={uiState.showProcessing}
                         />
-                        <button
-                            onClick={handleQuerySubmit}
-                            disabled={!uiState.queryEnabled || uiState.showProcessing}
-                            style={{
-                                padding: '12px 24px',
-                                fontSize: '16px',
-                                backgroundColor: uiState.queryEnabled && !uiState.showProcessing ? '#2c6693' : '#cccccc',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '8px',
-                                cursor: uiState.queryEnabled && !uiState.showProcessing ? 'pointer' : 'not-allowed',
-                                whiteSpace: 'nowrap',
-                                minWidth: '120px'
-                            }}
-                        >
-                            {uiState.showProcessing ? i18n.t('Processing...') : i18n.t('Send')}
-                        </button>
                     </div>
                 </div>
             </div>

@@ -5,13 +5,23 @@ export interface SelectionOptions {
     type: 'indicator' | 'dataElement';
 }
 
+export interface FileAttachment {
+    file: File;
+    id: string;
+    name: string;
+    size: number;
+    type: string;
+    preview?: string;
+}
+
 export interface ConversationMessage {
     id: string;
     timestamp: number;
     role: 'user' | 'assistant';
     content: string;
+    attachments?: FileAttachment[];
     data?: any;
-    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response';
+    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection';
 }
 
 export interface WorkflowUIState {

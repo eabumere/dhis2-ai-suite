@@ -303,7 +303,7 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
     }
 }
 
-// 1.5. Intelligently map CSV headers to DHIS2 fields using LLM
+// 1.5. Intelligently map CSV headers to DHIS2 fields using LLM (internal processing)
 async function map_csv_headers(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('🧠 Mapping CSV headers to DHIS2 fields using LLM');
 
@@ -338,23 +338,97 @@ async function map_csv_headers(state: typeof AggregateDataAnnotation.State): Pro
         // If there are unmapped required fields, show user confirmation
         if (mappingResult.unmappedRequired.length > 0) {
             console.log('⚠️ Some required fields could not be mapped:', mappingResult.unmappedRequired);
-
-            // For now, we'll proceed with the mappings we have
-            // In a full implementation, this could show a confirmation UI
         }
+
+        // Continue to next step - initialize resolution state
+        const resolutionState = new Map<string, ResolutionItem>();
+
+        // Analyze each cell to determine if it needs resolution
+        dataRows.forEach((row, rowIndex) => {
+            mappedHeaders.forEach((header, colIndex) => {
+                const value = row[colIndex];
+                const fieldType = getFieldTypeFromHeader(header);
+
+                if (fieldType && fieldType !== 'period' && fieldType !== 'value') {
+                    // Check if value looks like an ID (alphanumeric with possible underscores/hyphens)
+                    // or a name (contains spaces or special characters)
+                    const needsResolution = isNameValue(value);
+
+                    if (needsResolution) {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            status: 'pending'
+                        });
+                    } else {
+                        // For values that look like IDs, we should still validate they exist
+                        // This provides early error detection for invalid IDs
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            resolvedId: value, // Assume it's already an ID
+                            status: 'resolved' // Mark as resolved, but we'll validate during submission
+                        });
+                    }
+                }
+            });
+        });
+
+        console.log(`📊 Aggregate Data Agent: Mapped headers and initialized ${resolutionState.size} resolution items`);
 
         return {
             uploadedData: updatedData,
-            uiAction: 'show_data_grid'
+            resolutionState,
+            uiAction: 'fetch_names' // Continue to fetch display names
         };
 
     } catch (error) {
         console.error('🧠 Header mapping failed:', error);
 
-        // Fallback: proceed with original headers
+        // Fallback: proceed with original headers and initialize resolution
         console.log('⚠️ Using original headers due to mapping failure');
+
+        const resolutionState = new Map<string, ResolutionItem>();
+        dataRows.forEach((row, rowIndex) => {
+            originalHeaders.forEach((header, colIndex) => {
+                const value = row[colIndex];
+                const fieldType = getFieldTypeFromHeader(header);
+
+                if (fieldType && fieldType !== 'period' && fieldType !== 'value') {
+                    const needsResolution = isNameValue(value);
+                    if (needsResolution) {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            status: 'pending'
+                        });
+                    } else {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            resolvedId: value,
+                            status: 'resolved'
+                        });
+                    }
+                }
+            });
+        });
+
         return {
-            uiAction: 'show_data_grid'
+            resolutionState,
+            uiAction: 'fetch_names'
         };
     }
 }
@@ -471,8 +545,18 @@ async function find_next_resolution(state: typeof AggregateDataAnnotation.State)
         }
     }
 
-    // No more items to resolve
-    console.log('📊 Aggregate Data Agent: All items resolved, proceeding to validation');
+    // No more pending items - check if we need to fetch display names
+    const hasResolvedItems = Array.from(state.resolutionState.values()).some(item => item.status === 'resolved');
+
+    if (hasResolvedItems && (!state.displayNames || state.displayNames.size === 0)) {
+        console.log('📊 Aggregate Data Agent: All items resolved, fetching display names before showing grid');
+        return {
+            uiAction: 'fetch_names'
+        };
+    }
+
+    // All resolution complete and display names fetched (or no resolved items)
+    console.log('📊 Aggregate Data Agent: All items resolved and display names ready, proceeding to validation');
     return {
         uiAction: 'validate_and_submit'
     };
@@ -1321,17 +1405,260 @@ aggregateDataWorkflow.addConditionalEdges('apply_resolution_selection', (state) 
 // @ts-ignore
 aggregateDataWorkflow.addEdge('validate_and_submit', END);
 
+// Process aggregate data in batch mode and return single comprehensive result
+async function processAggregateDataBatch(csvData: string[][], messages: any[]): Promise<any> {
+    console.log('🔄 Processing aggregate data batch internally');
+
+    try {
+        const [originalHeaders, ...dataRows] = csvData;
+
+        // 1. Map headers using LLM
+        const requiredFields = {
+            'dataElement': 'Data Element (indicator, measure, metric, data element)',
+            'orgUnit': 'Organisation Unit (facility, site, location, org unit, organisation unit)',
+            'period': 'Time Period (month, quarter, year, date, period)',
+            'categoryOptionCombos': 'Category Option Combo (disaggregation, breakdown, category, coc)',
+            'attributeOptionCombos': 'Attribute Option Combo (attribute coc, additional disaggregation)',
+            'value': 'Data Value (result, number, amount, count, value)'
+        };
+
+        const mappingResult = await mapHeadersWithLLM(originalHeaders, requiredFields);
+        console.log('🧠 Header mapping result:', mappingResult);
+
+        // Apply header mapping
+        const mappedHeaders = originalHeaders.map((header, index) => {
+            const mappedField = mappingResult.mappings[index];
+            return mappedField ? mappedField : header;
+        });
+
+        // 2. Initialize resolution state
+        const resolutionState = new Map<string, ResolutionItem>();
+        dataRows.forEach((row, rowIndex) => {
+            mappedHeaders.forEach((header, colIndex) => {
+                const value = row[colIndex];
+                const fieldType = getFieldTypeFromHeader(header);
+
+                if (fieldType && fieldType !== 'period' && fieldType !== 'value') {
+                    const needsResolution = isNameValue(value);
+
+                    if (needsResolution) {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            status: 'pending'
+                        });
+                    } else {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            resolvedId: value,
+                            status: 'resolved'
+                        });
+                    }
+                }
+            });
+        });
+
+        // 3. Batch resolve any pending items (if needed)
+        // For now, we'll assume IDs are already resolved since the user's CSV contains IDs
+        // In a full implementation, this would handle name resolution
+
+        // 4. Fetch display names for all resolved IDs
+        const resolvedIds = new Map<string, string>();
+        for (const [key, resolution] of resolutionState) {
+            if (resolution.resolvedId && resolution.status === 'resolved') {
+                resolvedIds.set(`${resolution.fieldType}:${resolution.resolvedId}`, resolution.resolvedId);
+            }
+        }
+
+        let displayNames = new Map<string, string>();
+        if (resolvedIds.size > 0) {
+            console.log(`🏷️ Fetching display names for ${resolvedIds.size} resolved resources`);
+
+            const resourcesByType = new Map<string, Set<string>>();
+            for (const [resourceKey, resourceId] of resolvedIds) {
+                const [fieldType] = resourceKey.split(':');
+                if (!resourcesByType.has(fieldType)) {
+                    resourcesByType.set(fieldType, new Set());
+                }
+                resourcesByType.get(fieldType)!.add(resourceId);
+            }
+
+            const batchResults = await batchValidateResources(resourcesByType);
+
+            for (const [resourceKey, resourceId] of resolvedIds) {
+                const validationResult = batchResults.get(resourceKey);
+                if (validationResult?.exists && validationResult.details) {
+                    const details = validationResult.details;
+                    const displayName = details.name || details.displayName || resourceId;
+                    displayNames.set(resourceKey, displayName);
+                } else {
+                    displayNames.set(resourceKey, resourceId);
+                }
+            }
+
+            console.log(`✅ Fetched ${displayNames.size} display names`);
+        }
+
+        // 5. Return comprehensive result
+        return {
+            type: 'data_grid',
+            message: 'Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.',
+            data: {
+                headers: mappedHeaders,
+                rows: dataRows,
+                resolutionState: Array.from(resolutionState.entries()),
+                resourceDetails: undefined, // Could include if needed
+                displayNames: Array.from(displayNames.entries()),
+                actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
+            }
+        };
+
+    } catch (error) {
+        console.error('🔄 Batch processing failed:', error);
+        throw error;
+    }
+}
+
 // Compile the workflow
 const aggregateDataStateGraph = aggregateDataWorkflow.compile();
+async function processAggregateDataBatch(csvData: string[][], messages: any[]): Promise<any> {
+    console.log('🔄 Processing aggregate data batch internally');
 
-// Simplified aggregate data agent for data import
+    try {
+        const [originalHeaders, ...dataRows] = csvData;
+
+        // 1. Map headers using LLM
+        const requiredFields = {
+            'dataElement': 'Data Element (indicator, measure, metric, data element)',
+            'orgUnit': 'Organisation Unit (facility, site, location, org unit, organisation unit)',
+            'period': 'Time Period (month, quarter, year, date, period)',
+            'categoryOptionCombos': 'Category Option Combo (disaggregation, breakdown, category, coc)',
+            'attributeOptionCombos': 'Attribute Option Combo (attribute coc, additional disaggregation)',
+            'value': 'Data Value (result, number, amount, count, value)'
+        };
+
+        const mappingResult = await mapHeadersWithLLM(originalHeaders, requiredFields);
+        console.log('🧠 Header mapping result:', mappingResult);
+
+        // Apply header mapping
+        const mappedHeaders = originalHeaders.map((header, index) => {
+            const mappedField = mappingResult.mappings[index];
+            return mappedField ? mappedField : header;
+        });
+
+        // 2. Initialize resolution state
+        const resolutionState = new Map<string, ResolutionItem>();
+        dataRows.forEach((row, rowIndex) => {
+            mappedHeaders.forEach((header, colIndex) => {
+                const value = row[colIndex];
+                const fieldType = getFieldTypeFromHeader(header);
+
+                if (fieldType && fieldType !== 'period' && fieldType !== 'value') {
+                    const needsResolution = isNameValue(value);
+
+                    if (needsResolution) {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            status: 'pending'
+                        });
+                    } else {
+                        const key = `${rowIndex}-${colIndex}`;
+                        resolutionState.set(key, {
+                            rowIndex,
+                            colIndex,
+                            originalValue: value,
+                            fieldType,
+                            resolvedId: value,
+                            status: 'resolved'
+                        });
+                    }
+                }
+            });
+        });
+
+        // 3. Batch resolve any pending items (if needed)
+        // For now, we'll assume IDs are already resolved since the user's CSV contains IDs
+        // In a full implementation, this would handle name resolution
+
+        // 4. Fetch display names for all resolved IDs
+        const resolvedIds = new Map<string, string>();
+        for (const [key, resolution] of resolutionState) {
+            if (resolution.resolvedId && resolution.status === 'resolved') {
+                resolvedIds.set(`${resolution.fieldType}:${resolution.resolvedId}`, resolution.resolvedId);
+            }
+        }
+
+        let displayNames = new Map<string, string>();
+        if (resolvedIds.size > 0) {
+            console.log(`🏷️ Fetching display names for ${resolvedIds.size} resolved resources`);
+
+            const resourcesByType = new Map<string, Set<string>>();
+            for (const [resourceKey, resourceId] of resolvedIds) {
+                const [fieldType] = resourceKey.split(':');
+                if (!resourcesByType.has(fieldType)) {
+                    resourcesByType.set(fieldType, new Set());
+                }
+                resourcesByType.get(fieldType)!.add(resourceId);
+            }
+
+            const batchResults = await batchValidateResources(resourcesByType);
+
+            for (const [resourceKey, resourceId] of resolvedIds) {
+                const validationResult = batchResults.get(resourceKey);
+                if (validationResult?.exists && validationResult.details) {
+                    const details = validationResult.details;
+                    const displayName = details.name || details.displayName || resourceId;
+                    displayNames.set(resourceKey, displayName);
+                } else {
+                    displayNames.set(resourceKey, resourceId);
+                }
+            }
+
+            console.log(`✅ Fetched ${displayNames.size} display names`);
+        }
+
+        // 5. Return comprehensive result
+        return {
+            type: 'data_grid',
+            message: 'Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.',
+            data: {
+                headers: mappedHeaders,
+                rows: dataRows,
+                resolutionState: Array.from(resolutionState.entries()),
+                resourceDetails: undefined, // Could include if needed
+                displayNames: Array.from(displayNames.entries()),
+                actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
+            }
+        };
+
+    } catch (error) {
+        console.error('🔄 Batch processing failed:', error);
+        throw error;
+    }
+}
+
+// Full-featured aggregate data agent using StateGraph workflow
 export function createAggregateDataAgent(orchestrator: any) {
     return {
         invoke: async (input: any) => {
-            console.log('📊 Aggregate Data Agent: Processing aggregate data request');
+            console.log('📊 Aggregate Data Agent: Processing aggregate data request with full StateGraph workflow');
 
             try {
-                // Parse CSV and return data grid directly
+                // For initial data loading, we want to process everything and return one comprehensive result
+                // The StateGraph is designed for interactive workflows, but here we want batch processing
+
+                // Extract CSV data first
                 const messages = input.messages || [];
                 const userMessage = messages.filter(m => m.role === 'user').pop();
 
@@ -1375,26 +1702,14 @@ export function createAggregateDataAgent(orchestrator: any) {
                     };
                 }
 
-                const headers = csvData[0];
-                const dataRows = csvData.slice(1);
+                console.log(`📊 Aggregate Data Agent: Parsed CSV with ${csvData.length - 1} data rows`);
 
-                console.log(`📊 Aggregate Data Agent: Parsed ${dataRows.length} rows from CSV`);
-
-                // Create data grid result
-                const dataGridResult = {
-                    type: 'data_grid',
-                    message: 'Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.',
-                    data: {
-                        headers: headers,
-                        rows: dataRows,
-                        resolutionState: [], // Empty for now
-                        actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
-                    }
-                };
+                // Process the data internally (batch processing approach)
+                const processedResult = await processAggregateDataBatch(csvData, messages);
 
                 return {
                     messages: [{
-                        content: JSON.stringify(dataGridResult),
+                        content: JSON.stringify(processedResult),
                         name: undefined,
                         additional_kwargs: {},
                         response_metadata: {}

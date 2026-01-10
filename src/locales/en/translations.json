@@ -3,8 +3,8 @@
     "Loading...": "Loading...",
     "Hello {{name}}": "Hello {{name}}",
     "DHIS2 Orchestrated Multi-Agent Assistant": "DHIS2 Orchestrated Multi-Agent Assistant",
+    "Error": "Error",
     "Ask me anything about DHIS2...": "Ask me anything about DHIS2...",
     "Processing...": "Processing...",
-    "Send": "Send",
-    "Error": "Error"
+    "Send": "Send"
 }

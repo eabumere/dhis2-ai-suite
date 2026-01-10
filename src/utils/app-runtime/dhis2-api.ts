@@ -145,6 +145,50 @@ export async function searchDhis2Metadata(
 }
 
 /**
+ * Get current user information including organisation units
+ */
+export async function getCurrentUserInfo(): Promise<{
+    id: string;
+    name: string;
+    username: string;
+    organisationUnits: Array<{ id: string; name: string; level: number; path: string }>;
+    primaryOrgUnit?: { id: string; name: string; level: number; path: string };
+} | null> {
+    try {
+        const result = await Dhis2Api.query({
+            me: {
+                resource: 'me',
+                params: {
+                    fields: 'id,name,username,organisationUnits[id,name,level,path]'
+                }
+            }
+        });
+
+        if (result.success && result.data?.me) {
+            const userData = result.data.me;
+
+            // Find primary org unit (usually the first one or one marked as primary)
+            // DHIS2 typically has a user's "home" org unit as the first in the list
+            const primaryOrgUnit = userData.organisationUnits?.[0] || null;
+
+            return {
+                id: userData.id,
+                name: userData.name,
+                username: userData.username,
+                organisationUnits: userData.organisationUnits || [],
+                primaryOrgUnit: primaryOrgUnit
+            };
+        }
+
+        console.warn('Failed to fetch user info from /me endpoint');
+        return null;
+    } catch (error) {
+        console.error('Error fetching current user info:', error);
+        return null;
+    }
+}
+
+/**
  * Check if a specific resource exists
  */
 export async function checkResourceExists(

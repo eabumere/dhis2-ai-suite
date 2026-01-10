@@ -1,13 +1,40 @@
 import React, { FC } from 'react';
-import { ConversationMessage } from '../utils/workflow-orchestrator';
+import { ConversationMessage, workflowOrchestrator } from '../utils/workflow-orchestrator';
 import AnalyticsChart from './AnalyticsChart';
 import MetadataSelector, { MetadataOption } from './MetadataSelector';
 import AggregateDataGrid from './AggregateDataGrid';
+import TrackerDataGrid from './TrackerDataGrid';
 import ResolutionSelector from './ResolutionSelector';
 
 interface MessageRendererProps {
     message: ConversationMessage;
 }
+
+// Helper function to determine field type from header
+const getFieldTypeFromHeader = (header: string): 'dataElement' | 'orgUnit' | 'period' | 'categoryOptionCombos' | 'attributeOptionCombos' | 'value' | null => {
+    const lowerHeader = header.toLowerCase();
+
+    if (lowerHeader.includes('dataelement') || lowerHeader.includes('data_element')) {
+        return 'dataElement';
+    }
+    if (lowerHeader.includes('orgunit') || lowerHeader.includes('org_unit') || lowerHeader.includes('organisation')) {
+        return 'orgUnit';
+    }
+    if (lowerHeader.includes('period')) {
+        return 'period';
+    }
+    if (lowerHeader.includes('categoryoption') || lowerHeader.includes('category_option')) {
+        return 'categoryOptionCombos';
+    }
+    if (lowerHeader.includes('attributeoption') || lowerHeader.includes('attribute_option')) {
+        return 'attributeOptionCombos';
+    }
+    if (lowerHeader.includes('value')) {
+        return 'value';
+    }
+
+    return null;
+};
 
 const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
     const isUser = message.role === 'user';
@@ -102,24 +129,44 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                 rows={message.data.rows || []}
                                 resolutionState={message.data.resolutionState || []}
                                 onResolveAll={() => {
-                                    console.log('Resolve all triggered');
-                                    // This would be handled by the orchestrator
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'resolve_all',
+                                        data: {}
+                                    });
                                 }}
                                 onEditCell={(rowIndex, colIndex, newValue) => {
-                                    console.log('Edit cell:', rowIndex, colIndex, newValue);
-                                    // This would be handled by the orchestrator
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'edit_cell',
+                                        data: { rowIndex, colIndex, newValue }
+                                    });
                                 }}
                                 onDeleteRow={(rowIndex) => {
-                                    console.log('Delete row:', rowIndex);
-                                    // This would be handled by the orchestrator
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'delete_row',
+                                        data: { rowIndex }
+                                    });
                                 }}
                                 onConfirmSubmit={() => {
-                                    console.log('Confirm submit triggered');
-                                    // This would be handled by the orchestrator
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'confirm_submit',
+                                        data: {}
+                                    });
                                 }}
                                 onResolveItem={(rowIndex, colIndex) => {
-                                    console.log('Resolve item:', rowIndex, colIndex);
-                                    // This would be handled by the orchestrator
+                                    // Get the original value from the data
+                                    const originalValue = message.data.rows[rowIndex]?.[colIndex] || '';
+                                    const headers = message.data.headers || [];
+                                    const fieldType = getFieldTypeFromHeader(headers[colIndex]);
+
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'resolve_item',
+                                        data: {
+                                            rowIndex,
+                                            colIndex,
+                                            originalValue,
+                                            fieldType
+                                        }
+                                    });
                                 }}
                             />
                         )}

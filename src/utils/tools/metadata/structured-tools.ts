@@ -1786,6 +1786,364 @@ async function createDhis2ReportingFormAggregated({
 }
 
 // =============================================================================
+// TRACKER DATA PROCESSING TOOLS
+// =============================================================================
+
+/**
+ * Process Scanned Register - Extract tracker data from PDF documents
+ * Uses Azure Document Intelligence to analyze facility registers and extract patient data
+ */
+export const processScannedRegister = tool(
+    async (input: {
+        fileBuffer: Buffer;
+        filename: string;
+        orgUnit?: string;
+        programId?: string;
+    }) => {
+        try {
+            const { processDocumentWithAI, splitPdfIntoPages } = await import('../../azure-document-intelligence');
+
+            console.log(`Processing scanned register: ${input.filename}`);
+
+            // Split PDF into pages if needed
+            const pages = await splitPdfIntoPages(input.fileBuffer);
+
+            // Process each page and collect results
+            const allTableData: Array<Array<{ [key: string]: { value: string; confidence: number } }>> = [];
+
+            for (let i = 0; i < pages.length; i++) {
+                console.log(`Processing page ${i + 1}/${pages.length}`);
+
+                try {
+                    const pageResult = await processDocumentWithAI(pages[i], `${input.filename}_page_${i + 1}.pdf`);
+
+                    // Extract table data from this page
+                    for (const table of pageResult.tables) {
+                        if (table.rows.length > 0) {
+                            allTableData.push(table.rows);
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Error processing page ${i + 1}:`, error);
+                    // Continue with other pages
+                }
+            }
+
+            // Merge patient records by ART No Patient ID (similar to Python implementation)
+            const mergedPatients = mergePatientRecords(allTableData);
+
+            console.log(`Extracted ${mergedPatients.length} unique patient records`);
+
+            return JSON.stringify({
+                success: true,
+                patients: mergedPatients,
+                totalPages: pages.length,
+                totalTables: allTableData.length,
+                message: `Successfully processed ${pages.length} pages and extracted ${mergedPatients.length} patient records`
+            });
+
+        } catch (error) {
+            console.error('Error processing scanned register:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to process scanned register: ${error.message}`,
+                patients: []
+            });
+        }
+    },
+    {
+        name: "process_scanned_register",
+        description: "Process a scanned PDF facility register using Azure Document Intelligence to extract patient tracker data. Splits multi-page PDFs, analyzes tables, and merges patient records by ART No Patient ID.",
+        schema: z.object({
+            fileBuffer: z.instanceof(Uint8Array).describe("The PDF file buffer to process"),
+            filename: z.string().describe("Original filename for processing"),
+            orgUnit: z.string().optional().describe("DHIS2 organisation unit ID for the facility"),
+            programId: z.string().optional().describe("DHIS2 tracker program ID")
+        })
+    }
+);
+
+/**
+ * Upload Document to Azure Storage - Prepare document for processing
+ */
+export const uploadDocumentToAzure = tool(
+    async (input: {
+        fileBuffer: Buffer;
+        filename: string;
+        containerName?: string;
+    }) => {
+        try {
+            const { uploadToBlobStorage, validateDocumentFile } = await import('../../azure-document-intelligence');
+
+            console.log(`Uploading document: ${input.filename}`);
+
+            // Validate file
+            const validation = validateDocumentFile(input.filename, input.fileBuffer.length);
+            if (!validation.valid) {
+                return JSON.stringify({
+                    success: false,
+                    error: validation.error
+                });
+            }
+
+            // Upload to Azure Blob Storage
+            const uploadResult = await uploadToBlobStorage(
+                input.fileBuffer,
+                input.filename,
+                input.containerName
+            );
+
+            return JSON.stringify({
+                success: true,
+                blobUrl: uploadResult.blobUrl,
+                sasUrl: uploadResult.sasUrl,
+                blobName: uploadResult.blobName,
+                message: `Successfully uploaded ${input.filename} to Azure Blob Storage`
+            });
+
+        } catch (error) {
+            console.error('Error uploading document:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to upload document: ${error.message}`
+            });
+        }
+    },
+    {
+        name: "upload_document_to_azure",
+        description: "Upload a document (PDF/image) to Azure Blob Storage and generate a secure SAS URL for processing. Validates file type and size before upload.",
+        schema: z.object({
+            fileBuffer: z.instanceof(Uint8Array).describe("The file buffer to upload"),
+            filename: z.string().describe("Original filename"),
+            containerName: z.string().optional().describe("Azure storage container name (defaults to configured container)")
+        })
+    }
+);
+
+/**
+ * Map Extracted Data to DHIS2 Tracker Format
+ */
+export const mapToDhis2TrackerFormat = tool(
+    async (input: {
+        patients: Array<{ [key: string]: { value: string; confidence: number } }>;
+        orgUnit: string;
+        programId: string;
+        attributeMappings?: Record<string, string>;
+    }) => {
+        try {
+            console.log(`Mapping ${input.patients.length} patients to DHIS2 tracker format`);
+
+            // Default attribute mappings (based on the Python implementation)
+            const defaultMappings: Record<string, string> = {
+                "Patient ID: National ID": "AuPLng5hLbE",
+                "Transfer: (in) From Date": "HwDGCdte3Ck",
+                "Surname and Given name": "TfdH5KvFmMy",
+                "DoB": "gHGyrwKPzej",
+                "Sex (m/f)": "CklPZdOd6H1",
+                "≥ 15 yrs": "NHviewDKFN6",
+                "Transfer: (Out) From Date": "bLwiNONGPFF",
+                "<1 yr": "AgeLess001",
+                "1- 4 yrs": "yB8zzdlea4H",
+                "5 - 14 yrs": "gBFJy81Zeyi",
+                "ART No Patient ID:": "CWVHZ3hPwKs",
+                "Physical Address": "VqEFza8wbwA",
+                "Patient's Phone No": "P2cwLGskgxn",
+                "Rx Supporter's No": "a5KkX8OWppp",
+                "ART Start Date": "saTeJuuVyBd",
+                "Weight (kg)": "OvY4VVhSDeJ",
+                "Height (cm)": "lw1SqmMlnfh",
+                "BMI": "Jgvl6hDE2y8",
+                "wt/ht %": "W0ngIXKv9Iq",
+                "Malnourished (y/n)": "grQdOvGre90",
+                "CD4 Count": "gRbTBXfQpTf",
+                "WHO Stage (1,2,3,4)": "DbMJe0tX5Kn",
+                "TB Screen (n,p)": "aVU5Gi66OnU",
+                "Functional Status (a,w,b)": "Npj3tBUOsmY",
+                "CTX Prophylaxis (y,n)": "x7QnR5JE0I3",
+                "Regimen Initial ART": "emJlQvBQ5OG",
+                "TB RX ID": "GgQWHp6Buak",
+                "TB Rx Site": "Bxt6B4D7YBj",
+                "MUAC (cm)": "k1x8IyapRjf",
+                "Count (%)": "sAHvR3qSmuG",
+                "Pregnant (y,n)": "mDMkUmPySTZ",
+                "FP method used": "I6BRJNfETao",
+                "LMP": "w0QyOj6SFIw",
+                "INH (IPT) Prophylaxis": "c6wxhKuSPTt"
+            };
+
+            const mappings = { ...defaultMappings, ...(input.attributeMappings || {}) };
+
+            const trackedEntities = input.patients.map(patient => {
+                const tei = {
+                    orgUnit: input.orgUnit,
+                    trackedEntityType: "o3jXXatOefs", // Default tracked entity type - should be configurable
+                    attributes: [] as Array<{ attribute: string; value: string }>,
+                    enrollments: [{
+                        program: input.programId,
+                        orgUnit: input.orgUnit,
+                        enrolledAt: new Date().toISOString().split('T')[0] + "T00:00:00.000",
+                        occurredAt: new Date().toISOString().split('T')[0] + "T00:00:00.000",
+                        status: "ACTIVE"
+                    }]
+                };
+
+                // Map patient attributes
+                for (const [fieldName, attributeId] of Object.entries(mappings)) {
+                    const fieldValue = patient[fieldName];
+                    if (fieldValue && fieldValue.value.trim()) {
+                        tei.attributes.push({
+                            attribute: attributeId,
+                            value: fieldValue.value.trim()
+                        });
+                    }
+                }
+
+                return tei;
+            });
+
+            const payload = {
+                trackedEntities
+            };
+
+            console.log(`Mapped ${trackedEntities.length} patients with ${trackedEntities.reduce((sum, tei) => sum + tei.attributes.length, 0)} total attributes`);
+
+            return JSON.stringify({
+                success: true,
+                payload,
+                totalPatients: trackedEntities.length,
+                totalAttributes: trackedEntities.reduce((sum, tei) => sum + tei.attributes.length, 0),
+                message: `Successfully mapped ${trackedEntities.length} patients to DHIS2 tracker format`
+            });
+
+        } catch (error) {
+            console.error('Error mapping to DHIS2 tracker format:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to map data to DHIS2 tracker format: ${error.message}`,
+                payload: null
+            });
+        }
+    },
+    {
+        name: "map_to_dhis2_tracker_format",
+        description: "Transform extracted patient data from documents into DHIS2 tracker API payload format with proper attribute mappings and enrollment structure.",
+        schema: z.object({
+            patients: z.array(z.record(z.string(), z.object({
+                value: z.string(),
+                confidence: z.number()
+            }))).describe("Array of patient records with field values and confidence scores"),
+            orgUnit: z.string().describe("DHIS2 organisation unit ID"),
+            programId: z.string().describe("DHIS2 tracker program ID"),
+            attributeMappings: z.record(z.string(), z.string()).optional().describe("Custom attribute mappings (field name -> DHIS2 attribute ID)")
+        })
+    }
+);
+
+/**
+ * Register Tracker Entities in DHIS2
+ */
+export const registerTrackerEntities = tool(
+    async (input: {
+        trackerPayload: any;
+        importStrategy?: 'CREATE' | 'UPDATE' | 'CREATE_AND_UPDATE';
+    }) => {
+        try {
+            console.log(`Registering ${input.trackerPayload.trackedEntities?.length || 0} tracker entities in DHIS2`);
+
+            // Use the existing createDhis2TrackedEntityInstance tool
+            const results = [];
+
+            for (const tei of input.trackerPayload.trackedEntities || []) {
+                try {
+                    const result = await createDhis2TrackedEntityInstance.invoke({
+                        resource: tei
+                    });
+
+                    const parsedResult = JSON.parse(result);
+                    results.push({
+                        success: parsedResult.success,
+                        tei: tei,
+                        result: parsedResult
+                    });
+                } catch (error) {
+                    console.error('Error creating tracked entity:', error);
+                    results.push({
+                        success: false,
+                        tei: tei,
+                        error: error.message
+                    });
+                }
+            }
+
+            const successful = results.filter(r => r.success).length;
+            const failed = results.filter(r => !r.success).length;
+
+            return JSON.stringify({
+                success: successful > 0,
+                totalEntities: results.length,
+                successful,
+                failed,
+                results,
+                message: `Processed ${results.length} entities: ${successful} successful, ${failed} failed`
+            });
+
+        } catch (error) {
+            console.error('Error registering tracker entities:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Failed to register tracker entities: ${error.message}`,
+                totalEntities: 0,
+                successful: 0,
+                failed: 0,
+                results: []
+            });
+        }
+    },
+    {
+        name: "register_tracker_entities",
+        description: "Create tracker entities (tracked entity instances) in DHIS2 from the mapped tracker payload. Handles enrollment and attribute creation.",
+        schema: z.object({
+            trackerPayload: z.any().describe("DHIS2 tracker payload with trackedEntities array"),
+            importStrategy: z.enum(['CREATE', 'UPDATE', 'CREATE_AND_UPDATE']).default('CREATE_AND_UPDATE').describe("Import strategy for handling existing entities")
+        })
+    }
+);
+
+/**
+ * Merge patient records by ART No Patient ID (utility function)
+ */
+function mergePatientRecords(tableData: Array<Array<{ [key: string]: { value: string; confidence: number } }>>): Array<{ [key: string]: { value: string; confidence: number } }> {
+    const merged = new Map<string, { [key: string]: { value: string; confidence: number } }>();
+
+    // Process each table
+    for (const table of tableData) {
+        // Process each row in the table
+        for (const row of table) {
+            const patientId = row["ART No Patient ID:"]?.value?.trim();
+
+            if (!patientId) {
+                continue; // Skip rows without patient ID
+            }
+
+            if (!merged.has(patientId)) {
+                merged.set(patientId, { ...row });
+            } else {
+                // Merge with existing record (keep higher confidence values)
+                const existing = merged.get(patientId)!;
+
+                for (const [key, field] of Object.entries(row)) {
+                    if (!existing[key] || field.confidence > existing[key].confidence) {
+                        existing[key] = field;
+                    }
+                }
+            }
+        }
+    }
+
+    return Array.from(merged.values());
+}
+
+// =============================================================================
 // ANALYTICS TOOLS - DATA QUERYING AND COMPUTATION
 // =============================================================================
 

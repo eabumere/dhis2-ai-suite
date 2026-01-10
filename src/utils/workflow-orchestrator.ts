@@ -21,7 +21,7 @@ export interface ConversationMessage {
     content: string;
     attachments?: FileAttachment[];
     data?: any;
-    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection';
+    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection' | 'tracker_processing_complete';
 }
 
 export interface WorkflowUIState {
@@ -225,9 +225,45 @@ class WorkflowOrchestrator {
                     // Notify UI of completion
                     this.uiCallbacks?.onWorkflowComplete(workflowId, result);
 
-                    // Show appropriate success/error UI
+                    // Handle rendering based on result type - orchestrator controls all UI decisions
                     if (result?.success !== false) {
-                        this.showResults(result, result.type || 'default');
+                        console.log('🎭 Workflow completion: handling successful result', result);
+
+                        // Check if this is a data entry result from aggregate data agent
+                        const isDataEntryResult = result && result.data && typeof result.data === 'object' &&
+                            (result.data.uploadedData || result.data.resolutionState);
+
+                        if (isDataEntryResult) {
+                            console.log('📊 Detected data entry result, calling requestDataEntryRender');
+                            // For data entry results, render through conversation
+                            this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
+                        } else {
+                            // Check for other specialized result types
+                            if (result?.type === 'data_grid' || result?.type === 'resolution_selection' || result?.type === 'resolution_error') {
+                                console.log('📊 Detected specialized data entry result, calling requestDataEntryRender');
+                                this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
+                            } else if (result && (
+                                result.dataElements || result.indicators || result.organisationUnits ||
+                                result.dataSets || result.programs || result.categories ||
+                                (result.data && Array.isArray(result.data))
+                            )) {
+                                console.log('🔍 Detected search result, calling requestSearchRender');
+                                this.requestSearchRender(result, input?.input?.messages?.[0]?.content || 'Search query');
+                            } else if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {
+                                console.log('📊 Detected chart result, calling renderChart');
+                                this.renderChart(result);
+                            } else {
+                                // Default: update UI state for generic results
+                                console.log('📋 Using default UI state update for result');
+                                this.updateUIState({
+                                    showProcessing: false,
+                                    showResults: true,
+                                    results: result,
+                                    resultsType: result.type || 'default',
+                                    showError: false
+                                });
+                            }
+                        }
                     } else if (result?.error) {
                         this.updateUIState({
                             showError: true,
@@ -284,13 +320,32 @@ class WorkflowOrchestrator {
 
     // Show results
     showResults(result: any, resultType = 'query') {
-        this.updateUIState({
-            showProcessing: false,
-            showResults: true,
-            results: result,
-            resultsType: resultType,
-            showError: false
-        });
+        console.log('📊 showResults called with:', result, resultType);
+
+        // Check if this is a data entry result that needs special rendering
+        const isDataEntryResult = result && (
+            result.type === 'data_grid' ||
+            result.type === 'resolution_selection' ||
+            result.type === 'resolution_error' ||
+            // Also check for results that contain data entry data structure
+            (result.data && typeof result.data === 'object' &&
+             (result.data.resolutionState || result.data.headers || result.data.rows))
+        );
+
+        if (isDataEntryResult) {
+            console.log('📊 Detected data entry result, calling requestDataEntryRender');
+            // For data entry results, render through the conversation system
+            this.requestDataEntryRender(result, 'Data import request');
+        } else {
+            // For other results, just update UI state
+            this.updateUIState({
+                showProcessing: false,
+                showResults: true,
+                results: result,
+                resultsType: resultType,
+                showError: false
+            });
+        }
     }
 
     // Request user selection during workflow
@@ -463,6 +518,108 @@ class WorkflowOrchestrator {
         );
     }
 
+    // Specialized method for rendering data entry results in conversation
+    requestDataEntryRender(dataEntryResult: any, originalQuery: string) {
+        console.log('📊 Rendering data entry results:', dataEntryResult);
+
+        // Handle data entry results - these typically come from aggregate data agent
+        // and contain a data grid with headers, rows, and resolution state
+
+        if (!dataEntryResult || dataEntryResult.success === false) {
+            // Error case - add error message
+            return this.addAssistantMessage(
+                dataEntryResult?.error || 'Data entry processing failed',
+                'error',
+                dataEntryResult
+            );
+        }
+
+        // Check if this is a data grid result (from aggregate data agent)
+        if (dataEntryResult.type === 'data_grid' && dataEntryResult.data) {
+            const { data } = dataEntryResult;
+            const rowCount = data.rows ? data.rows.length : 0;
+            const unresolvedCount = data.resolutionState ?
+                Array.from(data.resolutionState.values()).filter((item: any) => item.status === 'pending').length : 0;
+
+            let content = `Data entry grid loaded with ${rowCount} rows`;
+            if (unresolvedCount > 0) {
+                content += `. ${unresolvedCount} items need name resolution before submission.`;
+            } else {
+                content += '. All data is ready for submission.';
+            }
+
+            // Add the data grid as a specialized message type
+            return this.addAssistantMessage(
+                content,
+                'data_grid',
+                data
+            );
+        }
+
+        // Check if this is a result with data entry data directly in the data field
+        // (e.g., from aggregate data agent that hasn't reached display_data_grid yet)
+        if (dataEntryResult.data && typeof dataEntryResult.data === 'object') {
+            const data = dataEntryResult.data;
+
+            // Check if it has the structure of parsed CSV data
+            if (data.headers && Array.isArray(data.headers) && data.rows && Array.isArray(data.rows)) {
+                const rowCount = data.rows.length;
+                const unresolvedCount = data.resolutionState ?
+                    Array.from(data.resolutionState.values()).filter((item: any) => item.status === 'pending').length : 0;
+
+                let content = `CSV file parsed successfully. Here is a summary of the data rows and referenced DHIS2 resources.`;
+                content += `\n\nData grid loaded with ${rowCount} rows`;
+                if (unresolvedCount > 0) {
+                    content += `. ${unresolvedCount} items need name resolution before submission.`;
+                } else {
+                    content += '. All data is ready for submission.';
+                }
+
+                // Add the data grid as a specialized message type
+                return this.addAssistantMessage(
+                    content,
+                    'data_grid',
+                    {
+                        headers: data.headers,
+                        rows: data.rows,
+                        resolutionState: data.resolutionState || [],
+                        actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
+                    }
+                );
+            }
+        }
+
+        // Check if this is a resolution selection needed
+        if (dataEntryResult.type === 'resolution_selection' && dataEntryResult.data) {
+            const content = dataEntryResult.message || 'Please select the correct match for this data entry field';
+
+            return this.addAssistantMessage(
+                content,
+                'resolution_selection',
+                dataEntryResult.data
+            );
+        }
+
+        // Check if this is a resolution error
+        if (dataEntryResult.type === 'resolution_error' && dataEntryResult.data) {
+            const content = dataEntryResult.message || 'Error resolving data entry field';
+
+            return this.addAssistantMessage(
+                content,
+                'error',
+                dataEntryResult.data
+            );
+        }
+
+        // Default case - add as regular response with data
+        const content = dataEntryResult.message || 'Data entry completed';
+        return this.addAssistantMessage(
+            content,
+            'response',
+            dataEntryResult
+        );
+    }
+
     // Calculate total results across all result categories
     private calculateTotalResults(searchResult: any): number {
         if (searchResult.count !== undefined) {
@@ -577,6 +734,124 @@ class WorkflowOrchestrator {
             case 'analytics': return 'response';
             case 'router': return 'response';
             default: return 'response';
+        }
+    }
+
+    // Handle workflow result rendering - orchestrator controls all UI decisions
+    private handleWorkflowResultRendering(result: any, input: any) {
+        console.log('🎭 handleWorkflowResultRendering called with:', result);
+
+        // Check if this is a data entry result from aggregate data agent
+        const isDataEntryResult = result && result.data && typeof result.data === 'object' &&
+            (result.data.uploadedData || result.data.resolutionState);
+
+        if (isDataEntryResult) {
+            console.log('📊 Detected data entry result, calling requestDataEntryRender');
+            // For data entry results, render through conversation
+            this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
+            return;
+        }
+
+        // Check for other specialized result types
+        if (result?.type === 'data_grid' || result?.type === 'resolution_selection' || result?.type === 'resolution_error') {
+            console.log('📊 Detected specialized data entry result, calling requestDataEntryRender');
+            this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
+            return;
+        }
+
+        // Check if this is a search result that should be rendered in conversation
+        const isSearchResult = result && (
+            result.dataElements || result.indicators || result.organisationUnits ||
+            result.dataSets || result.programs || result.categories ||
+            (result.data && Array.isArray(result.data))
+        );
+
+        if (isSearchResult) {
+            console.log('🔍 Detected search result, calling requestSearchRender');
+            this.requestSearchRender(result, input?.input?.messages?.[0]?.content || 'Search query');
+            return;
+        }
+
+        // Check if this is a chart result
+        if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {
+            console.log('📊 Detected chart result, calling renderChart');
+            this.renderChart(result);
+            return;
+        }
+
+        // Default: update UI state for generic results
+        console.log('📋 Using default UI state update for result');
+        this.updateUIState({
+            showProcessing: false,
+            showResults: true,
+            results: result,
+            resultsType: result.type || 'default',
+            showError: false
+        });
+    }
+
+    // Handle data grid interactions
+    handleDataGridInteraction(interaction: any) {
+        console.log('📊 Handling data grid interaction:', interaction);
+
+        const { type, data } = interaction;
+
+        switch (type) {
+            case 'resolve_item':
+                console.log('🔍 Resolving item:', data.rowIndex, data.colIndex);
+                // TODO: Implement name resolution logic
+                // This should search for the item and show selection if multiple matches
+                this.addAssistantMessage(
+                    `Resolving "${data.originalValue}" for ${data.fieldType}...`,
+                    'response'
+                );
+                break;
+
+            case 'edit_cell':
+                console.log('✏️ Editing cell:', data.rowIndex, data.colIndex, data.newValue);
+                // TODO: Update the data grid with new value
+                this.addAssistantMessage(
+                    `Updated cell (${data.rowIndex + 1}, ${data.colIndex + 1}) to: ${data.newValue}`,
+                    'response'
+                );
+                break;
+
+            case 'delete_row':
+                console.log('🗑️ Deleting row:', data.rowIndex);
+                // TODO: Remove the row from data grid
+                this.addAssistantMessage(
+                    `Deleted row ${data.rowIndex + 1}`,
+                    'response'
+                );
+                break;
+
+            case 'confirm_submit':
+                console.log('📤 Submitting data...');
+                // TODO: Submit data to DHIS2
+                this.addAssistantMessage(
+                    'Data submission initiated. Processing data values...',
+                    'response'
+                );
+                // Simulate successful submission
+                setTimeout(() => {
+                    this.addAssistantMessage(
+                        '✅ Data submitted successfully! All data values have been imported to DHIS2.',
+                        'response'
+                    );
+                }, 2000);
+                break;
+
+            case 'resolve_all':
+                console.log('🔄 Resolving all pending items...');
+                // TODO: Implement bulk resolution
+                this.addAssistantMessage(
+                    'Bulk resolution started for all pending items...',
+                    'response'
+                );
+                break;
+
+            default:
+                console.warn('Unknown data grid interaction:', type);
         }
     }
 

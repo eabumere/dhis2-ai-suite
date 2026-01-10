@@ -1,6 +1,14 @@
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
+import { HumanMessage } from '@langchain/core/messages';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { ChatModels } from '../utils/chat-model-factory';
 import {
+    // Tracker data processing tools
+    processScannedRegister,
+    uploadDocumentToAzure,
+    mapToDhis2TrackerFormat,
+    registerTrackerEntities,
+
     // Tracker program and entity management tools
     createDhis2Program,
     createDhis2TrackedEntityType,
@@ -36,10 +44,539 @@ import {
     resolveResourceReference,
 } from '../utils/tools/metadata';
 
+// Types for tracker data processing
+export interface ExtractedPatientData {
+    [key: string]: {
+        value: string;
+        confidence: number;
+    };
+}
+
+export interface TrackerDataValue {
+    trackedEntityInstance: string; // TEI ID
+    program: string; // Program ID
+    orgUnit: string; // Org unit ID
+    enrollmentDate: string; // ISO date string
+    incidentDate?: string; // ISO date string
+    attributes: Array<{
+        attribute: string; // Attribute ID
+        value: string;
+    }>;
+    events?: Array<{
+        programStage: string; // Stage ID
+        orgUnit: string; // Org unit ID
+        eventDate: string; // ISO date string
+        dataValues: Array<{
+            dataElement: string; // Data element ID
+            value: string;
+        }>;
+    }>;
+}
+
+// State annotation for the tracker data state graph
+const TrackerDataAnnotation = Annotation.Root({
+    // Document processing state
+    uploadedDocument: Annotation<{
+        buffer: Uint8Array;
+        filename: string;
+        url?: string;
+        sasUrl?: string;
+    } | null>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+
+    // Processing state
+    extractedPatients: Annotation<ExtractedPatientData[]>({
+        reducer: (left, right) => right || left,
+        default: () => []
+    }),
+
+    // Mapping state
+    mappedTrackerData: Annotation<TrackerDataValue[]>({
+        reducer: (left, right) => right || left,
+        default: () => []
+    }),
+
+    // Configuration state
+    orgUnit: Annotation<string>({
+        reducer: (left, right) => right || left,
+        default: () => ''
+    }),
+
+    programId: Annotation<string>({
+        reducer: (left, right) => right || left,
+        default: () => ''
+    }),
+
+    attributeMappings: Annotation<Record<string, string>>({
+        reducer: (left, right) => right || left,
+        default: () => ({})
+    }),
+
+    // UI state and actions
+    uiAction: Annotation<string>({
+        reducer: (left, right) => right || left,
+        default: () => ''
+    }),
+
+    // Messages and orchestrator reference
+    messages: Annotation<any[]>({
+        reducer: (left: any[], right: any[]) => right ? right : left,
+        default: () => []
+    }),
+    orchestrator: Annotation<any>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+
+    // Final result
+    finalResult: Annotation<any>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+});
+
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
-// Create the tracker agent with tools for tracker-based data entry
+// StateGraph Workflow Nodes
+
+// 1. Handle document upload and initial validation
+async function handle_document_upload(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('📄 Tracker Data Agent: Processing document upload request');
+
+    const messages = state.messages || [];
+    const userMessage = messages.filter(m => m.role === 'user').pop();
+
+    if (!userMessage || !userMessage.content) {
+        return {
+            finalResult: {
+                success: false,
+                error: 'No user message provided'
+            }
+        };
+    }
+
+    // Check for file content in messages
+    let fileBuffer: Uint8Array | null = null;
+    let filename = 'uploaded_document.pdf';
+
+    // Look for file content in user messages
+    for (const message of messages) {
+        if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
+            // Extract file content from message
+            const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
+            if (contentMatch) {
+                try {
+                    // Convert base64 to Uint8Array for browser compatibility
+                    const base64Data = contentMatch[1].trim();
+                    const binaryString = atob(base64Data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    fileBuffer = bytes;
+                    console.log('📄 Tracker Data Agent: Found file content in message');
+                } catch (error) {
+                    console.warn('📄 Tracker Data Agent: Failed to parse file content:', error);
+                }
+            }
+        }
+    }
+
+    if (!fileBuffer) {
+        return {
+            finalResult: {
+                success: false,
+                error: 'No document file provided. Please upload a PDF or image file containing tracker data.'
+            }
+        };
+    }
+
+    console.log(`📄 Tracker Data Agent: Document uploaded: ${filename} (${fileBuffer.length} bytes)`);
+
+    return {
+        uploadedDocument: {
+            buffer: fileBuffer,
+            filename
+        },
+        uiAction: 'process_document'
+    };
+}
+
+// 2. Upload document to Azure Blob Storage
+async function upload_to_azure_storage(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    if (!state.uploadedDocument) {
+        return { uiAction: 'handle_document_upload' };
+    }
+
+    console.log('📄 Tracker Data Agent: Uploading document to Azure Blob Storage');
+
+    try {
+        const uploadResult = await uploadDocumentToAzure.invoke({
+            fileBuffer: state.uploadedDocument.buffer,
+            filename: state.uploadedDocument.filename
+        });
+
+        const parsedResult = JSON.parse(uploadResult);
+        if (!parsedResult.success) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `Document upload failed: ${parsedResult.error}`
+                }
+            };
+        }
+
+        console.log('📄 Tracker Data Agent: Document uploaded successfully');
+
+        return {
+            uploadedDocument: {
+                ...state.uploadedDocument,
+                url: parsedResult.blobUrl,
+                sasUrl: parsedResult.sasUrl
+            },
+            uiAction: 'extract_patient_data'
+        };
+
+    } catch (error) {
+        console.error('📄 Tracker Data Agent: Azure upload failed:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Failed to upload document to Azure: ${error.message}`
+            }
+        };
+    }
+}
+
+// 3. Process document with Azure Document Intelligence
+async function extract_patient_data(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    if (!state.uploadedDocument) {
+        return { uiAction: 'handle_document_upload' };
+    }
+
+    console.log('📄 Tracker Data Agent: Extracting patient data from document');
+
+    try {
+        const extractionResult = await processScannedRegister.invoke({
+            fileBuffer: state.uploadedDocument.buffer,
+            filename: state.uploadedDocument.filename
+        });
+
+        const parsedResult = JSON.parse(extractionResult);
+        if (!parsedResult.success) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `Data extraction failed: ${parsedResult.error}`
+                }
+            };
+        }
+
+        console.log(`📄 Tracker Data Agent: Extracted ${parsedResult.patients.length} patient records`);
+
+        return {
+            extractedPatients: parsedResult.patients,
+            uiAction: 'map_to_tracker_format'
+        };
+
+    } catch (error) {
+        console.error('📄 Tracker Data Agent: Data extraction failed:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Failed to extract patient data: ${error.message}`
+            }
+        };
+    }
+}
+
+// 4. Map extracted data to DHIS2 tracker format
+async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    if (!state.extractedPatients || state.extractedPatients.length === 0) {
+        return { uiAction: 'extract_patient_data' };
+    }
+
+    console.log(`📄 Tracker Data Agent: Mapping ${state.extractedPatients.length} patients to DHIS2 tracker format`);
+
+    // Use default org unit and program if not specified
+    const orgUnit = state.orgUnit || 'cYSowRjnmHE'; // Default facility org unit
+    const programId = state.programId || 'o3jXXatOefs'; // Default HIV program
+
+    try {
+        const mappingResult = await mapToDhis2TrackerFormat.invoke({
+            patients: state.extractedPatients,
+            orgUnit,
+            programId,
+            attributeMappings: state.attributeMappings
+        });
+
+        const parsedResult = JSON.parse(mappingResult);
+        if (!parsedResult.success) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `Data mapping failed: ${parsedResult.error}`
+                }
+            };
+        }
+
+        console.log(`📄 Tracker Data Agent: Mapped ${parsedResult.totalPatients} patients with ${parsedResult.totalAttributes} attributes`);
+
+        return {
+            mappedTrackerData: parsedResult.payload.trackedEntities,
+            uiAction: 'register_tracker_entities'
+        };
+
+    } catch (error) {
+        console.error('📄 Tracker Data Agent: Data mapping failed:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Failed to map data to tracker format: ${error.message}`
+            }
+        };
+    }
+}
+
+// 5. Register tracker entities in DHIS2
+async function register_tracker_entities(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    if (!state.mappedTrackerData || state.mappedTrackerData.length === 0) {
+        return { uiAction: 'map_to_tracker_format' };
+    }
+
+    console.log(`📄 Tracker Data Agent: Registering ${state.mappedTrackerData.length} tracker entities in DHIS2`);
+
+    try {
+        // Create payload with tracked entities
+        const trackerPayload = {
+            trackedEntities: state.mappedTrackerData
+        };
+
+        const registrationResult = await registerTrackerEntities.invoke({
+            trackerPayload,
+            importStrategy: 'CREATE_AND_UPDATE'
+        });
+
+        const parsedResult = JSON.parse(registrationResult);
+
+        console.log(`📄 Tracker Data Agent: Registration completed - ${parsedResult.successful} successful, ${parsedResult.failed} failed`);
+
+        return {
+            finalResult: {
+                success: parsedResult.success,
+                message: `Successfully processed ${state.mappedTrackerData.length} patient records`,
+                details: {
+                    totalPatients: state.mappedTrackerData.length,
+                    successful: parsedResult.successful,
+                    failed: parsedResult.failed,
+                    results: parsedResult.results
+                },
+                data: parsedResult
+            }
+        };
+
+    } catch (error) {
+        console.error('📄 Tracker Data Agent: Entity registration failed:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Failed to register tracker entities: ${error.message}`
+            }
+        };
+    }
+}
+
+// 6. Display processing results
+async function display_processing_results(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('📄 Tracker Data Agent: Displaying processing results');
+
+    const resultMessage = {
+        type: 'tracker_processing_complete',
+        message: 'Tracker data processing completed',
+        data: state.finalResult
+    };
+
+    return {
+        finalResult: resultMessage
+    };
+}
+
+// Create and compile StateGraph workflow
+const trackerDataWorkflow = new StateGraph(TrackerDataAnnotation);
+
+// Add nodes
+trackerDataWorkflow.addNode('handle_document_upload', handle_document_upload);
+trackerDataWorkflow.addNode('upload_to_azure_storage', upload_to_azure_storage);
+trackerDataWorkflow.addNode('extract_patient_data', extract_patient_data);
+trackerDataWorkflow.addNode('map_to_tracker_format', map_to_tracker_format);
+trackerDataWorkflow.addNode('register_tracker_entities', register_tracker_entities);
+trackerDataWorkflow.addNode('display_processing_results', display_processing_results);
+
+// Add edges
+// @ts-ignore
+trackerDataWorkflow.addEdge(START, 'handle_document_upload');
+
+// Conditional routing based on uiAction
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('handle_document_upload', (state) => {
+    if (state.uiAction === 'process_document') return 'upload_to_azure_storage';
+    return END;
+});
+
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('upload_to_azure_storage', (state) => {
+    if (state.uiAction === 'extract_patient_data') return 'extract_patient_data';
+    return END;
+});
+
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('extract_patient_data', (state) => {
+    if (state.uiAction === 'map_to_tracker_format') return 'map_to_tracker_format';
+    return END;
+});
+
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('map_to_tracker_format', (state) => {
+    if (state.uiAction === 'register_tracker_entities') return 'register_tracker_entities';
+    return END;
+});
+
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('register_tracker_entities', (state) => {
+    return 'display_processing_results';
+});
+
+// @ts-ignore
+trackerDataWorkflow.addEdge('display_processing_results', END);
+
+// Compile the workflow
+const trackerDataStateGraph = trackerDataWorkflow.compile();
+
+// StateGraph-based tracker data agent
+export function createTrackerDataAgent(orchestrator: any) {
+    return {
+        invoke: async (input: any) => {
+            console.log('📄 Tracker Data Agent: Processing tracker data request');
+
+            const initialState: Partial<typeof TrackerDataAnnotation.State> = {
+                messages: input.messages || [],
+                orchestrator: orchestrator,
+                uploadedDocument: null,
+                extractedPatients: [],
+                mappedTrackerData: [],
+                orgUnit: '',
+                programId: '',
+                attributeMappings: {},
+                uiAction: '',
+            };
+
+            try {
+                // Execute StateGraph workflow
+                const result = await trackerDataStateGraph.invoke(initialState);
+
+                // Format for compatibility with existing interface
+                return {
+                    messages: [{
+                        content: JSON.stringify(result.finalResult),
+                        name: undefined,
+                        additional_kwargs: {},
+                        response_metadata: {}
+                    }]
+                };
+            } catch (error) {
+                console.error('📄 Tracker Data Agent: Workflow execution failed:', error);
+                return {
+                    messages: [{
+                        content: JSON.stringify({
+                            success: false,
+                            error: `Tracker data processing failed: ${error.message}`
+                        }),
+                        name: undefined,
+                        additional_kwargs: {},
+                        response_metadata: {}
+                    }]
+                };
+            }
+        },
+
+        // Handle UI interactions from the orchestrator
+        handleUIInteraction: async (interaction: any, currentState: any) => {
+            console.log('📄 Tracker Data Agent: Handling UI interaction:', interaction);
+
+            const { type, data } = interaction;
+
+            // Resume the state graph with updated state based on user interaction
+            let updatedState: any = {
+                uploadedDocument: currentState.uploadedDocument,
+                extractedPatients: currentState.extractedPatients,
+                mappedTrackerData: currentState.mappedTrackerData,
+                orgUnit: currentState.orgUnit,
+                programId: currentState.programId,
+                attributeMappings: currentState.attributeMappings,
+                uiAction: currentState.uiAction,
+                messages: currentState.messages,
+                orchestrator: currentState.orchestrator,
+                finalResult: currentState.finalResult
+            };
+
+            switch (type) {
+                case 'configure_processing':
+                    // User configures org unit, program, and mappings
+                    if (data.orgUnit) updatedState.orgUnit = data.orgUnit;
+                    if (data.programId) updatedState.programId = data.programId;
+                    if (data.attributeMappings) updatedState.attributeMappings = data.attributeMappings;
+                    updatedState.uiAction = 'handle_document_upload';
+                    break;
+
+                case 'upload_document':
+                    // User uploads a document
+                    updatedState.uploadedDocument = {
+                        buffer: data.fileBuffer,
+                        filename: data.filename
+                    };
+                    updatedState.uiAction = 'process_document';
+                    break;
+
+                case 'retry_processing':
+                    // User wants to retry failed processing
+                    updatedState.uiAction = 'handle_document_upload';
+                    break;
+
+                default:
+                    console.warn('📄 Tracker Data Agent: Unknown interaction type:', type);
+                    return currentState;
+            }
+
+            // Continue the workflow with updated state
+            try {
+                const result = await trackerDataStateGraph.invoke(updatedState);
+                return result;
+            } catch (error) {
+                console.error('📄 Tracker Data Agent: Failed to continue workflow:', error);
+                return {
+                    uploadedDocument: updatedState.uploadedDocument,
+                    extractedPatients: updatedState.extractedPatients,
+                    mappedTrackerData: updatedState.mappedTrackerData,
+                    orgUnit: updatedState.orgUnit,
+                    programId: updatedState.programId,
+                    attributeMappings: updatedState.attributeMappings,
+                    uiAction: updatedState.uiAction,
+                    messages: updatedState.messages,
+                    orchestrator: updatedState.orchestrator,
+                    finalResult: {
+                        success: false,
+                        error: `Failed to process interaction: ${error.message}`
+                    }
+                };
+            }
+        }
+    };
+}
+
+// Legacy React Agent for backward compatibility (used for metadata management)
 export const trackerAgent = createReactAgent({
   llm: model,
   tools: [
@@ -78,35 +615,30 @@ export const trackerAgent = createReactAgent({
     resolveResourceReference,
   ],
   prompt: `
-    You are a specialized DHIS2 tracker data entry agent. You handle tracker-based data collection programs where individual entities (patients, beneficiaries, etc.) are tracked over time through enrollment and multiple events.
+    You are a specialized DHIS2 tracker metadata management agent. You handle the creation and configuration of tracker programs, tracked entity types, attributes, and program structures.
 
     ## CORE CAPABILITIES
 
-    ### TRACKER PROGRAM STRUCTURES
-    - **Tracker Programs**: Programs with programType 'WITH_REGISTRATION' for entity tracking
-    - **Tracked Entity Types**: Define the types of entities being tracked (Person, Patient, Equipment, etc.)
-    - **Tracked Entity Attributes**: Profile data collected once per entity (name, ID, demographics)
-    - **Program Stages**: Define events/visit types in the entity's journey
-    - **Program Rules**: Conditional logic for tracker data entry and workflow
+    ### TRACKER METADATA MANAGEMENT
+    - **Tracker Programs**: Create and configure programs with programType 'WITH_REGISTRATION'
+    - **Tracked Entity Types**: Define entity types (Person, Patient, Equipment, etc.)
+    - **Tracked Entity Attributes**: Configure profile data fields with appropriate value types
+    - **Program Stages**: Define workflow steps and visit types
+    - **Program Rules**: Set up conditional logic and validation
 
-    ### ENTITY & ENROLLMENT MANAGEMENT
-    - **Tracked Entity Instances**: Individual records of tracked entities
-    - **Enrollments**: Registration of entities into programs with enrollment dates
-    - **Events**: Data collection events tied to specific entities and program stages
-    - **Relationships**: Links between entities (parent-child, referral, etc.)
-
-    ### ADVANCED FEATURES
-    - **Program Indicators**: Longitudinal calculations across entity history
-    - **Relationship Types**: Define nature of connections between entities
-    - **Workflow Management**: Handle entity lifecycle from enrollment to completion
+    ### METADATA OPERATIONS
+    - Create tracker program structures
+    - Configure entity attributes and relationships
+    - Set up program workflows and stages
+    - Manage option sets and validation rules
 
     ## WORKFLOW PRINCIPLES
 
-    1. **Entity Definition**: Start with tracked entity types and their attributes
-    2. **Program Design**: Configure tracker programs with stages and rules
-    3. **Entity Registration**: Create entity instances and enroll them in programs
-    4. **Event Tracking**: Record events for enrolled entities over time
-    5. **Relationship Management**: Link related entities appropriately
+    1. **Program Setup**: Start with program creation and tracked entity type configuration
+    2. **Attribute Definition**: Define all required tracked entity attributes
+    3. **Stage Configuration**: Set up program stages for the workflow
+    4. **Rule Configuration**: Add program rules for conditional logic
+    5. **Testing**: Validate the complete program structure
 
     ## RESOURCE-SPECIFIC RULES
 
@@ -126,27 +658,6 @@ export const trackerAgent = createReactAgent({
     - Configure uniqueness and validation
     - Define option sets for constrained values
 
-    ### Enrollments
-    - Require trackedEntityInstance (entity being enrolled)
-    - Set enrollmentDate and incidentDate appropriately
-    - Status: ACTIVE, COMPLETED, CANCELLED, TERMINATED
-
-    ### Events (in Tracker Context)
-    - Must be linked to enrollment and programStage
-    - Include trackedEntityInstance reference
-    - Set eventDate and dueDate appropriately
-    - Provide dataValues for stage-specific data elements
-
-    ### Relationships
-    - Define relationshipType specifying the connection nature
-    - Link fromEntity and toEntity instances
-    - Support bidirectional relationships
-
-    ### Program Indicators
-    - Define calculations across entity enrollments and events
-    - Use tracker-specific analytics expressions
-    - Support cohort and period-based aggregations
-
     ## RESPONSE FORMAT
 
     Always return JSON responses for operations:
@@ -159,6 +670,6 @@ export const trackerAgent = createReactAgent({
       "error": string
     }
 
-    Use natural language only when seeking clarification about entity relationships or program workflows.
+    Use natural language only when seeking clarification about program requirements or entity structures.
   `,
 });

@@ -246,6 +246,13 @@ async function invoke_data_entry_router(state: typeof RouterAnnotation.State): P
 
 		// Note: Conversation context is already handled by the data entry router
 
+		// For data entry workflows, render the result through the orchestrator
+		// This ensures the data grid with action buttons gets added to the conversation
+		if (state.orchestrator && parsedResponse) {
+			console.log('📊 Router: Calling orchestrator.requestDataEntryRender()');
+			await state.orchestrator.requestDataEntryRender(parsedResponse, state.originalQuery);
+		}
+
 		return { finalResult: parsedResponse };
 	} catch (error) {
 		console.error('📝 Router: Data entry router error:', error);

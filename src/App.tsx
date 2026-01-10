@@ -410,7 +410,7 @@ const MyApp: FC = () => {
                             <MetadataSelector
                                 selectionOptions={uiState.selectionOptions.map(opt => ({
                                     ...opt,
-                                    type: opt.type as 'indicator' | 'dataElement'
+                                    type: opt.type
                                 }))}
                                 originalQuery={uiState.queryText}
                                 onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}

@@ -1,7 +1,7 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { HumanMessage } from '@langchain/core/messages';
 import { ChatModels } from '../utils/chat-model-factory';
-import { aggregateDataAgent } from './aggregate-data-agent';
+import { createAggregateDataAgent } from './aggregate-data-agent';
 import { eventsAgent } from './events-agent';
 import { trackerAgent } from './tracker-agent';
 import { addConversation, createMutationDataContext } from '../utils/conversation-context';
@@ -81,8 +81,10 @@ async function invoke_aggregate_agent(state: typeof DataEntryRouterAnnotation.St
 	console.log('📊 Data Entry Router: Routing to aggregate data agent');
 
 	try {
+		// Use the StateGraph-based agent for data import workflows
+		const aggregateDataAgent = createAggregateDataAgent(state.orchestrator);
 		const result = await aggregateDataAgent.invoke({
-			messages: [{ role: 'user', content: state.originalQuery }]
+			messages: state.messages
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;
@@ -93,13 +95,8 @@ async function invoke_aggregate_agent(state: typeof DataEntryRouterAnnotation.St
 			parsedResponse = { rawResponse: responseContent };
 		}
 
-		// Add to conversation context
-		if (parsedResponse.success !== false) {
-			const dataContext = createMutationDataContext('creation', parsedResponse);
-			addConversation(state.originalQuery, 'data_entry_aggregate', parsedResponse, dataContext);
-		} else {
-			addConversation(state.originalQuery, 'data_entry_aggregate', parsedResponse);
-		}
+		// Note: Conversation context is handled by the StateGraph agent
+		// The data grid rendering is handled by the orchestrator
 
 		return {
 			finalResult: parsedResponse

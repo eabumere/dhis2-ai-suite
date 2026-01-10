@@ -15,6 +15,8 @@ export interface AggregateDataGridProps {
     headers: string[];
     rows: any[][];
     resolutionState: [string, ResolutionItem][];
+    resourceDetails?: Map<string, { exists: boolean; details?: any }>; // Batch validation results with COC details
+    displayNames?: Map<string, string>; // Human-readable names for resolved IDs
     onResolveAll: () => void;
     onEditCell: (rowIndex: number, colIndex: number, newValue: string) => void;
     onDeleteRow: (rowIndex: number) => void;
@@ -26,6 +28,8 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     headers,
     rows,
     resolutionState,
+    resourceDetails,
+    displayNames,
     onResolveAll,
     onEditCell,
     onDeleteRow,
@@ -110,6 +114,70 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
         setEditingCell(null);
         setEditValue('');
     }, []);
+
+    const getCellTooltip = (rowIndex: number, colIndex: number) => {
+        const resolution = getCellResolutionStatus(rowIndex, colIndex);
+
+        if (!resolution) {
+            return '';
+        }
+
+        const fieldTypeLabels = {
+            dataElement: 'Data Element',
+            orgUnit: 'Organisation Unit',
+            categoryOptionCombos: 'Category Option Combo',
+            attributeOptionCombos: 'Attribute Option Combo'
+        };
+
+        const fieldLabel = fieldTypeLabels[resolution.fieldType] || resolution.fieldType;
+
+        let tooltip = `${fieldLabel} - ${resolution.status.charAt(0).toUpperCase() + resolution.status.slice(1)}`;
+
+        if (resolution.originalValue) {
+            tooltip += `\nOriginal: "${resolution.originalValue}"`;
+        }
+
+        if (resolution.resolvedId) {
+            tooltip += `\nID: ${resolution.resolvedId}`;
+
+            // Add detailed COC information if available
+            if (resolution.fieldType === 'categoryOptionCombos' || resolution.fieldType === 'attributeOptionCombos') {
+                const resourceKey = `${resolution.fieldType}:${resolution.resolvedId}`;
+                const resourceDetail = resourceDetails?.get(resourceKey);
+
+                if (resourceDetail?.details) {
+                    const details = resourceDetail.details;
+
+                    // Show category options that make up this COC
+                    if (details.categoryOptions && details.categoryOptions.length > 0) {
+                        const optionNames = details.categoryOptions.map((opt: any) => opt.name).join(' + ');
+                        tooltip += `\nCombination: ${optionNames}`;
+                    }
+
+                    // Show categories this COC belongs to
+                    if (details.categories && details.categories.length > 0) {
+                        const categoryNames = details.categories.map((cat: any) => cat.name).join(', ');
+                        tooltip += `\nCategories: ${categoryNames}`;
+                    }
+
+                    // Show COC name if different from combination
+                    if (details.name && details.name !== resolution.originalValue) {
+                        tooltip += `\nCOC Name: ${details.name}`;
+                    }
+                }
+            }
+        }
+
+        if (resolution.status === 'failed') {
+            tooltip += '\n\n⚠️ This resource was not found in DHIS2. Please check the name or provide a valid ID.';
+        } else if (resolution.status === 'needs_selection') {
+            tooltip += '\n\nClick to select from multiple matches found.';
+        } else if (resolution.status === 'pending') {
+            tooltip += '\n\nClick to resolve this name to an ID.';
+        }
+
+        return tooltip;
+    };
 
     const unresolvedCount = resolutionState.filter(([, item]) => item.status !== 'resolved').length;
     const canSubmit = unresolvedCount === 0;
@@ -285,16 +353,26 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                                     {rowIndex + 1}
                                 </td>
                                 {headers.map((header, colIndex) => {
-                                    const cellValue = row[colIndex] || '';
+                                    const rawCellValue = row[colIndex] || '';
                                     const resolution = getCellResolutionStatus(rowIndex, colIndex);
                                     const isEditing = editingCell?.row === rowIndex && editingCell?.col === colIndex;
+
+                                    // Show human-readable name if available, otherwise show raw value
+                                    let displayValue = rawCellValue;
+                                    if (resolution?.resolvedId && displayNames) {
+                                        const resourceKey = `${resolution.fieldType}:${resolution.resolvedId}`;
+                                        const humanName = displayNames.get(resourceKey);
+                                        if (humanName) {
+                                            displayValue = humanName;
+                                        }
+                                    }
 
                                     return (
                                         <td
                                             key={colIndex}
                                             style={getCellStyle(rowIndex, colIndex)}
                                             onClick={() => !isEditing && handleCellClick(rowIndex, colIndex)}
-                                            title={resolution ? `${resolution.fieldType}: ${resolution.status}` : ''}
+                                            title={getCellTooltip(rowIndex, colIndex)}
                                         >
                                             {isEditing ? (
                                                 <div style={{ display: 'flex', gap: '4px' }}>
@@ -356,7 +434,7 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                                                         cursor: resolution?.status === 'pending' || resolution?.status === 'failed' ? 'pointer' : 'default',
                                                         textDecoration: resolution?.status === 'pending' || resolution?.status === 'failed' ? 'underline' : 'none'
                                                     }}>
-                                                        {cellValue}
+                                                        {displayValue}
                                                     </span>
                                                 </div>
                                             )}

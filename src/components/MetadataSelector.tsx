@@ -4,7 +4,9 @@ import i18n from '@dhis2/d2-i18n';
 export interface MetadataOption {
     name: string;
     id: string;
-    type: 'indicator' | 'dataElement';
+    type: 'indicator' | 'dataElement' | 'organisationUnit' | 'category' | 'categoryCombo' |
+          'categoryOption' | 'dataSet' | 'program' | 'trackedEntityType' | 'trackedEntityAttribute' |
+          'validationRule' | 'optionSet' | 'visualization' | 'dashboard' | 'user' | 'relationshipType';
 }
 
 export interface MetadataSelectorProps {
@@ -21,6 +23,65 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
     allowMultiple = true
 }) => {
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+
+    // Helper function to get human-readable type names
+    const getTypeDisplayName = (type: string): string => {
+        const typeMap: Record<string, string> = {
+            indicator: 'indicator',
+            dataElement: 'data element',
+            organisationUnit: 'organisation unit',
+            category: 'category',
+            categoryCombo: 'category combination',
+            categoryOption: 'category option',
+            dataSet: 'data set',
+            program: 'program',
+            trackedEntityType: 'tracked entity type',
+            trackedEntityAttribute: 'tracked entity attribute',
+            validationRule: 'validation rule',
+            optionSet: 'option set',
+            visualization: 'visualization',
+            dashboard: 'dashboard',
+            user: 'user',
+            relationshipType: 'relationship type'
+        };
+        return typeMap[type] || type;
+    };
+
+    // Helper function to get plural form
+    const getPluralForm = (type: string, count: number): string => {
+        if (count === 1) return getTypeDisplayName(type);
+        // Simple pluralization - could be enhanced for irregular plurals
+        return `${getTypeDisplayName(type)}${getTypeDisplayName(type).endsWith('y') ?
+            getTypeDisplayName(type).slice(0, -1) + 'ies' :
+            getTypeDisplayName(type) + 's'}`;
+    };
+
+    // Analyze types present in selection options
+    const typeAnalysis = React.useMemo(() => {
+        const types = new Set(selectionOptions.map(opt => opt.type));
+        const uniqueTypes = Array.from(types);
+
+        if (uniqueTypes.length === 1) {
+            // Single type
+            const type = uniqueTypes[0];
+            return {
+                displayText: `${selectionOptions.length} potential ${getPluralForm(type, selectionOptions.length)}`,
+                type: type
+            };
+        } else if (uniqueTypes.length === 2 && uniqueTypes.includes('indicator') && uniqueTypes.includes('dataElement')) {
+            // Special case for the common indicator/dataElement combination
+            return {
+                displayText: `${selectionOptions.length} potential indicators/data elements`,
+                type: 'mixed'
+            };
+        } else {
+            // Multiple different types
+            return {
+                displayText: `${selectionOptions.length} potential metadata items`,
+                type: 'mixed'
+            };
+        }
+    }, [selectionOptions]);
 
     const handleChipClick = useCallback((index: number) => {
         if (allowMultiple) {
@@ -86,7 +147,7 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                 marginBottom: '20px',
                 fontSize: '14px'
             }}>
-                Found {selectionOptions.length} potential {selectionOptions.length === 1 ? 'indicator/data element' : 'indicators/data elements'} for analysis of: <em>"{originalQuery}"</em>
+                Found {typeAnalysis.displayText} for analysis of: <em>"{originalQuery}"</em>
                 <br />
                 {allowMultiple
                     ? 'Select one or more items to use for the analysis:'

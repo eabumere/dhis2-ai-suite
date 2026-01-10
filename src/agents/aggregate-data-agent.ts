@@ -556,9 +556,9 @@ async function find_next_resolution(state: typeof AggregateDataAnnotation.State)
     }
 
     // All resolution complete and display names fetched (or no resolved items)
-    console.log('📊 Aggregate Data Agent: All items resolved and display names ready, proceeding to validation');
+    console.log('📊 Aggregate Data Agent: All items resolved and display names ready, showing data grid for review');
     return {
-        uiAction: 'validate_and_submit'
+        uiAction: 'show_data_grid'
     };
 }
 
@@ -1350,6 +1350,7 @@ aggregateDataWorkflow.addConditionalEdges('parse_csv_upload', (state) => {
 
 // @ts-ignore
 aggregateDataWorkflow.addConditionalEdges('map_csv_headers', (state) => {
+    if (state.uiAction === 'fetch_names') return 'fetch_display_names';
     if (state.uiAction === 'show_data_grid') return 'display_data_grid';
     return END;
 });
@@ -1406,128 +1407,6 @@ aggregateDataWorkflow.addConditionalEdges('apply_resolution_selection', (state) 
 aggregateDataWorkflow.addEdge('validate_and_submit', END);
 
 
-
-// Process aggregate data in batch mode and return single comprehensive result
-async function processAggregateDataBatch(csvData: string[][], messages: any[]): Promise<any> {
-    console.log('🔄 Processing aggregate data batch internally');
-
-    try {
-        const [originalHeaders, ...dataRows] = csvData;
-
-        // 1. Map headers using LLM
-        const requiredFields = {
-            'dataElement': 'Data Element (indicator, measure, metric, data element)',
-            'orgUnit': 'Organisation Unit (facility, site, location, org unit, organisation unit)',
-            'period': 'Time Period (month, quarter, year, date, period)',
-            'categoryOptionCombos': 'Category Option Combo (disaggregation, breakdown, category, coc)',
-            'attributeOptionCombos': 'Attribute Option Combo (attribute coc, additional disaggregation)',
-            'value': 'Data Value (result, number, amount, count, value)'
-        };
-
-        const mappingResult = await mapHeadersWithLLM(originalHeaders, requiredFields);
-        console.log('🧠 Header mapping result:', mappingResult);
-
-        // Apply header mapping
-        const mappedHeaders = originalHeaders.map((header, index) => {
-            const mappedField = mappingResult.mappings[index];
-            return mappedField ? mappedField : header;
-        });
-
-        // 2. Initialize resolution state
-        const resolutionState = new Map<string, ResolutionItem>();
-        dataRows.forEach((row, rowIndex) => {
-            mappedHeaders.forEach((header, colIndex) => {
-                const value = row[colIndex];
-                const fieldType = getFieldTypeFromHeader(header);
-
-                if (fieldType && fieldType !== 'period' && fieldType !== 'value') {
-                    const needsResolution = isNameValue(value);
-
-                    if (needsResolution) {
-                        const key = `${rowIndex}-${colIndex}`;
-                        resolutionState.set(key, {
-                            rowIndex,
-                            colIndex,
-                            originalValue: value,
-                            fieldType,
-                            status: 'pending'
-                        });
-                    } else {
-                        const key = `${rowIndex}-${colIndex}`;
-                        resolutionState.set(key, {
-                            rowIndex,
-                            colIndex,
-                            originalValue: value,
-                            fieldType,
-                            resolvedId: value,
-                            status: 'resolved'
-                        });
-                    }
-                }
-            });
-        });
-
-        // 3. Batch resolve any pending items (if needed)
-        // For now, we'll assume IDs are already resolved since the user's CSV contains IDs
-        // In a full implementation, this would handle name resolution
-
-        // 4. Fetch display names for all resolved IDs
-        const resolvedIds = new Map<string, string>();
-        for (const [key, resolution] of resolutionState) {
-            if (resolution.resolvedId && resolution.status === 'resolved') {
-                resolvedIds.set(`${resolution.fieldType}:${resolution.resolvedId}`, resolution.resolvedId);
-            }
-        }
-
-        let displayNames = new Map<string, string>();
-        if (resolvedIds.size > 0) {
-            console.log(`🏷️ Fetching display names for ${resolvedIds.size} resolved resources`);
-
-            const resourcesByType = new Map<string, Set<string>>();
-            for (const [resourceKey, resourceId] of resolvedIds) {
-                const [fieldType] = resourceKey.split(':');
-                if (!resourcesByType.has(fieldType)) {
-                    resourcesByType.set(fieldType, new Set());
-                }
-                resourcesByType.get(fieldType)!.add(resourceId);
-            }
-
-            const batchResults = await batchValidateResources(resourcesByType);
-
-            for (const [resourceKey, resourceId] of resolvedIds) {
-                const validationResult = batchResults.get(resourceKey);
-                if (validationResult?.exists && validationResult.details) {
-                    const details = validationResult.details;
-                    const displayName = details.name || details.displayName || resourceId;
-                    displayNames.set(resourceKey, displayName);
-                } else {
-                    displayNames.set(resourceKey, resourceId);
-                }
-            }
-
-            console.log(`✅ Fetched ${displayNames.size} display names`);
-        }
-
-        // 5. Return comprehensive result
-        return {
-            type: 'data_grid',
-            message: 'Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.',
-            data: {
-                headers: mappedHeaders,
-                rows: dataRows,
-                resolutionState: Array.from(resolutionState.entries()),
-                resourceDetails: undefined, // Could include if needed
-                displayNames: Array.from(displayNames.entries()),
-                actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
-            }
-        };
-
-    } catch (error) {
-        console.error('🔄 Batch processing failed:', error);
-        throw error;
-    }
-}
-
 // Compile the workflow
 const aggregateDataStateGraph = aggregateDataWorkflow.compile();
 
@@ -1535,72 +1414,36 @@ const aggregateDataStateGraph = aggregateDataWorkflow.compile();
 export function createAggregateDataAgent(orchestrator: any) {
     return {
         invoke: async (input: any) => {
-            console.log('📊 Aggregate Data Agent: Processing aggregate data request with full StateGraph workflow');
+            console.log('📊 Aggregate Data Agent: Processing aggregate data request with StateGraph workflow');
+
+            const initialState: Partial<typeof AggregateDataAnnotation.State> = {
+                messages: input.messages || [],
+                orchestrator: orchestrator,
+                uploadedData: [],
+                resolutionState: new Map(),
+                currentResolution: null,
+                processedData: [],
+                uiAction: '',
+                resourceDetails: new Map(),
+                displayNames: new Map(),
+                finalResult: null
+            };
 
             try {
-                // For initial data loading, we want to process everything and return one comprehensive result
-                // The StateGraph is designed for interactive workflows, but here we want batch processing
+                // Execute StateGraph workflow
+                const result = await aggregateDataStateGraph.invoke(initialState);
 
-                // Extract CSV data first
-                const messages = input.messages || [];
-                const userMessage = messages.filter(m => m.role === 'user').pop();
-
-                if (!userMessage || !userMessage.content) {
-                    return {
-                        messages: [{
-                            content: JSON.stringify({
-                                success: false,
-                                error: 'No user message provided'
-                            }),
-                            name: undefined,
-                            additional_kwargs: {},
-                            response_metadata: {}
-                        }]
-                    };
-                }
-
-                // Extract CSV from message
-                let csvData: string[][] | null = null;
-                for (const message of messages) {
-                    if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
-                        const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
-                        if (contentMatch) {
-                            csvData = parseCSV(contentMatch[1]);
-                            break;
-                        }
-                    }
-                }
-
-                if (!csvData || csvData.length === 0) {
-                    return {
-                        messages: [{
-                            content: JSON.stringify({
-                                success: false,
-                                error: 'No CSV data found'
-                            }),
-                            name: undefined,
-                            additional_kwargs: {},
-                            response_metadata: {}
-                        }]
-                    };
-                }
-
-                console.log(`📊 Aggregate Data Agent: Parsed CSV with ${csvData.length - 1} data rows`);
-
-                // Process the data internally (batch processing approach)
-                const processedResult = await processAggregateDataBatch(csvData, messages);
-
+                // Format for compatibility with existing interface
                 return {
                     messages: [{
-                        content: JSON.stringify(processedResult),
+                        content: JSON.stringify(result.finalResult),
                         name: undefined,
                         additional_kwargs: {},
                         response_metadata: {}
                     }]
                 };
-
             } catch (error) {
-                console.error('📊 Aggregate Data Agent: Processing failed:', error);
+                console.error('📊 Aggregate Data Agent: Workflow execution failed:', error);
                 return {
                     messages: [{
                         content: JSON.stringify({

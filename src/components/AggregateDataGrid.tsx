@@ -42,6 +42,12 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     // Create resolution state lookup map
     const resolutionMap = new Map(resolutionState);
 
+    // Convert displayNames array back to Map if needed
+    const displayNamesMap = displayNames instanceof Map ? displayNames : new Map(displayNames || []);
+
+    // Convert resourceDetails array back to Map if needed
+    const resourceDetailsMap = resourceDetails instanceof Map ? resourceDetails : new Map(resourceDetails || []);
+
     const getCellResolutionStatus = (rowIndex: number, colIndex: number) => {
         const key = `${rowIndex}-${colIndex}`;
         return resolutionMap.get(key);
@@ -133,20 +139,24 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
 
         let tooltip = `${fieldLabel} - ${resolution.status.charAt(0).toUpperCase() + resolution.status.slice(1)}`;
 
-        if (resolution.originalValue) {
-            tooltip += `\nOriginal: "${resolution.originalValue}"`;
-        }
-
         if (resolution.resolvedId) {
+            // Show human-readable name if available, otherwise show the resolved ID
+            const resourceKey = `${resolution.fieldType}:${resolution.resolvedId}`;
+            const humanName = displayNamesMap.get(resourceKey);
+            if (humanName) {
+                tooltip += `\nName: ${humanName}`;
+            }
             tooltip += `\nID: ${resolution.resolvedId}`;
+        } else if (resolution.originalValue) {
+            tooltip += `\nOriginal: "${resolution.originalValue}"`;
 
             // Add detailed COC information if available
             if (resolution.fieldType === 'categoryOptionCombos' || resolution.fieldType === 'attributeOptionCombos') {
                 const resourceKey = `${resolution.fieldType}:${resolution.resolvedId}`;
-                const resourceDetail = resourceDetails?.get(resourceKey);
+                const resourceDetail = resourceDetailsMap?.get(resourceKey);
 
-                if (resourceDetail?.details) {
-                    const details = resourceDetail.details;
+                if (resourceDetail && typeof resourceDetail === 'object' && 'details' in resourceDetail && (resourceDetail as any).details) {
+                    const details = (resourceDetail as any).details;
 
                     // Show category options that make up this COC
                     if (details.categoryOptions && details.categoryOptions.length > 0) {
@@ -359,9 +369,9 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
 
                                     // Show human-readable name if available, otherwise show raw value
                                     let displayValue = rawCellValue;
-                                    if (resolution?.resolvedId && displayNames) {
+                                    if (resolution?.resolvedId && displayNamesMap) {
                                         const resourceKey = `${resolution.fieldType}:${resolution.resolvedId}`;
-                                        const humanName = displayNames.get(resourceKey);
+                                        const humanName = displayNamesMap.get(resourceKey);
                                         if (humanName) {
                                             displayValue = humanName;
                                         }

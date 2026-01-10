@@ -237,6 +237,13 @@ class WorkflowOrchestrator {
                             console.log('📊 Detected data entry result, calling requestDataEntryRender');
                             // For data entry results, render through conversation
                             this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
+                            // Reset UI state for data entry results
+                            this.updateUIState({
+                                showProcessing: false,
+                                showQueryInput: true,
+                                queryEnabled: true,
+                                showError: false
+                            });
                         } else {
                             // Check for other specialized result types
                             if (result?.type === 'data_grid' || result?.type === 'resolution_selection' || result?.type === 'resolution_error') {
@@ -798,18 +805,18 @@ class WorkflowOrchestrator {
 
         switch (type) {
             case 'resolve_item':
-                console.log('🔍 Resolving item:', data.rowIndex, data.colIndex);
-                // TODO: Implement name resolution logic
-                // This should search for the item and show selection if multiple matches
+                console.log('🔍 Resolving item:', data.rowIndex, data.colIndex, data.originalValue, data.fieldType);
                 this.addAssistantMessage(
                     `Resolving "${data.originalValue}" for ${data.fieldType}...`,
                     'response'
                 );
+                // TODO: Trigger resolution workflow for specific item
                 break;
 
             case 'edit_cell':
                 console.log('✏️ Editing cell:', data.rowIndex, data.colIndex, data.newValue);
-                // TODO: Update the data grid with new value
+                // Update the data in the conversation message
+                this.updateDataGridCell(data.rowIndex, data.colIndex, data.newValue);
                 this.addAssistantMessage(
                     `Updated cell (${data.rowIndex + 1}, ${data.colIndex + 1}) to: ${data.newValue}`,
                     'response'
@@ -818,7 +825,8 @@ class WorkflowOrchestrator {
 
             case 'delete_row':
                 console.log('🗑️ Deleting row:', data.rowIndex);
-                // TODO: Remove the row from data grid
+                // Remove the row from the data grid
+                this.deleteDataGridRow(data.rowIndex);
                 this.addAssistantMessage(
                     `Deleted row ${data.rowIndex + 1}`,
                     'response'
@@ -826,32 +834,185 @@ class WorkflowOrchestrator {
                 break;
 
             case 'confirm_submit':
-                console.log('📤 Submitting data...');
-                // TODO: Submit data to DHIS2
-                this.addAssistantMessage(
-                    'Data submission initiated. Processing data values...',
-                    'response'
-                );
-                // Simulate successful submission
-                setTimeout(() => {
-                    this.addAssistantMessage(
-                        '✅ Data submitted successfully! All data values have been imported to DHIS2.',
-                        'response'
-                    );
-                }, 2000);
+                console.log('📤 Submitting data to DHIS2...');
+                this.submitDataToDHIS2();
                 break;
 
             case 'resolve_all':
                 console.log('🔄 Resolving all pending items...');
-                // TODO: Implement bulk resolution
                 this.addAssistantMessage(
                     'Bulk resolution started for all pending items...',
                     'response'
                 );
+                // TODO: Trigger bulk resolution workflow
                 break;
 
             default:
                 console.warn('Unknown data grid interaction:', type);
+        }
+    }
+
+    // Update a cell in the data grid
+    private updateDataGridCell(rowIndex: number, colIndex: number, newValue: string) {
+        // Find the data_grid message in the conversation and update it
+        const updatedConversation = this.currentUIState.conversation.map(message => {
+            if (message.type === 'data_grid' && message.data) {
+                const updatedData = { ...message.data };
+                if (updatedData.rows && updatedData.rows[rowIndex]) {
+                    updatedData.rows[rowIndex][colIndex] = newValue;
+                }
+                return { ...message, data: updatedData };
+            }
+            return message;
+        });
+
+        this.updateUIState({
+            conversation: updatedConversation
+        });
+    }
+
+    // Delete a row from the data grid
+    private deleteDataGridRow(rowIndex: number) {
+        // Find the data_grid message in the conversation and update it
+        const updatedConversation = this.currentUIState.conversation.map(message => {
+            if (message.type === 'data_grid' && message.data) {
+                const updatedData = { ...message.data };
+                if (updatedData.rows) {
+                    updatedData.rows.splice(rowIndex, 1);
+                }
+                // Also update resolution state by removing items for this row
+                if (updatedData.resolutionState) {
+                    const updatedResolutionState = new Map();
+                    for (const [key, item] of updatedData.resolutionState) {
+                        const [rIndex, cIndex] = key.split('-').map(Number);
+                        if (rIndex !== rowIndex) {
+                            // Adjust row indices for items after the deleted row
+                            const newKey = rIndex > rowIndex ? `${rIndex - 1}-${cIndex}` : key;
+                            updatedResolutionState.set(newKey, item);
+                        }
+                        // Skip items from the deleted row
+                    }
+                    updatedData.resolutionState = Array.from(updatedResolutionState.entries());
+                }
+                return { ...message, data: updatedData };
+            }
+            return message;
+        });
+
+        this.updateUIState({
+            conversation: updatedConversation
+        });
+    }
+
+    // Submit data to DHIS2
+    private async submitDataToDHIS2() {
+        console.log('📤 Starting DHIS2 data submission...');
+
+        // Find the data_grid message with the processed data
+        const dataGridMessage = this.currentUIState.conversation
+            .filter(msg => msg.type === 'data_grid')
+            .pop();
+
+        if (!dataGridMessage?.data) {
+            this.addAssistantMessage(
+                '❌ No data found to submit. Please ensure you have processed data ready.',
+                'error'
+            );
+            return;
+        }
+
+        const { data } = dataGridMessage;
+        const { headers, rows, resolutionState } = data;
+
+        // Check if all items are resolved
+        const unresolvedItems = resolutionState ?
+            Array.from(resolutionState.values()).filter((item: any) => item.status !== 'resolved') : [];
+
+        if (unresolvedItems.length > 0) {
+            this.addAssistantMessage(
+                `❌ Cannot submit data. ${unresolvedItems.length} items still need resolution.`,
+                'error'
+            );
+            return;
+        }
+
+        this.addAssistantMessage(
+            '📤 Data submission initiated. Processing data values...',
+            'response'
+        );
+
+        try {
+            // Prepare data values for submission
+            const dataValues = [];
+
+            for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                const row = rows[rowIndex];
+                const dataValue: any = {};
+
+                headers.forEach((header: string, colIndex: number) => {
+                    const value = row[colIndex];
+                    const resolutionKey = `${rowIndex}-${colIndex}`;
+                    const resolution = resolutionState ?
+                        Array.from(resolutionState).find(([key]) => key === resolutionKey)?.[1] : null;
+
+                    // Use resolved ID if available, otherwise use the raw value
+                    const finalValue = resolution?.resolvedId || value;
+
+                    // Map to DHIS2 field names (similar to aggregate data agent logic)
+                    switch (header) {
+                        case 'dataElement':
+                            dataValue.dataElement = finalValue;
+                            break;
+                        case 'orgUnit':
+                            dataValue.orgUnit = finalValue;
+                            break;
+                        case 'period':
+                            dataValue.period = finalValue;
+                            break;
+                        case 'categoryOptionCombo':
+                            if (finalValue) dataValue.categoryOptionCombo = finalValue;
+                            break;
+                        case 'attributeOptionCombo':
+                            if (finalValue) dataValue.attributeOptionCombo = finalValue;
+                            break;
+                        case 'value':
+                            dataValue.value = isNaN(Number(finalValue)) ? finalValue : Number(finalValue);
+                            break;
+                    }
+                });
+
+                // Only add complete data values
+                if (dataValue.dataElement && dataValue.orgUnit && dataValue.period && dataValue.value !== undefined) {
+                    dataValues.push(dataValue);
+                }
+            }
+
+            console.log(`📤 Submitting ${dataValues.length} data values to DHIS2:`, dataValues);
+
+            // Import the DHIS2 API dynamically to avoid circular dependencies
+            const { Dhis2Api } = await import('./app-runtime/dhis2-api');
+
+            // Submit data values to DHIS2
+            const response = await Dhis2Api.post('/dataValueSets', {
+                dataValues: dataValues
+            });
+
+            if (response.success) {
+                this.addAssistantMessage(
+                    `✅ Data submitted successfully! ${dataValues.length} data values imported to DHIS2.`,
+                    'response'
+                );
+                console.log('📤 DHIS2 submission successful:', response);
+            } else {
+                throw new Error(response.error || 'Unknown submission error');
+            }
+
+        } catch (error) {
+            console.error('📤 DHIS2 submission failed:', error);
+            this.addAssistantMessage(
+                `❌ Data submission failed: ${error.message}`,
+                'error'
+            );
         }
     }
 

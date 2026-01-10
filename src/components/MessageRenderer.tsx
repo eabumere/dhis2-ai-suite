@@ -128,6 +128,8 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                 headers={message.data.headers || []}
                                 rows={message.data.rows || []}
                                 resolutionState={message.data.resolutionState || []}
+                                resourceDetails={message.data.resourceDetails}
+                                displayNames={message.data.displayNames}
                                 onResolveAll={() => {
                                     workflowOrchestrator.handleDataGridInteraction({
                                         type: 'resolve_all',

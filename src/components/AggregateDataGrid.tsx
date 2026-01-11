@@ -31,6 +31,7 @@ export interface AggregateDataGridProps {
 
 const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     headers,
+    displayHeaders,
     rows,
     resolutionState,
     resourceDetails,

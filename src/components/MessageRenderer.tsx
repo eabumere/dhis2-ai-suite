@@ -130,6 +130,9 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                 resolutionState={message.data.resolutionState || []}
                                 resourceDetails={message.data.resourceDetails}
                                 displayNames={message.data.displayNames}
+                                dataSetId={message.data.dataSetId}
+                                dataSetName={message.data.dataSetName}
+                                isExistingData={message.data.isExistingData}
                                 onResolveAll={() => {
                                     workflowOrchestrator.handleDataGridInteraction({
                                         type: 'resolve_all',
@@ -168,6 +171,18 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                             originalValue,
                                             fieldType
                                         }
+                                    });
+                                }}
+                                onUpdateDataSet={() => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'update_data_set',
+                                        data: { dataSetId: message.data.dataSetId }
+                                    });
+                                }}
+                                onAddRow={() => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'add_row',
+                                        data: { dataSetId: message.data.dataSetId }
                                     });
                                 }}
                             />

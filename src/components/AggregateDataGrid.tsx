@@ -1,5 +1,4 @@
-import React, { useState, useCallback } from 'react';
-import i18n from '@dhis2/d2-i18n';
+import React, {useCallback, useState} from 'react';
 
 export interface ResolutionItem {
     rowIndex: number;
@@ -17,11 +16,16 @@ export interface AggregateDataGridProps {
     resolutionState: [string, ResolutionItem][];
     resourceDetails?: Map<string, { exists: boolean; details?: any }>; // Batch validation results with COC details
     displayNames?: Map<string, string>; // Human-readable names for resolved IDs
+    dataSetId?: string; // ID of the data set this data belongs to
+    dataSetName?: string; // Name of the data set this data belongs to
+    isExistingData?: boolean; // Whether this is existing data that can be edited after submission
     onResolveAll: () => void;
     onEditCell: (rowIndex: number, colIndex: number, newValue: string) => void;
     onDeleteRow: (rowIndex: number) => void;
     onConfirmSubmit: () => void;
     onResolveItem: (rowIndex: number, colIndex: number) => void;
+    onUpdateDataSet?: () => void; // For updating existing data sets
+    onAddRow?: () => void; // For adding new rows to existing data sets
 }
 
 const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
@@ -30,11 +34,16 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     resolutionState,
     resourceDetails,
     displayNames,
+    dataSetId,
+    dataSetName,
+    isExistingData,
     onResolveAll,
     onEditCell,
     onDeleteRow,
     onConfirmSubmit,
-    onResolveItem
+    onResolveItem,
+    onUpdateDataSet,
+    onAddRow
 }) => {
     const [editingCell, setEditingCell] = useState<{row: number, col: number} | null>(null);
     const [editValue, setEditValue] = useState('');
@@ -208,7 +217,7 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                 marginBottom: '16px'
             }}>
                 <h3 style={{ margin: 0, color: '#495057' }}>
-                    Aggregate Data Upload ({rows.length} rows)
+                    {isExistingData ? `${dataSetName || 'Data Set'} (${rows.length} rows)` : `Aggregate Data Upload (${rows.length} rows)`}
                 </h3>
                 <div style={{
                     display: 'flex',
@@ -224,37 +233,79 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                             {unresolvedCount} items need resolution
                         </span>
                     )}
-                    <button
-                        onClick={onResolveAll}
-                        disabled={unresolvedCount === 0}
-                        style={{
-                            padding: '8px 16px',
-                            backgroundColor: unresolvedCount > 0 ? '#007bff' : '#6c757d',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: unresolvedCount > 0 ? 'pointer' : 'not-allowed',
-                            fontSize: '14px'
-                        }}
-                    >
-                        Resolve All Pending
-                    </button>
-                    <button
-                        onClick={onConfirmSubmit}
-                        disabled={!canSubmit}
-                        style={{
-                            padding: '8px 16px',
-                            backgroundColor: canSubmit ? '#28a745' : '#6c757d',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: canSubmit ? 'pointer' : 'not-allowed',
-                            fontSize: '14px',
-                            fontWeight: 'bold'
-                        }}
-                    >
-                        Confirm & Submit
-                    </button>
+
+                    {/* Show different buttons based on whether this is existing data or new data */}
+                    {isExistingData ? (
+                        <>
+                            {onUpdateDataSet && (
+                                <button
+                                    onClick={onUpdateDataSet}
+                                    style={{
+                                        padding: '8px 16px',
+                                        backgroundColor: '#ffc107',
+                                        color: 'black',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: 'pointer',
+                                        fontSize: '14px',
+                                        fontWeight: 'bold'
+                                    }}
+                                >
+                                    Update Data Set
+                                </button>
+                            )}
+                            {onAddRow && (
+                                <button
+                                    onClick={onAddRow}
+                                    style={{
+                                        padding: '8px 16px',
+                                        backgroundColor: '#17a2b8',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    Add New Row
+                                </button>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <button
+                                onClick={onResolveAll}
+                                disabled={unresolvedCount === 0}
+                                style={{
+                                    padding: '8px 16px',
+                                    backgroundColor: unresolvedCount > 0 ? '#007bff' : '#6c757d',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: unresolvedCount > 0 ? 'pointer' : 'not-allowed',
+                                    fontSize: '14px'
+                                }}
+                            >
+                                Resolve All Pending
+                            </button>
+                            <button
+                                onClick={onConfirmSubmit}
+                                disabled={!canSubmit}
+                                style={{
+                                    padding: '8px 16px',
+                                    backgroundColor: canSubmit ? '#28a745' : '#6c757d',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: canSubmit ? 'pointer' : 'not-allowed',
+                                    fontSize: '14px',
+                                    fontWeight: 'bold'
+                                }}
+                            >
+                                Confirm & Submit
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 

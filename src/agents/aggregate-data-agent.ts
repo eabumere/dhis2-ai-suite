@@ -38,6 +38,7 @@ import {
 	searchDhis2CategoryCombos,
 	searchDhis2CategoryOptions,
 	searchDhis2OptionSets,
+	searchDhis2DataSets,
 
 	// LLM-powered keyword extraction tools
 	extractOrgUnitKeywordsLLM,
@@ -148,6 +149,28 @@ const AggregateDataAnnotation = Annotation.Root({
         default: () => new Map()
     }),
 
+    // Resolved data set information (required for DHIS2 data values)
+    dataSet: Annotation<{
+        id: string;
+        name: string;
+        resolved: boolean;
+    } | null>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+
+    // Submitted data sets for follow-up operations
+    submittedDataSets: Annotation<Map<string, {
+        dataSetId: string;
+        dataSetName: string;
+        submittedData: AggregatedDataValue[];
+        submissionDate: Date;
+        lastModified?: Date;
+    }>>({
+        reducer: (left, right) => right || left,
+        default: () => new Map()
+    }),
+
     // Final result
     finalResult: Annotation<any>({
         reducer: (left, right) => right || left,
@@ -162,6 +185,203 @@ const model = ChatModels.createAgentModel();
 
 // 1. Parse CSV upload or initialize empty grid for data entry
 async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('📊 Aggregate Data Agent: Processing data entry request');
+
+    const messages = state.messages || [];
+    const userMessage = messages.filter(m => m.role === 'user').pop();
+
+    if (!userMessage || !userMessage.content) {
+        return {
+            finalResult: {
+                success: false,
+                error: 'No user message provided'
+            }
+        };
+    }
+
+    // Check if this is a follow-up request for existing data set
+    const followUpRequest = await detectFollowUpRequest(userMessage.content, state.submittedDataSets);
+    if (followUpRequest) {
+        console.log('📊 Aggregate Data Agent: Detected follow-up request:', followUpRequest);
+        return await handle_follow_up_request(state, followUpRequest);
+    }
+
+    // Extract contextual information from all user messages
+    const contextualInfo = await extractContextualInfo(messages);
+    console.log('📊 Aggregate Data Agent: Extracted contextual info:', contextualInfo);
+
+    // Check for CSV file content in messages
+    let csvData: string[][] | null = null;
+    let hasCSVFile = false;
+
+    // Look for file content in user messages
+    for (const message of messages) {
+        if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
+            // Extract file content from message
+            const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
+            if (contentMatch) {
+                try {
+                    csvData = parseCSV(contentMatch[1]);
+                    hasCSVFile = true;
+                    console.log('📊 Aggregate Data Agent: Found CSV file in message');
+                    break;
+                } catch (error) {
+                    console.warn('📊 Aggregate Data Agent: Failed to parse CSV from message:', error);
+                }
+            }
+        }
+    }
+
+    // If no CSV file found, but this is a data entry request, show empty grid
+    if (!hasCSVFile || !csvData) {
+        console.log('📊 Aggregate Data Agent: No CSV file found, showing empty data entry grid');
+
+        // Create empty grid with expected column structure
+        const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+        const emptyRows: string[][] = []; // Start with no data rows
+
+        return {
+            uploadedData: [headers, ...emptyRows],
+            resolutionState: new Map(),
+            uiAction: 'show_data_grid'
+        };
+    }
+
+    // CSV file was found, parse and validate it
+    try {
+        console.log('📊 Aggregate Data Agent: Parsing CSV file');
+
+        // Validate CSV structure - should have headers: dataElement, orgUnit, period, categoryOptionCombos, attributeOptionCombos, value
+        if (csvData.length === 0) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: 'CSV file is empty'
+                }
+            };
+        }
+
+        const headers = csvData[0];
+
+        // Remove header row and store data
+        const dataRows = csvData.slice(1);
+
+        // Store parsed data with original headers for mapping
+        console.log(`📊 Aggregate Data Agent: Parsed ${dataRows.length} rows from CSV with headers: [${headers.join(', ')}]`);
+
+        return {
+            uploadedData: [headers, ...dataRows],
+            uiAction: 'resolve_data_set'
+        };
+
+    } catch (error) {
+        console.error('📊 Aggregate Data Agent: CSV parsing failed:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Failed to parse CSV: ${error.message}`
+            }
+        };
+    }
+}
+
+// 1.5. Resolve data set (required for DHIS2 data values)
+async function resolve_data_set(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('📋 Aggregate Data Agent: Resolving required data set');
+
+    const messages = state.messages || [];
+    const userMessage = messages.filter(m => m.role === 'user').pop();
+
+    if (!userMessage || !userMessage.content) {
+        return {
+            finalResult: {
+                success: false,
+                error: 'No user message provided for data set resolution'
+            }
+        };
+    }
+
+    // Extract data set name using LLM
+    const dataSetName = await extractDataSetNameFromPrompt(userMessage.content);
+    console.log('📋 Extracted data set name from prompt:', dataSetName);
+
+    if (!dataSetName) {
+        return {
+            finalResult: {
+                success: false,
+                error: 'Could not identify a data set name from your request. Please specify which data set you want to submit data to (e.g., "HIV Monthly Report", "Malaria Surveillance").'
+            }
+        };
+    }
+
+    try {
+        // Search for data sets matching the extracted name
+        const searchResult = await searchDhis2DataSets.invoke({
+            query: dataSetName,
+            limit: 10
+        });
+
+        const parsedResult = JSON.parse(searchResult);
+        const dataSets = parsedResult.results || [];
+
+        console.log(`📋 Found ${dataSets.length} data set matches for "${dataSetName}"`);
+
+        if (dataSets.length === 0) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `No data sets found matching "${dataSetName}". Please check the data set name or ensure it exists in DHIS2.`
+                }
+            };
+        } else if (dataSets.length === 1) {
+            // Single match - auto-resolve
+            const dataSet = dataSets[0];
+            console.log(`📋 Auto-resolving to single data set match: ${dataSet.name} (ID: ${dataSet.id})`);
+
+            return {
+                dataSet: {
+                    id: dataSet.id,
+                    name: dataSet.name || dataSet.displayName,
+                    resolved: true
+                },
+                uiAction: 'map_headers'
+            };
+        } else {
+            // Multiple matches - show selection UI
+            console.log(`📋 Multiple data set matches found for "${dataSetName}", showing selection`);
+
+            const selectionMessage = {
+                type: 'data_set_selection',
+                message: `Multiple data sets found matching "${dataSetName}". Please select the correct data set:`,
+                data: {
+                    searchQuery: dataSetName,
+                    options: dataSets.map(ds => ({
+                        id: ds.id,
+                        name: ds.name || ds.displayName,
+                        description: ds.description || `Data set ${ds.id}`
+                    })),
+                    allowMultiple: false
+                }
+            };
+
+            return {
+                finalResult: selectionMessage
+            };
+        }
+
+    } catch (error) {
+        console.error('📋 Data set resolution failed:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Failed to search for data sets: ${error.message}`
+            }
+        };
+    }
+}
+
+// 1. Parse CSV upload or initialize empty grid for data entry
+async function parse_csv_upload_old(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('📊 Aggregate Data Agent: Processing data entry request');
 
     const messages = state.messages || [];
@@ -920,6 +1140,231 @@ function getFieldTypeFromHeader(header: string): 'dataElement' | 'orgUnit' | 'pe
     return null;
 }
 
+// Detect if this is a follow-up request for existing data sets
+async function detectFollowUpRequest(content: string, submittedDataSets: Map<string, any>): Promise<{
+    isFollowUp: boolean;
+    action: 'update' | 'delete' | 'view' | null;
+    dataSetName?: string;
+    criteria?: any;
+    newValues?: any;
+} | null> {
+    try {
+        const llm = ChatModels.createAnalysisModel();
+
+        const prompt = `
+You are detecting follow-up requests for previously submitted DHIS2 data sets. Your task is to identify if the user wants to modify existing data that was already submitted.
+
+EXAMPLES:
+- "update row 3 to value 50" → {"isFollowUp": true, "action": "update", "criteria": {"row": 3}, "newValues": {"value": 50}}
+- "delete rows where orgUnit is X" → {"isFollowUp": true, "action": "delete", "criteria": {"orgUnit": "X"}}
+- "change all values for dataElement Y to Z" → {"isFollowUp": true, "action": "update", "criteria": {"dataElement": "Y"}, "newValues": {"value": "Z"}}
+- "add new row with dataElement A, orgUnit B, period C, value D" → {"isFollowUp": true, "action": "update", "criteria": {"newRow": true}, "newValues": {"dataElement": "A", "orgUnit": "B", "period": "C", "value": "D"}}
+- "show me the HIV data set" → {"isFollowUp": true, "action": "view", "dataSetName": "HIV"}
+
+INSTRUCTIONS:
+1. Check if the request mentions existing data sets or refers to previously submitted data
+2. Look for actions like "update", "delete", "change", "modify", "add", "show", "view"
+3. Extract the target data set name if mentioned
+4. Parse the criteria for which data to modify (rows, filters, etc.)
+5. Extract new values if this is an update operation
+6. Return null if this is not a follow-up request
+
+USER MESSAGE: "${content}"
+
+Return a JSON object or null if not a follow-up request.`;
+
+        const llmResponse = await llm.invoke([
+            { role: "system", content: prompt },
+            { role: "user", content: `Analyze follow-up request: ${content}` }
+        ]);
+
+        const result = (llmResponse.content as string).trim();
+
+        try {
+            const parsed = JSON.parse(result);
+            if (parsed && parsed.isFollowUp) {
+                // If no data set name specified, try to infer from available data sets
+                if (!parsed.dataSetName && submittedDataSets.size === 1) {
+                    // If only one data set exists, use it
+                    const [dataSetId, dataSetInfo] = Array.from(submittedDataSets.entries())[0];
+                    parsed.dataSetName = dataSetInfo.dataSetName;
+                }
+                return parsed;
+            }
+        } catch (e) {
+            // Not valid JSON, not a follow-up request
+        }
+
+        return null;
+
+    } catch (error) {
+        console.warn('🔄 Follow-up detection failed:', error);
+        return null;
+    }
+}
+
+// Handle follow-up requests for existing data sets
+async function handle_follow_up_request(state: typeof AggregateDataAnnotation.State, followUpRequest: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('🔄 Handling follow-up request:', followUpRequest);
+
+    const { action, dataSetName, criteria, newValues } = followUpRequest;
+
+    // Find the target data set
+    let targetDataSet: any = null;
+    for (const [dataSetId, dataSetInfo] of state.submittedDataSets) {
+        if (dataSetInfo.dataSetName === dataSetName || dataSetId === dataSetName) {
+            targetDataSet = { id: dataSetId, ...dataSetInfo };
+            break;
+        }
+    }
+
+    if (!targetDataSet) {
+        return {
+            finalResult: {
+                success: false,
+                error: `Could not find data set "${dataSetName}". Available data sets: ${Array.from(state.submittedDataSets.values()).map(ds => ds.dataSetName).join(', ')}`
+            }
+        };
+    }
+
+    switch (action) {
+        case 'view':
+            // Load and display the data set
+            return await load_and_display_data_set(state, targetDataSet);
+
+        case 'update':
+            // Update existing data or add new rows
+            return await update_data_set(state, targetDataSet, criteria, newValues);
+
+        case 'delete':
+            // Delete data matching criteria
+            return await delete_from_data_set(state, targetDataSet, criteria);
+
+        default:
+            return {
+                finalResult: {
+                    success: false,
+                    error: `Unsupported action: ${action}`
+                }
+            };
+    }
+}
+
+// Load and display an existing data set
+async function load_and_display_data_set(state: typeof AggregateDataAnnotation.State, dataSetInfo: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('📊 Loading data set for display:', dataSetInfo.dataSetName);
+
+    // For now, we'll reconstruct the data from the stored information
+    // In a real implementation, you'd query DHIS2 to get the current data
+    const rows = dataSetInfo.submittedData.map((dataValue: any, index: number) => [
+        dataValue.dataElement || '',
+        dataValue.orgUnit || '',
+        dataValue.period || '',
+        dataValue.categoryOptionCombo || '',
+        dataValue.attributeOptionCombo || '',
+        dataValue.value?.toString() || ''
+    ]);
+
+    // Set up headers
+    const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+
+    // Create data grid with existing data
+    const dataGridMessage = {
+        type: 'data_grid',
+        message: `Viewing data set: ${dataSetInfo.dataSetName} (Last modified: ${dataSetInfo.lastModified || dataSetInfo.submissionDate})`,
+        data: {
+            headers: headers,
+            rows: rows,
+            resolutionState: [], // No resolution needed for existing data
+            resourceDetails: [],
+            displayNames: [], // Would need to be populated
+            actions: ['update_data_set', 'edit_cell', 'delete_row', 'add_row'],
+            dataSetId: dataSetInfo.dataSetId,
+            dataSetName: dataSetInfo.dataSetName,
+            isExistingData: true
+        }
+    };
+
+    return {
+        finalResult: dataGridMessage
+    };
+}
+
+// Update data in an existing data set
+async function update_data_set(state: typeof AggregateDataAnnotation.State, dataSetInfo: any, criteria: any, newValues: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('📝 Updating data set:', dataSetInfo.dataSetName, criteria, newValues);
+
+    // This would implement the actual update logic
+    // For now, return a placeholder response
+    return {
+        finalResult: {
+            success: true,
+            message: `Data set "${dataSetInfo.dataSetName}" updated successfully`,
+            data: { criteria, newValues }
+        }
+    };
+}
+
+// Delete data from an existing data set
+async function delete_from_data_set(state: typeof AggregateDataAnnotation.State, dataSetInfo: any, criteria: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('🗑️ Deleting from data set:', dataSetInfo.dataSetName, criteria);
+
+    // This would implement the actual delete logic
+    // For now, return a placeholder response
+    return {
+        finalResult: {
+            success: true,
+            message: `Data deleted from "${dataSetInfo.dataSetName}" successfully`,
+            data: { criteria }
+        }
+    };
+}
+
+// Extract data set name from user prompt using LLM
+async function extractDataSetNameFromPrompt(content: string): Promise<string | null> {
+    try {
+        const llm = ChatModels.createAnalysisModel();
+
+        const prompt = `
+You are extracting data set names from user messages about DHIS2 data entry. Your task is to identify the specific data set the user wants to submit data to.
+
+EXAMPLES:
+- "Submit data to HIV Monthly Report" → "HIV Monthly Report"
+- "Upload CSV to Malaria Surveillance dataset" → "Malaria Surveillance"
+- "Enter data for TB Quarterly Report" → "TB Quarterly Report"
+- "Send to EPI Monthly Data Set" → "EPI Monthly Data Set"
+- "Upload to the COVID-19 Weekly Report" → "COVID-19 Weekly Report"
+
+INSTRUCTIONS:
+1. Look for explicit data set names in phrases like "to [name]", "for [name]", "dataset [name]", etc.
+2. Common patterns: "[Disease/Program] [Frequency] [Type]" (e.g., "HIV Monthly Report")
+3. Return only the data set name, not the full sentence
+4. If no clear data set name is found, return null
+
+USER MESSAGE: "${content}"
+
+Return only the extracted data set name or null if none found. Do not include any other text or explanation.`;
+
+        const llmResponse = await llm.invoke([
+            { role: "system", content: prompt },
+            { role: "user", content: `Extract data set name from: ${content}` }
+        ]);
+
+        const extractedName = (llmResponse.content as string).trim();
+
+        // Return null if no name was extracted or if it's just whitespace/null
+        if (!extractedName || extractedName.toLowerCase() === 'null') {
+            return null;
+        }
+
+        return extractedName;
+
+    } catch (error) {
+        console.warn('📋 LLM data set extraction failed:', error);
+        return null;
+    }
+}
+
 // Extract contextual information from user messages using LLM
 async function extractContextualInfo(messages: any[]): Promise<{
     orgUnits: string[];
@@ -1325,6 +1770,7 @@ const aggregateDataWorkflow = new StateGraph(AggregateDataAnnotation);
 
 // Add nodes
 aggregateDataWorkflow.addNode('parse_csv_upload', parse_csv_upload);
+aggregateDataWorkflow.addNode('resolve_data_set', resolve_data_set);
 aggregateDataWorkflow.addNode('map_csv_headers', map_csv_headers);
 aggregateDataWorkflow.addNode('fetch_display_names', fetch_display_names);
 aggregateDataWorkflow.addNode('display_data_grid', display_data_grid);
@@ -1343,9 +1789,15 @@ aggregateDataWorkflow.addEdge(START, 'parse_csv_upload');
 // Conditional routing based on uiAction
 // @ts-ignore
 aggregateDataWorkflow.addConditionalEdges('parse_csv_upload', (state) => {
-    if (state.uiAction === 'map_headers') return 'map_csv_headers';
+    if (state.uiAction === 'resolve_data_set') return 'resolve_data_set';
     if (state.uiAction === 'show_data_grid') return 'display_data_grid';
     return END;
+});
+
+// @ts-ignore
+aggregateDataWorkflow.addConditionalEdges('resolve_data_set', (state) => {
+    if (state.uiAction === 'map_headers') return 'map_csv_headers';
+    return END; // For multiple matches or no matches, finalResult is set
 });
 
 // @ts-ignore

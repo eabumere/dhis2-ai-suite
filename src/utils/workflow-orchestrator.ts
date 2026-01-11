@@ -838,6 +838,24 @@ class WorkflowOrchestrator {
                 this.submitDataToDHIS2();
                 break;
 
+            case 'update_data_set':
+                console.log('📝 Updating data set:', data.dataSetId);
+                // TODO: Implement data set update workflow
+                this.addAssistantMessage(
+                    'Data set update functionality will be implemented soon.',
+                    'response'
+                );
+                break;
+
+            case 'add_row':
+                console.log('➕ Adding new row to data set:', data.dataSetId);
+                // TODO: Implement add row workflow
+                this.addAssistantMessage(
+                    'Add row functionality will be implemented soon.',
+                    'response'
+                );
+                break;
+
             case 'resolve_all':
                 console.log('🔄 Resolving all pending items...');
                 this.addAssistantMessage(
@@ -942,6 +960,22 @@ class WorkflowOrchestrator {
         );
 
         try {
+            // Get the resolved data set from the aggregate data agent
+            // We need to find the dataSet from the conversation or state
+            let dataSetId: string | null = null;
+
+            // Look for dataSet in the conversation messages
+            for (const message of this.currentUIState.conversation) {
+                if (message.data?.dataSet?.id) {
+                    dataSetId = message.data.dataSet.id;
+                    break;
+                }
+            }
+
+            if (!dataSetId) {
+                throw new Error('No data set found. Please ensure data set resolution was completed.');
+            }
+
             // Prepare data values for submission
             const dataValues = [];
 
@@ -958,7 +992,7 @@ class WorkflowOrchestrator {
                     // Use resolved ID if available, otherwise use the raw value
                     const finalValue = resolution?.resolvedId || value;
 
-                    // Map to DHIS2 field names (similar to aggregate data agent logic)
+                    // Map to DHIS2 field names - period and orgUnit go in each dataValue
                     switch (header) {
                         case 'dataElement':
                             dataValue.dataElement = finalValue;
@@ -987,20 +1021,59 @@ class WorkflowOrchestrator {
                 }
             }
 
-            console.log(`📤 Submitting ${dataValues.length} data values to DHIS2:`, dataValues);
+            // Create the complete DHIS2 data set payload
+            const dataSetPayload = {
+                dataSet: dataSetId,
+                completeDate: new Date().toISOString().split('T')[0], // Current date in YYYY-MM-DD format
+                dataValues: dataValues
+            };
+
+            console.log(`📤 Submitting data set payload to DHIS2:`, dataSetPayload);
 
             // Import the DHIS2 API dynamically to avoid circular dependencies
             const { Dhis2Api } = await import('./app-runtime/dhis2-api');
 
-            // Submit data values to DHIS2
-            const response = await Dhis2Api.post('/dataValueSets', {
-                dataValues: dataValues
-            });
+            // Submit the complete data set to DHIS2
+            const mutationConfig = {
+                resource: 'dataValueSets',
+                type: 'create',
+                data: dataSetPayload
+            };
+            const response = await Dhis2Api.mutate(mutationConfig);
 
             if (response.success) {
+                // Store the submitted data set for future follow-up operations
+                const submittedDataSet = {
+                    dataSetId: dataSetId,
+                    dataSetName: 'Unknown Data Set', // TODO: Get from data grid context
+                    submittedData: dataValues,
+                    submissionDate: new Date(),
+                    lastModified: new Date()
+                };
+
+                // Store in conversation context (in a real app, this would be persisted)
+                // For now, we'll add it as metadata to the conversation
+                const submissionMessage = {
+                    type: 'data_submission_success',
+                    message: `✅ Data submitted successfully! ${dataValues.length} data values imported to DHIS2 data set "${submittedDataSet.dataSetName}".`,
+                    data: {
+                        dataSetId: submittedDataSet.dataSetId,
+                        dataSetName: submittedDataSet.dataSetName,
+                        submittedData: submittedDataSet.submittedData,
+                        submissionDate: submittedDataSet.submissionDate,
+                        followUpActions: [
+                            'update_data_set',
+                            'delete_data',
+                            'add_new_data',
+                            'view_data_set'
+                        ]
+                    }
+                };
+
                 this.addAssistantMessage(
-                    `✅ Data submitted successfully! ${dataValues.length} data values imported to DHIS2.`,
-                    'response'
+                    submissionMessage.message,
+                    'data_grid',
+                    submissionMessage.data
                 );
                 console.log('📤 DHIS2 submission successful:', response);
             } else {

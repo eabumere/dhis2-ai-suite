@@ -11,7 +11,8 @@ export interface ResolutionItem {
 }
 
 export interface AggregateDataGridProps {
-    headers: string[];
+    headers: string[]; // Technical field names for processing
+    displayHeaders?: string[]; // Human-readable header labels for display
     rows: any[][];
     resolutionState: [string, ResolutionItem][];
     resourceDetails?: Map<string, { exists: boolean; details?: any }>; // Batch validation results with COC details
@@ -366,7 +367,7 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                             }}>
                                 Row
                             </th>
-                            {headers.map((header, index) => (
+                            {(displayHeaders || headers).map((header, index) => (
                                 <th key={index} style={{
                                     padding: '12px 8px',
                                     borderBottom: '2px solid #dee2e6',

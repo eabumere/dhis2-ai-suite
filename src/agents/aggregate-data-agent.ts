@@ -171,6 +171,12 @@ const AggregateDataAnnotation = Annotation.Root({
         default: () => new Map()
     }),
 
+    // Display headers for human-readable column labels
+    displayHeaders: Annotation<string[]>({
+        reducer: (left, right) => right || left,
+        default: () => []
+    }),
+
     // Final result
     finalResult: Annotation<any>({
         reducer: (left, right) => right || left,
@@ -604,6 +610,7 @@ async function map_csv_headers(state: typeof AggregateDataAnnotation.State): Pro
 
         return {
             uploadedData: updatedData,
+            displayHeaders: mappingResult.displayLabels,
             resolutionState,
             uiAction: 'fetch_names' // Continue to fetch display names
         };
@@ -732,6 +739,7 @@ async function display_data_grid(state: typeof AggregateDataAnnotation.State): P
         message: 'Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.',
         data: {
             headers: state.uploadedData[0] || [],
+            displayHeaders: state.displayHeaders, // Human-readable column headers
             rows: state.uploadedData.slice(1) || [],
             resolutionState: Array.from(state.resolutionState.entries()),
             resourceDetails: resourceDetails, // Include batch validation results for enhanced tooltips
@@ -1459,9 +1467,27 @@ function isNameValue(value: string): boolean {
     return true;
 }
 
+// Generate human-readable display labels for DHIS2 field names
+function generateDisplayLabels(fieldMappings: (string | null)[]): string[] {
+    const fieldLabels: Record<string, string> = {
+        'dataElement': 'Data Element',
+        'orgUnit': 'Organisation Unit',
+        'period': 'Time Period',
+        'categoryOptionCombos': 'Category Option Combo',
+        'attributeOptionCombos': 'Attribute Option Combo',
+        'value': 'Value'
+    };
+
+    return fieldMappings.map(field => {
+        if (!field) return 'Unknown';
+        return fieldLabels[field] || field.charAt(0).toUpperCase() + field.slice(1);
+    });
+}
+
 // Use LLM to intelligently map CSV headers to DHIS2 required fields
 async function mapHeadersWithLLM(headers: string[], requiredFields: Record<string, string>): Promise<{
     mappings: (string | null)[];
+    displayLabels: string[];
     unmappedRequired: string[];
     confidence: 'high' | 'medium' | 'low';
 }> {
@@ -1528,8 +1554,12 @@ Where:
                 throw new Error('Invalid mappings array');
             }
 
+            // Generate display labels from the mappings
+            const displayLabels = generateDisplayLabels(result.mappings);
+
             return {
                 mappings: result.mappings,
+                displayLabels,
                 unmappedRequired: result.unmappedRequired || [],
                 confidence: result.confidence || 'medium'
             };
@@ -1548,6 +1578,7 @@ Where:
 // Fallback header mapping using regex patterns
 function fallbackHeaderMapping(headers: string[], requiredFields: Record<string, string>): {
     mappings: (string | null)[];
+    displayLabels: string[];
     unmappedRequired: string[];
     confidence: 'high' | 'medium' | 'low';
 } {
@@ -1581,11 +1612,15 @@ function fallbackHeaderMapping(headers: string[], requiredFields: Record<string,
         mappings.push(mappedField);
     });
 
+    // Generate display labels from the mappings
+    const displayLabels = generateDisplayLabels(mappings);
+
     // Find unmapped required fields
     const unmappedRequired = Object.keys(requiredFields).filter(field => !mappedFields.has(field));
 
     return {
         mappings,
+        displayLabels,
         unmappedRequired,
         confidence: 'low' // Fallback is always low confidence
     };

@@ -786,6 +786,9 @@ async function fetch_display_names(state: typeof AggregateDataAnnotation.State):
 // 3. Display data grid with current resolution status
 async function display_data_grid(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('📊 Aggregate Data Agent: Displaying data grid');
+    console.log('📊 Headers:', state.uploadedData[0]);
+    console.log('📊 Display Headers:', state.displayHeaders);
+    console.log('📊 Dataset:', state.dataSet);
 
     // If we have batch validation results, include them for enhanced tooltips
     let resourceDetails = undefined;
@@ -1545,7 +1548,7 @@ function isNameValue(value: string): boolean {
 }
 
 // Generate human-readable display labels for DHIS2 field names
-function generateDisplayLabels(fieldMappings: (string | null)[]): string[] {
+function generateDisplayLabels(fieldMappings: (string | null)[], originalHeaders: string[]): string[] {
     const fieldLabels: Record<string, string> = {
         'dataElement': 'Data Element',
         'orgUnit': 'Organisation Unit',
@@ -1555,8 +1558,8 @@ function generateDisplayLabels(fieldMappings: (string | null)[]): string[] {
         'value': 'Value'
     };
 
-    return fieldMappings.map(field => {
-        if (!field) return 'Unknown';
+    return fieldMappings.map((field, index) => {
+        if (!field) return originalHeaders[index] || 'Unknown'; // Use original header name instead of 'Unknown'
         return fieldLabels[field] || field.charAt(0).toUpperCase() + field.slice(1);
     });
 }
@@ -1632,7 +1635,7 @@ Where:
             }
 
             // Generate display labels from the mappings
-            const displayLabels = generateDisplayLabels(result.mappings);
+            const displayLabels = generateDisplayLabels(result.mappings, headers);
 
             return {
                 mappings: result.mappings,
@@ -1690,7 +1693,7 @@ function fallbackHeaderMapping(headers: string[], requiredFields: Record<string,
     });
 
     // Generate display labels from the mappings
-    const displayLabels = generateDisplayLabels(mappings);
+    const displayLabels = generateDisplayLabels(mappings, headers);
 
     // Find unmapped required fields
     const unmappedRequired = Object.keys(requiredFields).filter(field => !mappedFields.has(field));

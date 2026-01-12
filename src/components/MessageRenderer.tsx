@@ -120,12 +120,18 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                 );
 
             case 'data_grid':
+                console.log('🎨 MessageRenderer data_grid props:', {
+                    displayHeaders: message.data?.displayHeaders,
+                    headers: message.data?.headers,
+                    dataSetName: message.data?.dataSetName
+                });
                 return (
                     <div>
                         <div style={{ marginBottom: '8px' }}>{message.content}</div>
                         {message.data && (
                             <AggregateDataGrid
                                 headers={message.data.headers || []}
+                                displayHeaders={message.data.displayHeaders}
                                 rows={message.data.rows || []}
                                 resolutionState={message.data.resolutionState || []}
                                 resourceDetails={message.data.resourceDetails}

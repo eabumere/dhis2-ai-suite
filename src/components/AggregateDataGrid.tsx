@@ -47,6 +47,13 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     onUpdateDataSet,
     onAddRow
 }) => {
+    // Debug logging
+    console.log('🧩 AggregateDataGrid received props:', {
+        headers,
+        displayHeaders,
+        dataSetName,
+        dataSetId
+    });
     const [editingCell, setEditingCell] = useState<{row: number, col: number} | null>(null);
     const [editValue, setEditValue] = useState('');
 

@@ -196,6 +196,28 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
     const messages = state.messages || [];
     const userMessage = messages.filter(m => m.role === 'user').pop();
 
+    // Check if dataset is already resolved (continuation from selection)
+    const orchestrator = state.orchestrator as any;
+    if (orchestrator && orchestrator.currentUIState?.conversation) {
+        // Look for pre-resolved dataset in the conversation context
+        const selectionMessage = orchestrator.currentUIState.conversation
+            .filter((msg: any) => msg.type === 'data_set_selection' && msg.data?.selectedDataset)
+            .pop();
+
+        if (selectionMessage?.data?.selectedDataset) {
+            console.log('📊 Aggregate Data Agent: Dataset already resolved, continuing workflow');
+            return {
+                uploadedData: selectionMessage.data.uploadedData,
+                dataSet: {
+                    id: selectionMessage.data.selectedDataset.id,
+                    name: selectionMessage.data.selectedDataset.name,
+                    resolved: true
+                },
+                uiAction: 'map_headers'
+            };
+        }
+    }
+
     if (!userMessage || !userMessage.content) {
         return {
             finalResult: {
@@ -238,20 +260,27 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
         }
     }
 
-    // If no CSV file found, but this is a data entry request, show empty grid
+    // Prepare data structure (either from CSV or empty grid)
+    let headers: string[];
+    let dataRows: string[][];
+
     if (!hasCSVFile || !csvData) {
-        console.log('📊 Aggregate Data Agent: No CSV file found, showing empty data entry grid');
+        console.log('📊 Aggregate Data Agent: No CSV file found, preparing empty data entry grid');
 
         // Create empty grid with expected column structure
-        const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
-        const emptyRows: string[][] = []; // Start with no data rows
-
-        return {
-            uploadedData: [headers, ...emptyRows],
-            resolutionState: new Map(),
-            uiAction: 'show_data_grid'
-        };
+        headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+        dataRows = []; // Start with no data rows
+    } else {
+        console.log('📊 Aggregate Data Agent: CSV file found, parsing data');
+        headers = csvData[0];
+        dataRows = csvData.slice(1);
     }
+
+    return {
+        uploadedData: [headers, ...dataRows],
+        resolutionState: new Map(),
+        uiAction: 'resolve_data_set'
+    };
 
     // CSV file was found, parse and validate it
     try {
@@ -307,42 +336,76 @@ async function resolve_data_set(state: typeof AggregateDataAnnotation.State): Pr
         };
     }
 
-    // Extract data set name using LLM
-    const dataSetName = await extractDataSetNameFromPrompt(userMessage.content);
-    console.log('📋 Extracted data set name from prompt:', dataSetName);
+    // Extract data set name using LLM - collect text from all user messages, excluding file content
+    const userMessages = messages.filter(m => m.role === 'user');
+    let combinedUserText = '';
 
-    if (!dataSetName) {
-        return {
-            finalResult: {
-                success: false,
-                error: 'Could not identify a data set name from your request. Please specify which data set you want to submit data to (e.g., "HIV Monthly Report", "Malaria Surveillance").'
+    for (const msg of userMessages) {
+        let messageText = msg.content || '';
+
+        // Remove file content from this message if present
+        if (messageText.includes('File:') && messageText.includes('Content:')) {
+            const fileStart = messageText.indexOf('File:');
+            if (fileStart > 0) {
+                // Keep only the text before the file content
+                messageText = messageText.substring(0, fileStart).trim();
+            } else {
+                // File content is the entire message, skip it
+                messageText = '';
             }
-        };
+        }
+
+        // Add this message's text to the combined text
+        if (messageText.trim()) {
+            combinedUserText += (combinedUserText ? ' ' : '') + messageText.trim();
+        }
     }
 
+    const dataSetName = await extractDataSetNameFromPrompt(combinedUserText);
+    console.log('📋 Extracted data set name from user prompt:', dataSetName);
+
     try {
-        // Search for data sets matching the extracted name
-        const searchResult = await searchDhis2DataSets.invoke({
-            query: dataSetName,
-            limit: 10
-        });
+        let dataSets: any[] = [];
+        let searchQuery = dataSetName;
 
-        const parsedResult = JSON.parse(searchResult);
-        const dataSets = parsedResult.results || [];
+        if (dataSetName) {
+            // Search for data sets matching the extracted name
+            const searchResult = await searchDhis2DataSets.invoke({
+                query: dataSetName,
+                limit: 10
+            });
 
-        console.log(`📋 Found ${dataSets.length} data set matches for "${dataSetName}"`);
+            const parsedResult = JSON.parse(searchResult);
+            dataSets = parsedResult.results || [];
+            console.log(`📋 Found ${dataSets.length} data set matches for "${dataSetName}"`);
+        } else {
+            // No specific name extracted - search for all available datasets
+            console.log('📋 No specific data set name extracted, searching for all available datasets');
+            const searchResult = await searchDhis2DataSets.invoke({
+                query: '', // Empty query to get all datasets
+                limit: 50 // Get more datasets for selection
+            });
+
+            const parsedResult = JSON.parse(searchResult);
+            dataSets = parsedResult.results || [];
+            console.log(`📋 Found ${dataSets.length} total available data sets`);
+            searchQuery = 'all available datasets';
+        }
 
         if (dataSets.length === 0) {
             return {
                 finalResult: {
                     success: false,
-                    error: `No data sets found matching "${dataSetName}". Please check the data set name or ensure it exists in DHIS2.`
+                    error: 'No data sets found in DHIS2. Please ensure data sets have been created before submitting data.'
                 }
             };
         } else if (dataSets.length === 1) {
             // Single match - auto-resolve
             const dataSet = dataSets[0];
-            console.log(`📋 Auto-resolving to single data set match: ${dataSet.name} (ID: ${dataSet.id})`);
+            console.log(`📋 Auto-resolving to single data set: ${dataSet.name} (ID: ${dataSet.id})`);
+
+            // Check if we have CSV data (more than just header row)
+            const hasCsvData = state.uploadedData.length > 1 && state.uploadedData.slice(1).some(row => row.some(cell => cell && cell.trim()));
 
             return {
                 dataSet: {
@@ -350,23 +413,25 @@ async function resolve_data_set(state: typeof AggregateDataAnnotation.State): Pr
                     name: dataSet.name || dataSet.displayName,
                     resolved: true
                 },
-                uiAction: 'map_headers'
+                uiAction: hasCsvData ? 'map_headers' : 'show_data_grid'
             };
         } else {
             // Multiple matches - show selection UI
-            console.log(`📋 Multiple data set matches found for "${dataSetName}", showing selection`);
+            console.log(`📋 Multiple data sets found, showing selection from ${dataSets.length} options`);
 
             const selectionMessage = {
                 type: 'data_set_selection',
-                message: `Multiple data sets found matching "${dataSetName}". Please select the correct data set:`,
+                message: `Please select the data set you want to submit data to:`,
                 data: {
-                    searchQuery: dataSetName,
+                    searchQuery: searchQuery,
                     options: dataSets.map(ds => ({
                         id: ds.id,
                         name: ds.name || ds.displayName,
                         description: ds.description || `Data set ${ds.id}`
                     })),
-                    allowMultiple: false
+                    allowMultiple: false,
+                    // Include uploaded data so orchestrator can continue workflow
+                    uploadedData: state.uploadedData
                 }
             };
 
@@ -736,7 +801,7 @@ async function display_data_grid(state: typeof AggregateDataAnnotation.State): P
 
     const dataGridMessage = {
         type: 'data_grid',
-        message: 'Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.',
+        message: `Data set "${state.dataSet?.name || 'Unknown'}" selected. Review and manage your uploaded aggregate data. Resolve any names to IDs before submission.`,
         data: {
             headers: state.uploadedData[0] || [],
             displayHeaders: state.displayHeaders, // Human-readable column headers
@@ -744,6 +809,8 @@ async function display_data_grid(state: typeof AggregateDataAnnotation.State): P
             resolutionState: Array.from(state.resolutionState.entries()),
             resourceDetails: resourceDetails, // Include batch validation results for enhanced tooltips
             displayNames: displayNames, // Include display names for showing names in cells
+            dataSetId: state.dataSet?.id, // Include dataset ID for submission
+            dataSetName: state.dataSet?.name, // Include dataset name for display
             actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
         }
     };
@@ -981,6 +1048,16 @@ async function validate_and_submit(state: typeof AggregateDataAnnotation.State):
     const headers = state.uploadedData[0];
     const dataRows = state.uploadedData.slice(1);
     const processedData: AggregatedDataValue[] = [];
+
+    // Check if data set is resolved
+    if (!state.dataSet || !state.dataSet.resolved) {
+        return {
+            finalResult: {
+                success: false,
+                error: 'No data set selected. Please select a data set before submitting data.'
+            }
+        };
+    }
 
     // Check if all resolutions are complete
     const unresolvedItems = Array.from(state.resolutionState.values()).filter(item => item.status !== 'resolved');
@@ -1825,6 +1902,7 @@ aggregateDataWorkflow.addEdge(START, 'parse_csv_upload');
 // @ts-ignore
 aggregateDataWorkflow.addConditionalEdges('parse_csv_upload', (state) => {
     if (state.uiAction === 'resolve_data_set') return 'resolve_data_set';
+    if (state.uiAction === 'map_headers') return 'map_csv_headers';
     if (state.uiAction === 'show_data_grid') return 'display_data_grid';
     return END;
 });
@@ -1895,7 +1973,7 @@ aggregateDataWorkflow.addEdge('validate_and_submit', END);
 
 
 // Compile the workflow
-const aggregateDataStateGraph = aggregateDataWorkflow.compile();
+export const aggregateDataStateGraph = aggregateDataWorkflow.compile();
 
 // Full-featured aggregate data agent using StateGraph workflow
 export function createAggregateDataAgent(orchestrator: any) {

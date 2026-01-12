@@ -219,7 +219,7 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                 marginBottom: '16px'
             }}>
                 <h3 style={{ margin: 0, color: '#495057' }}>
-                    {isExistingData ? `${dataSetName || 'Data Set'} (${rows.length} rows)` : `Aggregate Data Upload (${rows.length} rows)`}
+                    {dataSetName ? `${dataSetName} (${rows.length} rows)` : `Aggregate Data Upload (${rows.length} rows)`}
                 </h3>
                 <div style={{
                     display: 'flex',

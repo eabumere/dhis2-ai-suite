@@ -21,7 +21,8 @@ export interface ConversationMessage {
     content: string;
     attachments?: FileAttachment[];
     data?: any;
-    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection' | 'tracker_processing_complete';
+    type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection'
+	    | 'tracker_processing_complete' | 'data_set_selection';
 }
 
 export interface WorkflowUIState {
@@ -607,6 +608,17 @@ class WorkflowOrchestrator {
             );
         }
 
+        // Check if this is a dataset selection
+        if (dataEntryResult.type === 'data_set_selection' && dataEntryResult.data) {
+            const content = dataEntryResult.message || 'Please select a data set';
+
+            return this.addAssistantMessage(
+                content,
+                'data_set_selection',
+                dataEntryResult.data
+            );
+        }
+
         // Check if this is a resolution error
         if (dataEntryResult.type === 'resolution_error' && dataEntryResult.data) {
             const content = dataEntryResult.message || 'Error resolving data entry field';
@@ -760,7 +772,7 @@ class WorkflowOrchestrator {
         }
 
         // Check for other specialized result types
-        if (result?.type === 'data_grid' || result?.type === 'resolution_selection' || result?.type === 'resolution_error') {
+        if (result?.type === 'data_grid' || result?.type === 'resolution_selection' || result?.type === 'resolution_error' || result?.type === 'data_set_selection') {
             console.log('📊 Detected specialized data entry result, calling requestDataEntryRender');
             this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
             return;
@@ -797,6 +809,137 @@ class WorkflowOrchestrator {
         });
     }
 
+    // Handle dataset selection from data_set_selection UI
+    handleDatasetSelection(selectedDatasets: any) {
+        console.log('📋 Handling dataset selection:', selectedDatasets);
+
+        // Handle array format (MetadataSelector returns array even for single select)
+        const selectedDataset = Array.isArray(selectedDatasets) ? selectedDatasets[0] : selectedDatasets;
+
+        if (!selectedDataset) {
+            console.warn('No dataset selected');
+            return;
+        }
+
+        // Find the data_set_selection message in the conversation
+        const datasetSelectionMessage = this.currentUIState.conversation
+            .filter(msg => msg.type === 'data_set_selection')
+            .pop();
+
+        if (!datasetSelectionMessage) {
+            console.warn('No data_set_selection message found in conversation');
+            return;
+        }
+
+        // Update the conversation with the selected dataset
+        const updatedMessage = {
+            ...datasetSelectionMessage,
+            data: {
+                ...datasetSelectionMessage.data,
+                selectedDataset: selectedDataset
+            }
+        };
+
+        const updatedConversation = this.currentUIState.conversation.map(msg =>
+            msg.id === datasetSelectionMessage.id ? updatedMessage : msg
+        );
+
+        this.updateUIState({
+            conversation: updatedConversation
+        });
+
+        // Add confirmation message
+        this.addAssistantMessage(
+            `Selected data set: ${selectedDataset.name}`,
+            'response'
+        );
+
+        // Continue the workflow using the state graph properly
+        // Restart the aggregate workflow with the selected dataset already resolved
+
+        if (datasetSelectionMessage?.data?.uploadedData && datasetSelectionMessage.data.uploadedData.length > 0) {
+            // We have CSV data - restart the workflow with dataset resolved
+            console.log('📋 Dataset selected, restarting workflow with resolved dataset for CSV processing');
+
+            // Import the workflow graph directly to avoid circular dependencies
+            import('../agents/aggregate-data-agent').then((module) => {
+                // Access the compiled workflow graph directly
+                const aggregateDataStateGraph = (module as any).aggregateDataStateGraph;
+
+                if (!aggregateDataStateGraph) {
+                    console.error('❌ Could not access aggregate data workflow graph');
+                    return;
+                }
+
+                // Create initial state with resolved dataset
+                const initialState = {
+                    messages: this.currentUIState.conversation.filter(msg => msg.role === 'user'),
+                    orchestrator: this,
+                    uploadedData: datasetSelectionMessage.data.uploadedData,
+                    resolutionState: new Map(),
+                    currentResolution: null,
+                    processedData: [],
+                    uiAction: '',
+                    resourceDetails: new Map(),
+                    displayNames: new Map(),
+                    dataSet: {
+                        id: selectedDataset.id,
+                        name: selectedDataset.name,
+                        resolved: true
+                    },
+                    submittedDataSets: new Map(),
+                    displayHeaders: [],
+                    finalResult: null
+                };
+
+                // Execute the workflow starting from map_headers (skipping dataset resolution)
+                aggregateDataStateGraph.invoke(initialState).then((result: any) => {
+                    console.log('📋 Workflow continuation completed:', result);
+
+                    // Handle the final result
+                    if (result?.finalResult) {
+                        this.requestDataEntryRender(result.finalResult, 'Data set selection continuation');
+                        // Reset UI state
+                        this.updateUIState({
+                            showProcessing: false,
+                            showQueryInput: true,
+                            queryEnabled: true,
+                            showError: false
+                        });
+                    }
+                }).catch((error: any) => {
+                    console.error('❌ Workflow continuation failed:', error);
+                    this.updateUIState({
+                        showError: true,
+                        errorMessage: error.message,
+                        showProcessing: false
+                    });
+                });
+            }).catch((error) => {
+                console.error('❌ Failed to import aggregate data agent:', error);
+                this.addAssistantMessage(
+                    '❌ Failed to process data set selection. Please try again.',
+                    'error'
+                );
+            });
+        } else {
+            // No uploaded data - show empty grid for manual entry
+            console.log('📋 Dataset selected, showing empty data grid for manual entry');
+            this.requestDataEntryRender({
+                type: 'data_grid',
+                message: `Data set "${selectedDataset.name}" selected. You can now manually enter data or upload a CSV file.`,
+                data: {
+                    headers: ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'],
+                    rows: [],
+                    resolutionState: [],
+                    actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit', 'add_row'],
+                    dataSetId: selectedDataset.id,
+                    dataSetName: selectedDataset.name
+                }
+            }, 'Manual data entry');
+        }
+    }
+
     // Handle data grid interactions
     handleDataGridInteraction(interaction: any) {
         console.log('📊 Handling data grid interaction:', interaction);
@@ -815,7 +958,7 @@ class WorkflowOrchestrator {
 
             case 'edit_cell':
                 console.log('✏️ Editing cell:', data.rowIndex, data.colIndex, data.newValue);
-                // Update the data in the conversation message
+                // Update the data grid cell
                 this.updateDataGridCell(data.rowIndex, data.colIndex, data.newValue);
                 this.addAssistantMessage(
                     `Updated cell (${data.rowIndex + 1}, ${data.colIndex + 1}) to: ${data.newValue}`,
@@ -960,14 +1103,16 @@ class WorkflowOrchestrator {
         );
 
         try {
-            // Get the resolved data set from the aggregate data agent
-            // We need to find the dataSet from the conversation or state
+            // Get the resolved data set from the data grid
+            // Look for dataSetId in the data grid message
             let dataSetId: string | null = null;
+            let dataSetName: string = 'Unknown Data Set';
 
-            // Look for dataSet in the conversation messages
+            // Look for dataSetId in the conversation messages (data_grid type)
             for (const message of this.currentUIState.conversation) {
-                if (message.data?.dataSet?.id) {
-                    dataSetId = message.data.dataSet.id;
+                if (message.type === 'data_grid' && message.data?.dataSetId) {
+                    dataSetId = message.data.dataSetId;
+                    dataSetName = message.data.dataSetName || dataSetName;
                     break;
                 }
             }
@@ -1087,6 +1232,38 @@ class WorkflowOrchestrator {
                 'error'
             );
         }
+    }
+
+    // Generate human-readable display headers from raw DHIS2 field names
+    private generateDisplayHeaders(rawHeaders: string[]): string[] {
+        const fieldLabels: Record<string, string> = {
+            'dataelement': 'Data Element',
+            'dataElement': 'Data Element',
+            'orgunit': 'Organisation Unit',
+            'orgUnit': 'Organisation Unit',
+            'organisationunit': 'Organisation Unit',
+            'organisationUnit': 'Organisation Unit',
+            'period': 'Time Period',
+            'categoryoptioncombo': 'Category Option Combo',
+            'categoryOptionCombo': 'Category Option Combo',
+            'categoryoptioncombos': 'Category Option Combo',
+            'categoryOptionCombos': 'Category Option Combo',
+            'attributeoptioncombo': 'Attribute Option Combo',
+            'attributeOptionCombo': 'Attribute Option Combo',
+            'attributeoptioncombos': 'Attribute Option Combo',
+            'attributeOptionCombos': 'Attribute Option Combo',
+            'value': 'Value',
+            'storedby': 'Stored By',
+            'lastupdated': 'Last Updated',
+            'comment': 'Comment',
+            'followup': 'Follow Up',
+            'deleted': 'Deleted'
+        };
+
+        return rawHeaders.map(header => {
+            const lowerHeader = header.toLowerCase();
+            return fieldLabels[lowerHeader] || fieldLabels[header] || header;
+        });
     }
 
     // Get current UI state

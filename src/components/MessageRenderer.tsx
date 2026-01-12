@@ -218,6 +218,38 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                     </div>
                 );
 
+            case 'data_set_selection':
+                return (
+                    <div>
+                        <div style={{ marginBottom: '8px' }}>{message.content}</div>
+                        {message.data?.options && (
+                            <div style={{
+                                backgroundColor: 'white',
+                                padding: '12px',
+                                borderRadius: '4px',
+                                maxWidth: '600px',
+                                border: '1px solid #e0e0e0'
+                            }}>
+                                <MetadataSelector
+                                    selectionOptions={message.data.options.map((opt: any) => ({
+                                        id: opt.id,
+                                        name: opt.name,
+                                        description: opt.description,
+                                        type: 'dataSet' as any
+                                    }))}
+                                    originalQuery={message.data.searchQuery || ''}
+                                    onSelection={(selected) => {
+                                        console.log('Dataset selection made:', selected);
+                                        // Handle dataset selection through orchestrator
+                                        workflowOrchestrator.handleDatasetSelection(selected);
+                                    }}
+                                    allowMultiple={false}
+                                />
+                            </div>
+                        )}
+                    </div>
+                );
+
             default:
                 return <div>{message.content}</div>;
         }

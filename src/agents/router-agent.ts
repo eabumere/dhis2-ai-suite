@@ -231,7 +231,7 @@ async function invoke_data_entry_router(state: typeof RouterAnnotation.State): P
 	try {
 		const dataEntryAgent = createRoutedDataEntryAgent(state.orchestrator);
 		const result = await dataEntryAgent.invoke({
-			messages: [{ role: 'user', content: state.originalQuery }]
+			messages: state.messages
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;

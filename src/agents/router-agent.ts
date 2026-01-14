@@ -39,6 +39,24 @@ const RouterAnnotation = Annotation.Root({
 	}),
 });
 
+/**
+ * Strip file content from query text to prevent sending binary data to LLM
+ * This prevents security issues where sensitive file data gets sent to AI models
+ */
+function stripFileContent(query: string): string {
+	if (!query || typeof query !== 'string') {
+		return query;
+	}
+
+	// Remove file content sections that follow the pattern:
+	// File: filename.ext
+	// Content:
+	// [binary/file data]
+	const fileContentPattern = /File:\s*[^\n]+\nContent:\n[\s\S]*$/;
+
+	return query.replace(fileContentPattern, '').trim();
+}
+
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
@@ -46,8 +64,10 @@ const model = ChatModels.createAgentModel();
 
 // 1. LLM-based workflow classification with clarification
 async function classify_intent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
-	console.log('🤖 Router: Classifying workflow type for query:', query);
+	const rawQuery = state.messages.filter(m => m.role === 'user').pop()?.content || '';
+	// Strip file content from query to prevent sending binary data to LLM
+	const query = stripFileContent(rawQuery);
+	console.log('🤖 Router: Classifying workflow type for query (file content stripped):', query);
 
 	// Generate multiple interpretations for clarification service
 	const interpretations = await generateIntentInterpretations(query);

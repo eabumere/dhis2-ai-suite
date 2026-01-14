@@ -14,6 +14,16 @@ export interface FileAttachment {
     preview?: string;
 }
 
+export interface FileRegistryEntry {
+    id: string;
+    name: string;
+    size: number;
+    type: string;
+    content: Uint8Array | string; // Raw file content
+    uploadedAt: number;
+    lastAccessed?: number;
+}
+
 export interface ConversationMessage {
     id: string;
     timestamp: number;
@@ -81,6 +91,7 @@ export interface ComprehensiveWorkflowCallbacks {
 class WorkflowOrchestrator {
     private activeWorkflows = new Map<string, any>();
     private uiCallbacks: ComprehensiveWorkflowCallbacks | null = null;
+    private fileRegistry = new Map<string, FileRegistryEntry>();
     private currentUIState: WorkflowUIState = {
         showQueryInput: true,
         queryText: '',
@@ -138,6 +149,15 @@ class WorkflowOrchestrator {
 
         console.log(`🏁 Starting workflow ${workflowId} for ${flowType}`);
 
+        // Process messages to convert file content to references
+        const processedInput = {
+            ...input,
+            input: {
+                ...input.input,
+                messages: this.processMessagesForFileReferences(input.input?.messages || [])
+            }
+        };
+
         // Notify UI of workflow start
         this.uiCallbacks?.onWorkflowStart(workflowId, flowType);
         this.updateUIState({
@@ -152,10 +172,10 @@ class WorkflowOrchestrator {
             flowType,
             status: 'running',
             startTime: Date.now(),
-            input
+            input: processedInput
         });
 
-        let currentInput = { ...input };
+        let currentInput = { ...processedInput };
         let maxIterations = 5; // Prevent infinite loops
         let iterationCount = 0;
 
@@ -1063,6 +1083,113 @@ class WorkflowOrchestrator {
         this.updateUIState({
             conversation: updatedConversation
         });
+    }
+
+    // File management methods for proper file handling
+
+    // Register a file in the orchestrator's file registry
+    registerFile(fileId: string, content: Uint8Array | string, metadata: {
+        name: string;
+        type: string;
+        size: number;
+    }): void {
+        const entry: FileRegistryEntry = {
+            id: fileId,
+            name: metadata.name,
+            type: metadata.type,
+            size: metadata.size,
+            content: content,
+            uploadedAt: Date.now()
+        };
+
+        this.fileRegistry.set(fileId, entry);
+        console.log(`📁 Registered file: ${fileId} (${metadata.size} bytes)`);
+    }
+
+    // Get file content by ID
+    getFile(fileId: string): FileRegistryEntry | null {
+        const entry = this.fileRegistry.get(fileId);
+        if (entry) {
+            entry.lastAccessed = Date.now();
+        }
+        return entry || null;
+    }
+
+    // Check if file exists
+    hasFile(fileId: string): boolean {
+        return this.fileRegistry.has(fileId);
+    }
+
+    // List all registered files
+    listFiles(): FileRegistryEntry[] {
+        return Array.from(this.fileRegistry.values());
+    }
+
+    // Remove a file from registry
+    removeFile(fileId: string): boolean {
+        const removed = this.fileRegistry.delete(fileId);
+        if (removed) {
+            console.log(`🗑️ Removed file: ${fileId}`);
+        }
+        return removed;
+    }
+
+    // Convert file content in messages to file references
+    processMessagesForFileReferences(messages: any[]): any[] {
+        return messages.map(message => {
+            if (message.role === 'user' && message.content && typeof message.content === 'string') {
+                // Check if message contains file content
+                const fileContentMatch = message.content.match(/File:\s*([^\n]+)\nContent:\n([\s\S]*)$/);
+                if (fileContentMatch) {
+                    const [, filename, fileContent] = fileContentMatch;
+
+                    // Generate file ID
+                    const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+                    // Register file in orchestrator
+                    this.registerFile(fileId, fileContent, {
+                        name: filename,
+                        type: this.getFileTypeFromName(filename),
+                        size: fileContent.length
+                    });
+
+                    // Replace file content with reference
+                    const processedMessage = {
+                        ...message,
+                        content: message.content.replace(
+                            /File:\s*[^\n]+\nContent:\n[\s\S]*$/,
+                            `file:${fileId}`
+                        ),
+                        attachments: [{
+                            id: fileId,
+                            name: filename,
+                            type: this.getFileTypeFromName(filename),
+                            size: fileContent.length
+                        }]
+                    };
+
+                    console.log(`🔄 Converted file content to reference: ${filename} → ${fileId}`);
+                    return processedMessage;
+                }
+            }
+            return message;
+        });
+    }
+
+    // Get MIME type from filename
+    private getFileTypeFromName(filename: string): string {
+        const ext = filename.toLowerCase().split('.').pop() || '';
+        const mimeTypes: Record<string, string> = {
+            'pdf': 'application/pdf',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'csv': 'text/csv',
+            'txt': 'text/plain',
+            'json': 'application/json'
+        };
+        return mimeTypes[ext] || 'application/octet-stream';
     }
 
     // Submit data to DHIS2

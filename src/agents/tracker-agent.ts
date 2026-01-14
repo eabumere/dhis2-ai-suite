@@ -153,28 +153,54 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
         };
     }
 
-    // Check for file content in messages
+    // Check for file references in messages (e.g., "file:abc123")
     let fileBuffer: Uint8Array | null = null;
     let filename = 'uploaded_document.pdf';
 
-    // Look for file content in user messages
+    // Look for file references in user messages
     for (const message of messages) {
-        if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
-            // Extract file content from message
-            const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
-            if (contentMatch) {
-                try {
-                    // Convert base64 to Uint8Array for browser compatibility
-                    const base64Data = contentMatch[1].trim();
-                    const binaryString = atob(base64Data);
-                    const bytes = new Uint8Array(binaryString.length);
-                    for (let i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
+        if (message.role === 'user' && message.content) {
+            // Check for file reference pattern (e.g., "file:abc123")
+            const fileRefMatch = message.content.match(/file:([a-zA-Z0-9_-]+)/);
+            if (fileRefMatch) {
+                const fileId = fileRefMatch[1];
+
+                // Request file content from orchestrator
+                if (state.orchestrator && typeof state.orchestrator.getFile === 'function') {
+                    const fileEntry = state.orchestrator.getFile(fileId);
+                    if (fileEntry && fileEntry.content) {
+                        fileBuffer = typeof fileEntry.content === 'string'
+                            ? new TextEncoder().encode(fileEntry.content)
+                            : fileEntry.content as Uint8Array;
+                        filename = fileEntry.name;
+                        console.log(`📄 Tracker Data Agent: Retrieved file from orchestrator: ${filename} (${fileBuffer.length} bytes)`);
+                        break;
+                    } else {
+                        console.warn(`📄 Tracker Data Agent: File reference ${fileId} not found in orchestrator`);
                     }
-                    fileBuffer = bytes;
-                    console.log('📄 Tracker Data Agent: Found file content in message');
-                } catch (error) {
-                    console.warn('📄 Tracker Data Agent: Failed to parse file content:', error);
+                } else {
+                    console.warn('📄 Tracker Data Agent: Orchestrator does not support file retrieval');
+                }
+            }
+
+            // Fallback: Look for legacy file content (for backward compatibility)
+            if (!fileBuffer && message.content.includes('File:') && message.content.includes('Content:')) {
+                const contentMatch = message.content.match(/File:\s*([^\n]+)\nContent:\n([\s\S]*)$/);
+                if (contentMatch) {
+                    const [, extractedFilename, fileContent] = contentMatch;
+                    try {
+                        // Convert content to Uint8Array
+                        const binaryString = typeof fileContent === 'string' ? fileContent : String(fileContent);
+                        const bytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            bytes[i] = binaryString.charCodeAt(i);
+                        }
+                        fileBuffer = bytes;
+                        filename = extractedFilename;
+                        console.log('📄 Tracker Data Agent: Found legacy file content in message');
+                    } catch (error) {
+                        console.warn('📄 Tracker Data Agent: Failed to parse legacy file content:', error);
+                    }
                 }
             }
         }
@@ -189,7 +215,7 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
         };
     }
 
-    console.log(`📄 Tracker Data Agent: Document uploaded: ${filename} (${fileBuffer.length} bytes)`);
+    console.log(`📄 Tracker Data Agent: Document ready for processing: ${filename} (${fileBuffer.length} bytes)`);
 
     return {
         uploadedDocument: {

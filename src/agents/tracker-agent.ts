@@ -1,7 +1,5 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { HumanMessage } from '@langchain/core/messages';
-import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { ChatModels } from '../utils/chat-model-factory';
 import {
     // Tracker data processing tools
     processScannedRegister,
@@ -136,9 +134,6 @@ const TrackerDataAnnotation = Annotation.Root({
         default: () => null
     }),
 });
-
-// Initialize the ChatOpenAI model with Azure configuration
-const model = ChatModels.createAgentModel();
 
 // StateGraph Workflow Nodes
 
@@ -575,101 +570,3 @@ export function createTrackerDataAgent(orchestrator: any) {
         }
     };
 }
-
-// Legacy React Agent for backward compatibility (used for metadata management)
-export const trackerAgent = createReactAgent({
-  llm: model,
-  tools: [
-    // Creation tools
-    createDhis2Program,
-    createDhis2TrackedEntityType,
-    createDhis2TrackedEntityAttribute,
-    createDhis2TrackedEntityInstance,
-    createDhis2Enrollment,
-    createDhis2ProgramStage,
-    createDhis2ProgramRule,
-    createDhis2ProgramIndicator,
-    createDhis2RelationshipType,
-    createDhis2Relationship,
-    createDhis2Event,
-    createDhis2OrganisationUnit,
-    createDhis2OptionSet,
-    createDhis2AggregatedMetadata,
-
-    // Update tools
-    updateDhis2Program,
-    updateDhis2TrackedEntityType,
-    updateDhis2TrackedEntityAttribute,
-    updateDhis2TrackedEntityInstance,
-    updateDhis2Enrollment,
-    updateDhis2ProgramStage,
-    updateDhis2ProgramRule,
-    updateDhis2ProgramIndicator,
-    updateDhis2RelationshipType,
-    updateDhis2Relationship,
-    updateDhis2Event,
-    updateDhis2OrganisationUnit,
-    updateDhis2OptionSet,
-
-    // Utility tools
-    resolveResourceReference,
-  ],
-  prompt: `
-    You are a specialized DHIS2 tracker metadata management agent. You handle the creation and configuration of tracker programs, tracked entity types, attributes, and program structures.
-
-    ## CORE CAPABILITIES
-
-    ### TRACKER METADATA MANAGEMENT
-    - **Tracker Programs**: Create and configure programs with programType 'WITH_REGISTRATION'
-    - **Tracked Entity Types**: Define entity types (Person, Patient, Equipment, etc.)
-    - **Tracked Entity Attributes**: Configure profile data fields with appropriate value types
-    - **Program Stages**: Define workflow steps and visit types
-    - **Program Rules**: Set up conditional logic and validation
-
-    ### METADATA OPERATIONS
-    - Create tracker program structures
-    - Configure entity attributes and relationships
-    - Set up program workflows and stages
-    - Manage option sets and validation rules
-
-    ## WORKFLOW PRINCIPLES
-
-    1. **Program Setup**: Start with program creation and tracked entity type configuration
-    2. **Attribute Definition**: Define all required tracked entity attributes
-    3. **Stage Configuration**: Set up program stages for the workflow
-    4. **Rule Configuration**: Add program rules for conditional logic
-    5. **Testing**: Validate the complete program structure
-
-    ## RESOURCE-SPECIFIC RULES
-
-    ### Programs
-    - programType: 'WITH_REGISTRATION' (required for tracker)
-    - Specify trackedEntityType for the entities in this program
-    - Include programStages defining the workflow
-    - Set organisationUnits and enrollment settings
-
-    ### Tracked Entity Types
-    - Define the entity being tracked (Person, Patient, Contact, etc.)
-    - Include trackedEntityAttributes for profile data
-    - Configure feature types (POINT, POLYGON for geospatial tracking)
-
-    ### Tracked Entity Attributes
-    - Set valueType appropriately (TEXT, NUMBER, DATE, etc.)
-    - Configure uniqueness and validation
-    - Define option sets for constrained values
-
-    ## RESPONSE FORMAT
-
-    Always return JSON responses for operations:
-
-    {
-      "success": boolean,
-      "message": string,
-      "data": object,
-      "results": array,
-      "error": string
-    }
-
-    Use natural language only when seeking clarification about program requirements or entity structures.
-  `,
-});

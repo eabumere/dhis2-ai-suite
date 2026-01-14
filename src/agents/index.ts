@@ -4,7 +4,7 @@ export { crudAgent } from './crud-agent';
 export { analyticsGraphAgent } from './analytics-graph-agent';
 export { aggregateDataAgent, createAggregateDataAgent } from './aggregate-data-agent';
 export { eventsAgent } from './events-agent';
-export { trackerAgent, createTrackerDataAgent } from './tracker-agent';
+export { createTrackerDataAgent } from './tracker-agent';
 export { createRoutedDataEntryAgent } from './routed-data-entry-agent';
 
 // Export state annotation

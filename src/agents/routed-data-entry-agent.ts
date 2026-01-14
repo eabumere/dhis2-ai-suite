@@ -3,7 +3,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { ChatModels } from '../utils/chat-model-factory';
 import { createAggregateDataAgent } from './aggregate-data-agent';
 import { eventsAgent } from './events-agent';
-import { trackerAgent } from './tracker-agent';
+import { createTrackerDataAgent } from './tracker-agent';
 import { addConversation, createMutationDataContext } from '../utils/conversation-context';
 
 // Define Router State - tracks workflow context and orchestrator reference
@@ -208,11 +208,13 @@ async function invoke_events_agent(state: typeof DataEntryRouterAnnotation.State
 
 // 5. Route to tracker agent
 async function invoke_tracker_agent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
-	console.log('👤 Data Entry Router: Routing to tracker agent');
+	console.log('👤 Data Entry Router: Routing to tracker StateGraph agent');
 
 	try {
-		const result = await trackerAgent.invoke({
-			messages: [{ role: 'user', content: state.originalQuery }]
+		// Use the StateGraph-based agent for document processing workflows
+		const trackerDataAgent = createTrackerDataAgent(state.orchestrator);
+		const result = await trackerDataAgent.invoke({
+			messages: state.messages
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;
@@ -223,19 +225,14 @@ async function invoke_tracker_agent(state: typeof DataEntryRouterAnnotation.Stat
 			parsedResponse = { rawResponse: responseContent };
 		}
 
-		// Add to conversation context
-		if (parsedResponse.success !== false) {
-			const dataContext = createMutationDataContext('creation', parsedResponse);
-			addConversation(state.originalQuery, 'data_entry_tracker', parsedResponse, dataContext);
-		} else {
-			addConversation(state.originalQuery, 'data_entry_tracker', parsedResponse);
-		}
+		// Note: Conversation context is handled by the StateGraph agent
+		// The tracker data processing UI is handled by the orchestrator
 
 		return {
 			finalResult: parsedResponse
 		};
 	} catch (error) {
-		console.error('👤 Data Entry Router: Tracker agent error:', error);
+		console.error('👤 Data Entry Router: Tracker StateGraph agent error:', error);
 		const errorResponse = {
 			success: false,
 			error: `Tracker data entry failed: ${error.message}`

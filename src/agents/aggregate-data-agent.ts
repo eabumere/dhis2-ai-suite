@@ -193,28 +193,74 @@ const model = ChatModels.createAgentModel();
 async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('📊 Aggregate Data Agent: Processing data entry request');
 
+    // First, check if dataset is already resolved in the workflow state (from programmatic restart)
+    if (state.dataSet?.resolved && state.uploadedData && state.uploadedData.length > 0) {
+        console.log('📊 Aggregate Data Agent: Dataset already resolved in workflow state, proceeding with header mapping');
+
+        // Check if we have actual data rows (not just headers)
+        const hasDataRows = state.uploadedData.length > 1 &&
+            state.uploadedData.slice(1).some(row =>
+                row && Array.isArray(row) && row.some(cell =>
+                    cell && typeof cell === 'string' && cell.trim().length > 0
+                )
+            );
+
+        if (hasDataRows) {
+            console.log('📊 Aggregate Data Agent: Existing data found, continuing to map headers');
+            return {
+                uiAction: 'map_headers'
+            };
+        } else {
+            console.log('📊 Aggregate Data Agent: Dataset resolved but no data rows, showing empty grid');
+            return {
+                uiAction: 'show_data_grid'
+            };
+        }
+    }
+
     const messages = state.messages || [];
     const userMessage = messages.filter(m => m.role === 'user').pop();
 
-    // Check if dataset is already resolved (continuation from selection)
+    // Check if dataset is already resolved (continuation from selection) via conversation
     const orchestrator = state.orchestrator as any;
     if (orchestrator && orchestrator.currentUIState?.conversation) {
-        // Look for pre-resolved dataset in the conversation context
+        // Look for the most recent pre-resolved dataset in the conversation context
         const selectionMessage = orchestrator.currentUIState.conversation
             .filter((msg: any) => msg.type === 'data_set_selection' && msg.data?.selectedDataset)
-            .pop();
+            .pop(); // Gets the most recent (last) dataset selection
 
         if (selectionMessage?.data?.selectedDataset) {
-            console.log('📊 Aggregate Data Agent: Dataset already resolved, continuing workflow');
-            return {
-                uploadedData: selectionMessage.data.uploadedData,
-                dataSet: {
-                    id: selectionMessage.data.selectedDataset.id,
-                    name: selectionMessage.data.selectedDataset.name,
-                    resolved: true
-                },
-                uiAction: 'map_headers'
-            };
+            // Check if the previous selection has actual data rows with meaningful content
+            const hasExistingData = selectionMessage.data.uploadedData &&
+                selectionMessage.data.uploadedData.length > 1 &&
+                selectionMessage.data.uploadedData.slice(1).some(row =>
+                    row && Array.isArray(row) && row.some(cell =>
+                        cell && typeof cell === 'string' && cell.trim().length > 0
+                    )
+                );
+
+            console.log('📊 Aggregate Data Agent: Previous uploadedData check:', {
+                length: selectionMessage.data.uploadedData?.length,
+                hasHeaders: selectionMessage.data.uploadedData?.length > 0,
+                hasExistingData,
+                sampleRow: selectionMessage.data.uploadedData?.[1]
+            });
+
+            if (hasExistingData) {
+                console.log('📊 Aggregate Data Agent: Dataset already resolved with existing data, continuing workflow');
+                return {
+                    uploadedData: selectionMessage.data.uploadedData,
+                    dataSet: {
+                        id: selectionMessage.data.selectedDataset.id,
+                        name: selectionMessage.data.selectedDataset.name,
+                        resolved: true
+                    },
+                    uiAction: 'map_headers'
+                };
+            } else {
+                console.log('📊 Aggregate Data Agent: Dataset resolved but no existing data, proceeding with current request parsing');
+                // Continue to parse the current request for new data
+            }
         }
     }
 
@@ -232,6 +278,18 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
     if (followUpRequest) {
         console.log('📊 Aggregate Data Agent: Detected follow-up request:', followUpRequest);
         return await handle_follow_up_request(state, followUpRequest);
+    }
+
+    // Check if this is a data value update request
+    const isDataValueUpdate = await detectDataValueUpdateIntent(userMessage.content);
+    console.log(`📊 Aggregate Data Agent: Data value update intent: ${isDataValueUpdate}`);
+
+    if (isDataValueUpdate) {
+        console.log('📊 Aggregate Data Agent: Handling data value update request');
+        const updateResult = await handleDataValueUpdate(userMessage.content, state.messages, state.orchestrator);
+        return {
+            finalResult: updateResult
+        };
     }
 
     // Extract contextual information from all user messages
@@ -260,16 +318,53 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
         }
     }
 
-    // Prepare data structure (either from CSV or empty grid)
+    // Prepare data structure (either from CSV, prompt extraction, or empty grid)
     let headers: string[];
     let dataRows: string[][];
 
     if (!hasCSVFile || !csvData) {
-        console.log('📊 Aggregate Data Agent: No CSV file found, preparing empty data entry grid');
+        console.log('📊 Aggregate Data Agent: No CSV file found, attempting to extract data from prompt');
 
-        // Create empty grid with expected column structure
-        headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
-        dataRows = []; // Start with no data rows
+        // Try to extract data values from the prompt
+        const extractedData = await extractDataValuesFromPrompt(userMessage.content);
+        console.log('📊 Extracted data from prompt:', extractedData);
+
+        if (extractedData && Object.keys(extractedData).length > 0) {
+            console.log('📊 Aggregate Data Agent: Successfully extracted data values from prompt');
+
+            // Create headers for DHIS2 fields
+            headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+
+            // Handle special case of "current org unit"
+            let orgUnitValue = extractedData.orgUnit;
+            if (orgUnitValue === 'current org unit') {
+                // Get current user's org unit
+                const contextualInfo = await extractContextualInfo(messages);
+                if (contextualInfo.userOrgUnit) {
+                    orgUnitValue = contextualInfo.userOrgUnit.id;
+                    console.log(`📊 Resolved "current org unit" to: ${orgUnitValue}`);
+                }
+            }
+
+            // Create data row from extracted values
+            const dataRow = [
+                extractedData.dataElement || '',
+                orgUnitValue || '',
+                extractedData.period || '',
+                extractedData.categoryOptionCombos || '',
+                extractedData.attributeOptionCombos || '',
+                extractedData.value || ''
+            ];
+
+            dataRows = [dataRow];
+            console.log('📊 Created data row from prompt:', dataRow);
+        } else {
+            console.log('📊 Aggregate Data Agent: No data values found in prompt, preparing empty data entry grid');
+
+            // Create empty grid with expected column structure
+            headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+            dataRows = []; // Start with no data rows
+        }
     } else {
         console.log('📊 Aggregate Data Agent: CSV file found, parsing data');
         headers = csvData[0];
@@ -597,6 +692,61 @@ async function parse_csv_upload_old(state: typeof AggregateDataAnnotation.State)
 // 1.5. Intelligently map CSV headers to DHIS2 fields using LLM (internal processing)
 async function map_csv_headers(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('🧠 Mapping CSV headers to DHIS2 fields using LLM');
+
+    // Check if we have any actual data rows - if not, try to extract from prompt
+    const hasDataRows = state.uploadedData.length > 1 &&
+        state.uploadedData.slice(1).some(row =>
+            row && Array.isArray(row) && row.some(cell =>
+                cell && typeof cell === 'string' && cell.trim().length > 0
+            )
+        );
+
+    if (!hasDataRows) {
+        console.log('🧠 No data rows found, attempting prompt extraction in map_csv_headers');
+
+        // Try to extract data values from the prompt
+        const extractedData = await extractDataValuesFromPrompt(state.messages[state.messages.length - 1]?.content || '');
+        console.log('🧠 Extracted data from prompt in map_csv_headers:', extractedData);
+
+        if (extractedData && Object.keys(extractedData).length > 0) {
+            console.log('🧠 Successfully extracted data values from prompt');
+
+            // Create headers for DHIS2 fields
+            const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+
+            // Handle special case of "current org unit"
+            let orgUnitValue = extractedData.orgUnit;
+            if (orgUnitValue === 'current org unit') {
+                // Get current user's org unit
+                const contextualInfo = await extractContextualInfo(state.messages);
+                if (contextualInfo.userOrgUnit) {
+                    orgUnitValue = contextualInfo.userOrgUnit.id;
+                    console.log(`🧠 Resolved "current org unit" to: ${orgUnitValue}`);
+                }
+            }
+
+            // Create data row from extracted values
+            const dataRow = [
+                extractedData.dataElement || '',
+                orgUnitValue || '',
+                extractedData.period || '',
+                extractedData.categoryOptionCombos || '',
+                extractedData.attributeOptionCombos || '',
+                extractedData.value || ''
+            ];
+
+            console.log('🧠 Created data row from prompt:', dataRow);
+
+            // Update state with the extracted data
+            state.uploadedData = [headers, dataRow];
+        } else {
+            console.log('🧠 No data values found in prompt, creating empty grid');
+            // Create empty grid with expected column structure
+            const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+            const emptyRows: string[][] = [];
+            state.uploadedData = [headers, ...emptyRows];
+        }
+    }
 
     const [originalHeaders, ...dataRows] = state.uploadedData;
 
@@ -1291,51 +1441,269 @@ Return a JSON object or null if not a follow-up request.`;
     }
 }
 
+// Detect data value update intent
+async function detectDataValueUpdateIntent(query: string): Promise<boolean> {
+	try {
+		console.log('🔄 Aggregate Data Agent: Detecting data value update intent for:', query);
+
+		const detectionPrompt = `
+Analyze this user query to determine if they want to update/modify a previously submitted data value.
+
+Examples of data value updates:
+- "update the first value to 10"
+- "change the second entry to 25"
+- "modify value 3 to 15"
+- "correct the last data point"
+- "fix the third value to 8"
+- "update first row to 15"
+
+Return ONLY "true" if this is clearly a request to update a specific data value, otherwise return "false".
+
+Query: "${query}"
+
+Response:`;
+
+		const result = await model.invoke([new HumanMessage(detectionPrompt)]);
+		const intent = (result.content as string).trim().toLowerCase();
+
+		return intent === 'true';
+	} catch (error) {
+		console.error('🔄 Aggregate Data Agent: Data value update intent detection failed:', error);
+		return false;
+	}
+}
+
+// Handle data value update requests
+async function handleDataValueUpdate(query: string, conversationHistory: any[], orchestrator?: any): Promise<any> {
+	console.log('🔄 Aggregate Data Agent: Processing data value update request:', query);
+
+	try {
+		let submittedData = [];
+
+		// First try to get submitted data from orchestrator state
+		if (orchestrator?.currentUIState?.submittedDataSets) {
+			const submittedDataSets = Array.from(orchestrator.currentUIState.submittedDataSets.values());
+			if (submittedDataSets.length > 0) {
+				// Get the most recent submission
+				const recentSubmission = submittedDataSets[submittedDataSets.length - 1];
+				if (recentSubmission.submittedData) {
+					submittedData = recentSubmission.submittedData;
+					console.log('🔄 Aggregate Data Agent: Found submitted data in orchestrator state:', submittedData.length, 'values');
+				}
+			}
+		}
+
+		// If not found in orchestrator state, try conversation history
+		if (!submittedData || submittedData.length === 0) {
+			console.log('🔄 Aggregate Data Agent: Looking for submitted data in conversation history');
+
+			// Find recent data submission in conversation history
+			const recentSubmission = conversationHistory
+				.filter(msg => msg.role === 'assistant')
+				.reverse() // Start from most recent
+				.find(msg => {
+					if (typeof msg.content === 'string') {
+						return msg.content.includes('submitted successfully') ||
+							   msg.content.includes('data submission') ||
+							   msg.content.includes('data values imported');
+					}
+					return msg.content?.message?.includes('submitted successfully') ||
+						   msg.content?.type === 'data_submission_success';
+				});
+
+			if (recentSubmission) {
+				// Extract submitted data from the conversation message
+				const content = recentSubmission.content;
+				if (content && typeof content === 'object') {
+					if ('submittedData' in content && Array.isArray(content.submittedData)) {
+						submittedData = content.submittedData;
+					} else if ('data' in content && content.data && typeof content.data === 'object' && 'submittedData' in content.data && Array.isArray(content.data.submittedData)) {
+						submittedData = content.data.submittedData;
+					}
+				}
+				console.log('🔄 Aggregate Data Agent: Found submitted data in conversation:', submittedData.length, 'values');
+			}
+		}
+
+		// If still not found, try current data grid data
+		if (!submittedData || submittedData.length === 0) {
+			console.log('🔄 Aggregate Data Agent: Looking for data in current data grid');
+
+			// Check if there's current data grid data
+			const currentData = orchestrator?.currentUIState?.conversation?.find((msg: any) =>
+				msg.type === 'data_grid' && msg.data?.rows
+			);
+
+			if (currentData?.data?.rows) {
+				// Convert data grid rows to submitted data format
+				submittedData = currentData.data.rows.map((row: any[], index: number) => ({
+					dataElement: row[0] || '',
+					orgUnit: row[1] || '',
+					period: row[2] || '',
+					categoryOptionCombo: row[3] || '',
+					attributeOptionCombo: row[4] || '',
+					value: row[5] || '',
+					rowIndex: index
+				}));
+				console.log('🔄 Aggregate Data Agent: Found data in current grid:', submittedData.length, 'values');
+			}
+		}
+
+		if (!submittedData || submittedData.length === 0) {
+			console.log('🔄 Aggregate Data Agent: No submitted data found anywhere');
+			return {
+				success: false,
+				error: 'No recent data submission found. Please submit data first before updating values.',
+				message: 'I couldn\'t find any recently submitted data to update. Please submit your data first, then you can update specific values.'
+			};
+		}
+
+		// Use LLM to parse the update request and identify which value to update
+		const updateParsingPrompt = `
+Analyze this data value update request and identify which data value the user wants to update.
+
+Submitted data values:
+${JSON.stringify(submittedData, null, 2)}
+
+User request: "${query}"
+
+Please identify:
+1. Which data value to update (by index, dataElement, or description)
+2. What the new value should be
+3. Any additional context about the update
+
+Return a JSON object with:
+{
+  "targetIndex": number (0-based index in the submitted data array),
+  "newValue": any (the new value to set),
+  "reasoning": "brief explanation of how you identified the target"
+}
+
+If you cannot determine which value to update, return:
+{
+  "error": "Could not identify which value to update",
+  "reasoning": "explanation of the ambiguity"
+}`;
+
+		const parseResult = await model.invoke([new HumanMessage(updateParsingPrompt)]);
+		const updateSpec = JSON.parse(parseResult.content as string);
+
+		if (updateSpec.error) {
+			return {
+				success: false,
+				error: updateSpec.error,
+				message: `I couldn't understand which value you want to update. ${updateSpec.reasoning}`
+			};
+		}
+
+		const { targetIndex, newValue, reasoning } = updateSpec;
+
+		if (targetIndex < 0 || targetIndex >= submittedData.length) {
+			return {
+				success: false,
+				error: 'Invalid data value index',
+				message: `The specified data value index (${targetIndex}) is not valid. There are ${submittedData.length} data values in the recent submission.`
+			};
+		}
+
+		const targetDataValue = submittedData[targetIndex];
+
+		// Prepare the update payload for DHIS2
+		const updatePayload = {
+			dataElement: targetDataValue.dataElement,
+			period: targetDataValue.period,
+			orgUnit: targetDataValue.orgUnit,
+			value: newValue,
+			...(targetDataValue.categoryOptionCombo && { categoryOptionCombo: targetDataValue.categoryOptionCombo }),
+			...(targetDataValue.attributeOptionCombo && { attributeOptionCombo: targetDataValue.attributeOptionCombo })
+		};
+
+		console.log('🔄 Aggregate Data Agent: Updating data value:', updatePayload);
+
+		// Call DHIS2 API to update the data value
+		const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+		const mutationConfig = {
+			resource: 'dataValues',
+			type: 'create', // DHIS2 uses 'create' for data values (upsert behavior)
+			data: updatePayload
+		};
+
+		const response = await Dhis2Api.mutate(mutationConfig);
+
+		if (response.success) {
+			return {
+				success: true,
+				message: `Successfully updated data value. Changed ${targetDataValue.value} to ${newValue} for data element in period ${targetDataValue.period}.`,
+				updatedValue: {
+					...targetDataValue,
+					value: newValue,
+					previousValue: targetDataValue.value
+				},
+				reasoning: reasoning
+			};
+		} else {
+			return {
+				success: false,
+				error: response.error || 'DHIS2 API update failed',
+				message: `Failed to update the data value: ${response.error || 'Unknown error'}`
+			};
+		}
+
+	} catch (error) {
+		console.error('🔄 Aggregate Data Agent: Data value update error:', error);
+		return {
+			success: false,
+			error: `Data value update processing failed: ${error.message}`,
+			message: 'An error occurred while processing your data value update request.'
+		};
+	}
+}
+
 // Handle follow-up requests for existing data sets
 async function handle_follow_up_request(state: typeof AggregateDataAnnotation.State, followUpRequest: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
-    console.log('🔄 Handling follow-up request:', followUpRequest);
+	console.log('🔄 Handling follow-up request:', followUpRequest);
 
-    const { action, dataSetName, criteria, newValues } = followUpRequest;
+	const { action, dataSetName, criteria, newValues } = followUpRequest;
 
-    // Find the target data set
-    let targetDataSet: any = null;
-    for (const [dataSetId, dataSetInfo] of state.submittedDataSets) {
-        if (dataSetInfo.dataSetName === dataSetName || dataSetId === dataSetName) {
-            targetDataSet = { id: dataSetId, ...dataSetInfo };
-            break;
-        }
-    }
+	// Find the target data set
+	let targetDataSet: any = null;
+	for (const [dataSetId, dataSetInfo] of state.submittedDataSets) {
+		if (dataSetInfo.dataSetName === dataSetName || dataSetId === dataSetName) {
+			targetDataSet = { id: dataSetId, ...dataSetInfo };
+			break;
+		}
+	}
 
-    if (!targetDataSet) {
-        return {
-            finalResult: {
-                success: false,
-                error: `Could not find data set "${dataSetName}". Available data sets: ${Array.from(state.submittedDataSets.values()).map(ds => ds.dataSetName).join(', ')}`
-            }
-        };
-    }
+	if (!targetDataSet) {
+		return {
+			finalResult: {
+				success: false,
+				error: `Could not find data set "${dataSetName}". Available data sets: ${Array.from(state.submittedDataSets.values()).map(ds => ds.dataSetName).join(', ')}`
+			}
+		};
+	}
 
-    switch (action) {
-        case 'view':
-            // Load and display the data set
-            return await load_and_display_data_set(state, targetDataSet);
+	switch (action) {
+		case 'view':
+			// Load and display the data set
+			return await load_and_display_data_set(state, targetDataSet);
 
-        case 'update':
-            // Update existing data or add new rows
-            return await update_data_set(state, targetDataSet, criteria, newValues);
+		case 'update':
+			// Update existing data or add new rows
+			return await update_data_set(state, targetDataSet, criteria, newValues);
 
-        case 'delete':
-            // Delete data matching criteria
-            return await delete_from_data_set(state, targetDataSet, criteria);
+		case 'delete':
+			// Delete data matching criteria
+			return await delete_from_data_set(state, targetDataSet, criteria);
 
-        default:
-            return {
-                finalResult: {
-                    success: false,
-                    error: `Unsupported action: ${action}`
-                }
-            };
-    }
+		default:
+			return {
+				finalResult: {
+					success: false,
+					error: `Unsupported action: ${action}`
+				}
+			};
+	}
 }
 
 // Load and display an existing data set
@@ -1449,6 +1817,67 @@ Return only the extracted data set name or null if none found. Do not include an
 
     } catch (error) {
         console.warn('📋 LLM data set extraction failed:', error);
+        return null;
+    }
+}
+
+// Extract data values from user prompt using LLM
+async function extractDataValuesFromPrompt(content: string): Promise<{
+    dataElement?: string;
+    orgUnit?: string;
+    period?: string;
+    categoryOptionCombos?: string;
+    attributeOptionCombos?: string;
+    value?: string;
+} | null> {
+    try {
+        const llm = ChatModels.createAnalysisModel();
+
+        const prompt = `
+You are extracting structured data values from user messages about DHIS2 data entry. Your task is to identify specific data values for aggregate data submission.
+
+EXAMPLES:
+- "Upload data values for data set Treatment (EpiC Monthly) with org unit current org unit, data element TLYIar0a2BT, period 202508, category option combo hKuYaCaEngt, attribute option combo wh2f4cUgrD1 and value 6"
+  → {"dataElement": "TLYIar0a2BT", "orgUnit": "current org unit", "period": "202508", "categoryOptionCombos": "hKuYaCaEngt", "attributeOptionCombos": "wh2f4cUgrD1", "value": "6"}
+
+- "Submit data for Malaria cases: data element MAL_CASES, period 202401, value 150, category combo MAL_DISAGG"
+  → {"dataElement": "MAL_CASES", "period": "202401", "categoryOptionCombos": "MAL_DISAGG", "value": "150"}
+
+- "Enter HIV test results: org unit Central Hospital, data element HIV_TESTS, period 202412, value 25"
+  → {"orgUnit": "Central Hospital", "dataElement": "HIV_TESTS", "period": "202412", "value": "25"}
+
+INSTRUCTIONS:
+1. Extract specific values for each DHIS2 field: dataElement, orgUnit, period, categoryOptionCombos, attributeOptionCombos, value
+2. Look for patterns like "data element [ID/name]", "org unit [ID/name]", "period [value]", "category option combo [ID]", "attribute option combo [ID]", "value [number]"
+3. For orgUnit, preserve "current org unit" as-is if mentioned - it will be resolved later
+4. Return only the extracted fields that are explicitly mentioned
+5. If no structured data values are found, return null
+6. Return a JSON object with the extracted fields
+
+USER MESSAGE: "${content}"
+
+Return a JSON object with the extracted data values, or null if none found.`;
+
+        const llmResponse = await llm.invoke([
+            { role: "system", content: prompt },
+            { role: "user", content: `Extract data values from: ${content}` }
+        ]);
+
+        const result = (llmResponse.content as string).trim();
+
+        try {
+            const parsed = JSON.parse(result);
+            if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                return parsed;
+            }
+        } catch (e) {
+            // Not valid JSON, not data values found
+        }
+
+        return null;
+
+    } catch (error) {
+        console.warn('📊 LLM data values extraction failed:', error);
         return null;
     }
 }

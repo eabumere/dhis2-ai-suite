@@ -207,7 +207,11 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
         return tooltip;
     };
 
-    const unresolvedCount = resolutionState.filter(([, item]) => item.status !== 'resolved').length;
+    // Only count unresolved items that are in fields that require resolution
+    const resolvableFields = ['dataElement', 'orgUnit', 'categoryOptionCombos', 'attributeOptionCombos'];
+    const unresolvedCount = resolutionState.filter(([, item]) =>
+        item.status !== 'resolved' && resolvableFields.includes(item.fieldType)
+    ).length;
     const canSubmit = unresolvedCount === 0;
 
     return (

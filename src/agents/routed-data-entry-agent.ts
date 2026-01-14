@@ -42,7 +42,60 @@ const model = ChatModels.createAgentModel();
 
 // StateGraph Workflow Nodes
 
-// 1. LLM-based data entry category classification
+// 1. Check for data grid action intent (resolve/submit via natural language)
+async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
+	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
+	console.log('🔍 Data Entry Router: Checking for data grid action intent:', query);
+
+	// Check if there are recent data_grid messages in the conversation (for action intents)
+	const hasDataGridContext = state.orchestrator?.currentUIState?.conversation?.some((msg: any) =>
+		msg.type === 'data_grid' && msg.timestamp > Date.now() - 300000 // Within last 5 minutes
+	);
+
+	// Check for data grid action intent (if we have data grid context)
+	if (hasDataGridContext) {
+		const actionIntent = await detectDataGridActionIntent(query);
+		console.log(`🔍 Detected data grid action intent: ${actionIntent}`);
+
+		if (actionIntent === 'resolve_all') {
+			console.log('🔄 Triggering resolve all action via orchestrator');
+			// Trigger resolve all action
+			state.orchestrator.handleDataGridInteraction({
+				type: 'resolve_all',
+				data: {}
+			});
+
+			return {
+				finalResult: {
+					success: true,
+					message: 'Started resolving all pending items. The resolution process will continue in the background.',
+					action: 'resolve_all_triggered'
+				}
+			};
+		} else if (actionIntent === 'submit_data') {
+			console.log('📤 Triggering submit data action via orchestrator');
+			// Trigger submit action
+			state.orchestrator.handleDataGridInteraction({
+				type: 'confirm_submit',
+				data: {}
+			});
+
+			return {
+				finalResult: {
+					success: true,
+					message: 'Data submission initiated. Processing and validating data for DHIS2 submission.',
+					action: 'submit_triggered'
+				}
+			};
+		}
+	}
+
+	// No action intent detected, continue to normal classification
+	console.log('🔍 No data grid action intent detected, proceeding to category classification');
+	return {};
+}
+
+// 2. LLM-based data entry category classification
 async function classify_data_entry_intent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
 	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🤖 Data Entry Router: Classifying data entry category for query:', query);
@@ -193,6 +246,53 @@ async function invoke_tracker_agent(state: typeof DataEntryRouterAnnotation.Stat
 	}
 }
 
+// Detect data grid action intent (resolve/submit via natural language)
+async function detectDataGridActionIntent(query: string): Promise<'resolve_all' | 'submit_data' | null> {
+	try {
+		console.log('🔍 Data Entry Router: Detecting data grid action intent for:', query);
+
+		const detectionPrompt = `
+Analyze this user query in the context of a DHIS2 data entry interface with unresolved items that need to be resolved before submission.
+
+Determine if the user is asking to perform one of these specific actions:
+- resolve_all: User wants to resolve/fix/complete all pending unresolved items
+- submit_data: User wants to submit/send the data to DHIS2
+
+Examples of resolve_all:
+- "resolve all the pending items"
+- "fix the unresolved entries"
+- "complete the missing data"
+- "resolve all issues"
+- "finish resolving"
+
+Examples of submit_data:
+- "submit the data"
+- "send to DHIS2"
+- "confirm submission"
+- "upload the data"
+- "submit now"
+
+Return ONLY one of these values: "resolve_all", "submit_data", or null if neither matches.
+
+Query: "${query}"
+
+Response:`;
+
+		const result = await model.invoke([new HumanMessage(detectionPrompt)]);
+		const intent = (result.content as string).trim();
+
+		// Validate the response
+		if (intent === 'resolve_all' || intent === 'submit_data') {
+			return intent;
+		}
+
+		return null;
+	} catch (error) {
+		console.error('🔍 Data Entry Router: Action intent detection failed:', error);
+		return null;
+	}
+}
+
 // LLM-based data entry category classification
 async function classifyDataEntryCategoryLLM(query: string): Promise<string> {
 	try {
@@ -233,6 +333,7 @@ Category:`;
 const dataEntryRouterWorkflow = new StateGraph(DataEntryRouterAnnotation);
 
 // Add nodes
+dataEntryRouterWorkflow.addNode('check_data_grid_action_intent', check_data_grid_action_intent);
 dataEntryRouterWorkflow.addNode('classify_data_entry_intent', classify_data_entry_intent);
 dataEntryRouterWorkflow.addNode('handle_unclear_classification', handle_unclear_classification);
 dataEntryRouterWorkflow.addNode('invoke_aggregate_agent', invoke_aggregate_agent);
@@ -241,7 +342,14 @@ dataEntryRouterWorkflow.addNode('invoke_tracker_agent', invoke_tracker_agent);
 
 // Add edges
 // @ts-ignore
-dataEntryRouterWorkflow.addEdge(START, 'classify_data_entry_intent');
+dataEntryRouterWorkflow.addEdge(START, 'check_data_grid_action_intent');
+
+// Conditional routing from data grid action check
+// @ts-ignore
+dataEntryRouterWorkflow.addConditionalEdges('check_data_grid_action_intent', (state) => {
+	if (state.finalResult) return END; // Action was handled, end workflow
+	return 'classify_data_entry_intent'; // No action detected, continue to classification
+});
 
 // Conditional routing based on data entry category
 // @ts-ignore

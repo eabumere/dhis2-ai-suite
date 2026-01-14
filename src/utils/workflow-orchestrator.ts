@@ -1087,7 +1087,7 @@ class WorkflowOrchestrator {
 
         // Check if all items are resolved
         const unresolvedItems = resolutionState ?
-            Array.from(resolutionState.values()).filter((item: any) => item.status !== 'resolved') : [];
+            Array.from(resolutionState.values()).filter((item: any) => item[1].status !== 'resolved') : [];
 
         if (unresolvedItems.length > 0) {
             this.addAssistantMessage(
@@ -1148,10 +1148,10 @@ class WorkflowOrchestrator {
                         case 'period':
                             dataValue.period = finalValue;
                             break;
-                        case 'categoryOptionCombo':
+                        case 'categoryOptionCombos':
                             if (finalValue) dataValue.categoryOptionCombo = finalValue;
                             break;
-                        case 'attributeOptionCombo':
+                        case 'attributeOptionCombos':
                             if (finalValue) dataValue.attributeOptionCombo = finalValue;
                             break;
                         case 'value':
@@ -1168,8 +1168,6 @@ class WorkflowOrchestrator {
 
             // Create the complete DHIS2 data set payload
             const dataSetPayload = {
-                dataSet: dataSetId,
-                completeDate: new Date().toISOString().split('T')[0], // Current date in YYYY-MM-DD format
                 dataValues: dataValues
             };
 
@@ -1232,43 +1230,6 @@ class WorkflowOrchestrator {
                 'error'
             );
         }
-    }
-
-    // Generate human-readable display headers from raw DHIS2 field names
-    private generateDisplayHeaders(rawHeaders: string[]): string[] {
-        const fieldLabels: Record<string, string> = {
-            'dataelement': 'Data Element',
-            'dataElement': 'Data Element',
-            'orgunit': 'Organisation Unit',
-            'orgUnit': 'Organisation Unit',
-            'organisationunit': 'Organisation Unit',
-            'organisationUnit': 'Organisation Unit',
-            'period': 'Time Period',
-            'categoryoptioncombo': 'Category Option Combo',
-            'categoryOptionCombo': 'Category Option Combo',
-            'categoryoptioncombos': 'Category Option Combo',
-            'categoryOptionCombos': 'Category Option Combo',
-            'attributeoptioncombo': 'Attribute Option Combo',
-            'attributeOptionCombo': 'Attribute Option Combo',
-            'attributeoptioncombos': 'Attribute Option Combo',
-            'attributeOptionCombos': 'Attribute Option Combo',
-            'value': 'Value',
-            'storedby': 'Stored By',
-            'lastupdated': 'Last Updated',
-            'comment': 'Comment',
-            'followup': 'Follow Up',
-            'deleted': 'Deleted'
-        };
-
-        return rawHeaders.map(header => {
-            const lowerHeader = header.toLowerCase();
-            return fieldLabels[lowerHeader] || fieldLabels[header] || header;
-        });
-    }
-
-    // Get current UI state
-    getCurrentUIState(): WorkflowUIState {
-        return { ...this.currentUIState };
     }
 }
 

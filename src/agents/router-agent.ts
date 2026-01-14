@@ -64,10 +64,19 @@ const model = ChatModels.createAgentModel();
 
 // 1. LLM-based workflow classification with clarification
 async function classify_intent(state: typeof RouterAnnotation.State): Promise<Partial<typeof RouterAnnotation.State>> {
-	const rawQuery = state.messages.filter(m => m.role === 'user').pop()?.content || '';
+	// Find the text message (not file content) for classification
+	// Prioritize messages that don't start with "File:" and have actual text content
+	const userMessages = state.messages.filter(m => m.role === 'user');
+	const textMessage = userMessages.find(m =>
+		m.content && typeof m.content === 'string' &&
+		!m.content.startsWith('File:') &&
+		m.content.trim().length > 0
+	);
+
+	const rawQuery = textMessage?.content || userMessages[userMessages.length - 1]?.content || '';
 	// Strip file content from query to prevent sending binary data to LLM
 	const query = stripFileContent(rawQuery);
-	console.log('🤖 Router: Classifying workflow type for query (file content stripped):', query);
+	console.log('🤖 Router: Classifying workflow type for query (text message prioritized, file content stripped):', query);
 
 	// Generate multiple interpretations for clarification service
 	const interpretations = await generateIntentInterpretations(query);

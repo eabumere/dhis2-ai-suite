@@ -159,13 +159,31 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
 
     // Look for file references in user messages
     for (const message of messages) {
-        if (message.role === 'user' && message.content) {
-            // Check for file reference pattern (e.g., "file:abc123")
-            const fileRefMatch = message.content.match(/file:([a-zA-Z0-9_-]+)/);
-            if (fileRefMatch) {
-                const fileId = fileRefMatch[1];
+        if (message.role === 'user') {
+            let fileId: string | null = null;
 
-                // Request file content from orchestrator
+            // Check attachments array for file references (primary method)
+            if (message.attachments && message.attachments.length > 0) {
+                for (const attachment of message.attachments) {
+                    if (attachment.id && attachment.id.startsWith('file_')) {
+                        fileId = attachment.id;
+                        console.log(`📄 Tracker Data Agent: Found file reference in attachments: ${fileId}`);
+                        break;
+                    }
+                }
+            }
+
+            // Fallback: Check for file reference pattern in content (e.g., "file:abc123")
+            if (!fileId && message.content) {
+                const fileRefMatch = message.content.match(/file:([a-zA-Z0-9_-]+)/);
+                if (fileRefMatch) {
+                    fileId = fileRefMatch[1];
+                    console.log(`📄 Tracker Data Agent: Found file reference in content: ${fileId}`);
+                }
+            }
+
+            // If we found a file reference, retrieve the file
+            if (fileId) {
                 if (state.orchestrator && typeof state.orchestrator.getFile === 'function') {
                     const fileEntry = state.orchestrator.getFile(fileId);
                     if (fileEntry && fileEntry.content) {

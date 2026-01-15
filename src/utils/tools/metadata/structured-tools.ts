@@ -1792,6 +1792,7 @@ async function createDhis2ReportingFormAggregated({
 /**
  * Process Scanned Register - Extract tracker data from PDF documents
  * Uses Azure Document Intelligence to analyze facility registers and extract patient data
+ * Based on Python implementation: splits PDF, processes each page, extracts TableData fields
  */
 export const processScannedRegister = tool(
     async (input: {
@@ -1805,11 +1806,14 @@ export const processScannedRegister = tool(
 
             console.log(`Processing scanned register: ${input.filename}`);
 
-            // Split PDF into pages if needed
+            // Split PDF into pages for processing (matching Python implementation)
             const pages = await splitPdfIntoPages(input.fileBuffer);
 
+            console.log(`PDF split into ${pages.length} pages`);
+
             // Process each page and collect results
-            const allTableData: Array<Array<{ [key: string]: { value: string; confidence: number } }>> = [];
+            const cleanData: Array<Array<{ [key: string]: { value: string; confidence: number } }>> = [];
+            let orgUnit = input.orgUnit || "";
 
             for (let i = 0; i < pages.length; i++) {
                 console.log(`Processing page ${i + 1}/${pages.length}`);
@@ -1817,11 +1821,48 @@ export const processScannedRegister = tool(
                 try {
                     const pageResult = await processDocumentWithAI(pages[i], `${input.filename}_page_${i + 1}.pdf`);
 
-                    // Extract table data from this page
-                    for (const table of pageResult.tables) {
-                        if (table.rows.length > 0) {
-                            allTableData.push(table.rows);
+                    // Process documents from this page (matching Python implementation structure)
+                    if (pageResult.documents) {
+                        for (const doc of pageResult.documents) {
+                            if (doc.fields) {
+                                for (const [name, field] of Object.entries(doc.fields)) {
+                                    // Extract org unit if found (matching Python logic)
+                                    if (name === "OrgUnit" || name.includes("OrgUnit")) {
+                                        const orgUnitValue = (field as any)?.valueString || (field as any)?.content;
+                                        if (orgUnitValue && !orgUnit) {
+                                            orgUnit = orgUnitValue;
+                                            console.log(`Found org unit: ${orgUnit}`);
+                                        }
+                                    }
+
+                                    // Extract table data (matching Python implementation)
+                                    if (name === "TableData" || name.includes("TableData")) {
+                                        const processingBlock: Array<{ [key: string]: { value: string; confidence: number } }> = [];
+
+                                        // Handle different field structures (matching Python logic)
+                                        const fieldAny = field as any;
+                                        if (fieldAny && fieldAny.valueArray) {
+                                            // Direct array of rows - matching Python's processing_block.append(process_row(row))
+                                            for (const row of fieldAny.valueArray) {
+                                                processingBlock.push(processRow(row));
+                                            }
+                                        } else if (fieldAny && fieldAny.valueObject) {
+                                            // Single row object - matching Python's process_row({valueObject: field.valueObject})
+                                            processingBlock.push(processRow({ valueObject: fieldAny.valueObject }));
+                                        }
+
+                                        if (processingBlock.length > 0) {
+                                            cleanData.push([processingBlock]);
+                                            console.log(`Extracted ${processingBlock.length} records from TableData on page ${i + 1}`);
+                                        } else {
+                                            console.log(`No records found in TableData on page ${i + 1}`);
+                                        }
+                                    }
+                                }
+                            }
                         }
+                    } else {
+                        console.log(`No documents found on page ${i + 1}`);
                     }
                 } catch (error) {
                     console.error(`Error processing page ${i + 1}:`, error);
@@ -1829,16 +1870,17 @@ export const processScannedRegister = tool(
                 }
             }
 
-            // Merge patient records by ART No Patient ID (similar to Python implementation)
-            const mergedPatients = mergePatientRecords(allTableData);
+            // Merge patient records by ART No Patient ID (matching Python implementation)
+            const mergedPatients = mergePatientRecords(cleanData);
 
-            console.log(`Extracted ${mergedPatients.length} unique patient records`);
+            console.log(`Extracted ${mergedPatients.length} unique patient records from ${pages.length} pages`);
 
             return JSON.stringify({
                 success: true,
                 patients: mergedPatients,
                 totalPages: pages.length,
-                totalTables: allTableData.length,
+                totalTables: cleanData.length,
+                orgUnit: orgUnit,
                 message: `Successfully processed ${pages.length} pages and extracted ${mergedPatients.length} patient records`
             });
 
@@ -1853,7 +1895,7 @@ export const processScannedRegister = tool(
     },
     {
         name: "process_scanned_register",
-        description: "Process a scanned PDF facility register using Azure Document Intelligence to extract patient tracker data. Splits multi-page PDFs, analyzes tables, and merges patient records by ART No Patient ID.",
+        description: "Process a scanned PDF facility register using Azure Document Intelligence to extract patient tracker data. Splits multi-page PDFs, analyzes TableData fields, and merges patient records by ART No Patient ID.",
         schema: z.object({
             fileBuffer: z.instanceof(Uint8Array).describe("The PDF file buffer to process"),
             filename: z.string().describe("Original filename for processing"),
@@ -2108,6 +2150,35 @@ export const registerTrackerEntities = tool(
         })
     }
 );
+
+/**
+ * Process row data from Azure Document Intelligence (matching Python implementation)
+ */
+function processRow(row: any): { [key: string]: { value: string; confidence: number } } {
+    const processedRow: { [key: string]: { value: string; confidence: number } } = {};
+
+    // Handle different row structures (matching Python logic)
+    if (row.valueObject) {
+        // Direct valueObject structure
+        const obj = row.valueObject;
+        for (const [key, value] of Object.entries(obj)) {
+            processedRow[key] = {
+                value: (value as any)?.valueString || (value as any)?.content || String(value) || '',
+                confidence: (value as any)?.confidence || 0
+            };
+        }
+    } else {
+        // Direct object structure
+        for (const [key, value] of Object.entries(row)) {
+            processedRow[key] = {
+                value: (value as any)?.valueString || (value as any)?.content || String(value) || '',
+                confidence: (value as any)?.confidence || 0
+            };
+        }
+    }
+
+    return processedRow;
+}
 
 /**
  * Merge patient records by ART No Patient ID (utility function)

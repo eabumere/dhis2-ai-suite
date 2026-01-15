@@ -281,7 +281,8 @@ async function extract_patient_data(state: typeof TrackerDataAnnotation.State): 
             return {
                 finalResult: {
                     success: false,
-                    error: `Data extraction failed: ${parsedResult.error}`
+                    error: `Data extraction failed: ${parsedResult.error}`,
+                    type: 'tracker_processing_error'
                 }
             };
         }
@@ -307,7 +308,19 @@ async function extract_patient_data(state: typeof TrackerDataAnnotation.State): 
 // 4. Map extracted data to DHIS2 tracker format
 async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
     if (!state.extractedPatients || state.extractedPatients.length === 0) {
-        return { uiAction: 'extract_patient_data' };
+        console.log('📄 Tracker Data Agent: No patient records found in document');
+        return {
+            finalResult: {
+                success: true,
+                message: 'No patient records found in the uploaded document',
+                type: 'tracker_processing_complete',
+                details: {
+                    totalPatients: 0,
+                    extractedPatients: 0,
+                    message: 'Document was successfully processed but contained no extractable patient data'
+                }
+            }
+        };
     }
 
     console.log(`📄 Tracker Data Agent: Mapping ${state.extractedPatients.length} patients to DHIS2 tracker format`);

@@ -623,7 +623,7 @@ export function createContextRouterAgent(orchestrator: any) {
 			console.log('🔄 Router StateGraph: Processing query');
 
 			const initialState: Partial<typeof RouterAnnotation.State> = {
-				messages: input.messages || [],
+				messages: input.input?.messages || input.messages || [],
 				orchestrator: orchestrator,
 				workflowType: 'unknown',
 				originalQuery: '',

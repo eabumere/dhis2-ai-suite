@@ -153,53 +153,72 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
         };
     }
 
-    // Check for file references in messages (e.g., "file:abc123")
+    // Get the current file from orchestrator (primary method)
     let fileBuffer: Uint8Array | null = null;
     let filename = 'uploaded_document.pdf';
 
-    // Look for file references in user messages
-    for (const message of messages) {
-        if (message.role === 'user') {
-            let fileId: string | null = null;
+    if (state.orchestrator && typeof state.orchestrator.getCurrentFile === 'function') {
+        const fileEntry = state.orchestrator.getCurrentFile();
+        if (fileEntry && fileEntry.content) {
+            fileBuffer = typeof fileEntry.content === 'string'
+                ? new TextEncoder().encode(fileEntry.content)
+                : fileEntry.content as Uint8Array;
+            filename = fileEntry.name;
+            console.log(`📄 Tracker Data Agent: Retrieved current file from orchestrator: ${filename} (${fileBuffer.length} bytes)`);
+        } else {
+            console.warn('📄 Tracker Data Agent: No current file available in orchestrator');
+        }
+    } else {
+        console.warn('📄 Tracker Data Agent: Orchestrator does not support current file retrieval');
+    }
 
-            // Check attachments array for file references (primary method)
-            if (message.attachments && message.attachments.length > 0) {
-                for (const attachment of message.attachments) {
-                    if (attachment.id && attachment.id.startsWith('file_')) {
-                        fileId = attachment.id;
-                        console.log(`📄 Tracker Data Agent: Found file reference in attachments: ${fileId}`);
-                        break;
+    // Fallback: Check for file references in messages (for backward compatibility)
+    if (!fileBuffer) {
+        // Look for file references in user messages
+        for (const message of messages) {
+            if (message.role === 'user') {
+                let fileId: string | null = null;
+
+                // Check attachments array for file references (secondary method)
+                if (message.attachments && message.attachments.length > 0) {
+                    for (const attachment of message.attachments) {
+                        if (attachment.id && attachment.id.startsWith('file_')) {
+                            fileId = attachment.id;
+                            console.log(`📄 Tracker Data Agent: Found file reference in attachments (fallback): ${fileId}`);
+                            break;
+                        }
                     }
                 }
-            }
 
-            // Fallback: Check for file reference pattern in content (e.g., "file:abc123")
-            if (!fileId && message.content) {
-                const fileRefMatch = message.content.match(/file:([a-zA-Z0-9_-]+)/);
-                if (fileRefMatch) {
-                    fileId = fileRefMatch[1];
-                    console.log(`📄 Tracker Data Agent: Found file reference in content: ${fileId}`);
+                // Fallback: Check for file reference pattern in content (e.g., "file:abc123")
+                if (!fileId && message.content) {
+                    const fileRefMatch = message.content.match(/file:([a-zA-Z0-9_-]+)/);
+                    if (fileRefMatch) {
+                        fileId = fileRefMatch[1];
+                        console.log(`📄 Tracker Data Agent: Found file reference in content (fallback): ${fileId}`);
+                    }
                 }
-            }
 
-            // If we found a file reference, retrieve the file
-            if (fileId) {
-                if (state.orchestrator && typeof state.orchestrator.getFile === 'function') {
-                    const fileEntry = state.orchestrator.getFile(fileId);
-                    if (fileEntry && fileEntry.content) {
-                        fileBuffer = typeof fileEntry.content === 'string'
-                            ? new TextEncoder().encode(fileEntry.content)
-                            : fileEntry.content as Uint8Array;
-                        filename = fileEntry.name;
-                        console.log(`📄 Tracker Data Agent: Retrieved file from orchestrator: ${filename} (${fileBuffer.length} bytes)`);
-                        break;
+                // If we found a file reference, retrieve the file
+                if (fileId) {
+                    if (state.orchestrator && typeof state.orchestrator.getFile === 'function') {
+                        const fileEntry = state.orchestrator.getFile(fileId);
+                        if (fileEntry && fileEntry.content) {
+                            fileBuffer = typeof fileEntry.content === 'string'
+                                ? new TextEncoder().encode(fileEntry.content)
+                                : fileEntry.content as Uint8Array;
+                            filename = fileEntry.name;
+                            console.log(`📄 Tracker Data Agent: Retrieved file from orchestrator (fallback): ${filename} (${fileBuffer.length} bytes)`);
+                            break;
+                        } else {
+                            console.warn(`📄 Tracker Data Agent: File reference ${fileId} not found in orchestrator`);
+                        }
                     } else {
-                        console.warn(`📄 Tracker Data Agent: File reference ${fileId} not found in orchestrator`);
+                        console.warn('📄 Tracker Data Agent: Orchestrator does not support file retrieval');
                     }
-                } else {
-                    console.warn('📄 Tracker Data Agent: Orchestrator does not support file retrieval');
                 }
             }
+        }
 
             // Fallback: Look for legacy file content (for backward compatibility)
             if (!fileBuffer && message.content.includes('File:') && message.content.includes('Content:')) {

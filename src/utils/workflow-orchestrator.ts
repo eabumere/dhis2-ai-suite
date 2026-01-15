@@ -92,6 +92,7 @@ class WorkflowOrchestrator {
     private activeWorkflows = new Map<string, any>();
     private uiCallbacks: ComprehensiveWorkflowCallbacks | null = null;
     private fileRegistry = new Map<string, FileRegistryEntry>();
+    private currentFileId: string | null = null;
     private currentUIState: WorkflowUIState = {
         showQueryInput: true,
         queryText: '',
@@ -1134,6 +1135,14 @@ class WorkflowOrchestrator {
         return removed;
     }
 
+    // Get the current file being processed (for agents that need file access)
+    getCurrentFile(): FileRegistryEntry | null {
+        if (!this.currentFileId) {
+            return null;
+        }
+        return this.getFile(this.currentFileId);
+    }
+
     // Convert file content in messages to file references
     processMessagesForFileReferences(messages: any[]): any[] {
         return messages.map(message => {
@@ -1168,7 +1177,10 @@ class WorkflowOrchestrator {
                         }]
                     };
 
-                    console.log(`🔄 Converted file content to reference: ${filename} → ${fileId}`);
+                    // Set as current file for agents to access
+                    this.currentFileId = fileId;
+
+                    console.log(`🔄 Converted file content to reference: ${filename} → ${fileId} (set as current file)`);
                     return processedMessage;
                 }
             }

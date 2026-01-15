@@ -94,7 +94,7 @@ export async function uploadToBlobStorage(
         const sasOptions: BlobSASSignatureValues = {
             containerName: containerName,
             blobName: blobName,
-            permissions: BlobSASPermissions.parse("r"), // read permission
+            permissions: BlobSASPermissions.from({ read: true }), // read permission
             expiresOn: expiryTime,
             startsOn: new Date(),
             contentType: getContentType(filename)

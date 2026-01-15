@@ -262,59 +262,13 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
     };
 }
 
-// 2. Upload document to Azure Blob Storage
-async function upload_to_azure_storage(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
-    if (!state.uploadedDocument) {
-        return { uiAction: 'handle_document_upload' };
-    }
-
-    console.log('📄 Tracker Data Agent: Uploading document to Azure Blob Storage');
-
-    try {
-        const uploadResult = await uploadDocumentToAzure.invoke({
-            fileBuffer: state.uploadedDocument.buffer,
-            filename: state.uploadedDocument.filename
-        });
-
-        const parsedResult = JSON.parse(uploadResult);
-        if (!parsedResult.success) {
-            return {
-                finalResult: {
-                    success: false,
-                    error: `Document upload failed: ${parsedResult.error}`
-                }
-            };
-        }
-
-        console.log('📄 Tracker Data Agent: Document uploaded successfully');
-
-        return {
-            uploadedDocument: {
-                ...state.uploadedDocument,
-                url: parsedResult.blobUrl,
-                sasUrl: parsedResult.sasUrl
-            },
-            uiAction: 'extract_patient_data'
-        };
-
-    } catch (error) {
-        console.error('📄 Tracker Data Agent: Azure upload failed:', error);
-        return {
-            finalResult: {
-                success: false,
-                error: `Failed to upload document to Azure: ${error.message}`
-            }
-        };
-    }
-}
-
-// 3. Process document with Azure Document Intelligence
+// 2. Process document directly with Azure Document Intelligence
 async function extract_patient_data(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
     if (!state.uploadedDocument) {
         return { uiAction: 'handle_document_upload' };
     }
 
-    console.log('📄 Tracker Data Agent: Extracting patient data from document');
+    console.log('📄 Tracker Data Agent: Extracting patient data from document using Azure Document Intelligence');
 
     try {
         const extractionResult = await processScannedRegister.invoke({
@@ -466,7 +420,6 @@ const trackerDataWorkflow = new StateGraph(TrackerDataAnnotation);
 
 // Add nodes
 trackerDataWorkflow.addNode('handle_document_upload', handle_document_upload);
-trackerDataWorkflow.addNode('upload_to_azure_storage', upload_to_azure_storage);
 trackerDataWorkflow.addNode('extract_patient_data', extract_patient_data);
 trackerDataWorkflow.addNode('map_to_tracker_format', map_to_tracker_format);
 trackerDataWorkflow.addNode('register_tracker_entities', register_tracker_entities);
@@ -479,13 +432,7 @@ trackerDataWorkflow.addEdge(START, 'handle_document_upload');
 // Conditional routing based on uiAction
 // @ts-ignore
 trackerDataWorkflow.addConditionalEdges('handle_document_upload', (state) => {
-    if (state.uiAction === 'process_document') return 'upload_to_azure_storage';
-    return END;
-});
-
-// @ts-ignore
-trackerDataWorkflow.addConditionalEdges('upload_to_azure_storage', (state) => {
-    if (state.uiAction === 'extract_patient_data') return 'extract_patient_data';
+    if (state.uiAction === 'process_document') return 'extract_patient_data';
     return END;
 });
 

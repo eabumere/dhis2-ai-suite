@@ -1,17 +1,13 @@
 import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
-import { BlobServiceClient, BlobSASPermissions, generateBlobSASQueryParameters, BlobSASSignatureValues } from '@azure/storage-blob';
 import * as path from 'path';
 
 // Environment variables
 const DOC_INTELLIGENCE_ENDPOINT = process.env.DOC_INTELLIGENCE_ENDPOINT;
 const DOC_INTELLIGENCE_KEY = process.env.DOC_INTELLIGENCE_KEY;
 const MODEL_ID = process.env.MODEL_ID || 'prebuilt-layout';
-const AZURE_STORAGE_CONNECTION_STRING = process.env.AZURE_STORAGE_CONNECTION_STRING;
-const AZURE_STORAGE_CONTAINER = process.env.AZURE_STORAGE_CONTAINER || 'documents';
 
 // Initialize clients
 let documentAnalysisClient: DocumentAnalysisClient | null = null;
-let blobServiceClient: BlobServiceClient | null = null;
 
 function getDocumentAnalysisClient(): DocumentAnalysisClient {
     if (!documentAnalysisClient) {
@@ -24,16 +20,6 @@ function getDocumentAnalysisClient(): DocumentAnalysisClient {
         );
     }
     return documentAnalysisClient;
-}
-
-function getBlobServiceClient(): BlobServiceClient {
-    if (!blobServiceClient) {
-        if (!AZURE_STORAGE_CONNECTION_STRING) {
-            throw new Error('Azure Storage configuration missing. Please check AZURE_STORAGE_CONNECTION_STRING environment variable.');
-        }
-        blobServiceClient = BlobServiceClient.fromConnectionString(AZURE_STORAGE_CONNECTION_STRING);
-    }
-    return blobServiceClient;
 }
 
 export interface ProcessedDocumentData {
@@ -58,62 +44,7 @@ export interface ProcessedDocumentData {
     }>;
 }
 
-/**
- * Upload a file to Azure Blob Storage and return a SAS URL
- */
-export async function uploadToBlobStorage(
-    fileBuffer: Uint8Array,
-    filename: string,
-    containerName: string = AZURE_STORAGE_CONTAINER
-): Promise<{ blobUrl: string; sasUrl: string; blobName: string }> {
-    try {
-        const blobServiceClient = getBlobServiceClient();
-        const containerClient = blobServiceClient.getContainerClient(containerName);
 
-        // Ensure container exists
-        await containerClient.createIfNotExists({ access: 'blob' });
-
-        // Generate unique blob name
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const safeFilename = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const blobName = `documents/${timestamp}_${safeFilename}`;
-
-        const blobClient = containerClient.getBlockBlobClient(blobName);
-
-        // Upload the file
-        await blobClient.upload(fileBuffer, fileBuffer.length, {
-            blobHTTPHeaders: {
-                blobContentType: getContentType(filename)
-            }
-        });
-
-        // Generate SAS token for read access (15 minutes expiry)
-        const expiryTime = new Date();
-        expiryTime.setMinutes(expiryTime.getMinutes() + 15);
-
-        const sasOptions: BlobSASSignatureValues = {
-            containerName: containerName,
-            blobName: blobName,
-            permissions: BlobSASPermissions.from({ read: true }), // read permission
-            expiresOn: expiryTime,
-            startsOn: new Date(),
-            contentType: getContentType(filename)
-        };
-
-        const sasToken = generateBlobSASQueryParameters(sasOptions, blobServiceClient.credential as any).toString();
-
-        const sasUrl = `${blobClient.url}?${sasToken}`;
-
-        return {
-            blobUrl: blobClient.url,
-            sasUrl,
-            blobName
-        };
-    } catch (error) {
-        console.error('Error uploading to blob storage:', error);
-        throw new Error(`Failed to upload file to Azure Blob Storage: ${error.message}`);
-    }
-}
 
 /**
  * Process a document using Azure Form Recognizer

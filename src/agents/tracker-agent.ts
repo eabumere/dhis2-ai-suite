@@ -217,26 +217,25 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
                         console.warn('📄 Tracker Data Agent: Orchestrator does not support file retrieval');
                     }
                 }
-            }
-        }
 
-            // Fallback: Look for legacy file content (for backward compatibility)
-            if (!fileBuffer && message.content.includes('File:') && message.content.includes('Content:')) {
-                const contentMatch = message.content.match(/File:\s*([^\n]+)\nContent:\n([\s\S]*)$/);
-                if (contentMatch) {
-                    const [, extractedFilename, fileContent] = contentMatch;
-                    try {
-                        // Convert content to Uint8Array
-                        const binaryString = typeof fileContent === 'string' ? fileContent : String(fileContent);
-                        const bytes = new Uint8Array(binaryString.length);
-                        for (let i = 0; i < binaryString.length; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
+                // Fallback: Look for legacy file content (for backward compatibility)
+                if (!fileBuffer && message.content && message.content.includes('File:') && message.content.includes('Content:')) {
+                    const contentMatch = message.content.match(/File:\s*([^\n]+)\nContent:\n([\s\S]*)$/);
+                    if (contentMatch) {
+                        const [, extractedFilename, fileContent] = contentMatch;
+                        try {
+                            // Convert content to Uint8Array
+                            const binaryString = typeof fileContent === 'string' ? fileContent : String(fileContent);
+                            const bytes = new Uint8Array(binaryString.length);
+                            for (let i = 0; i < binaryString.length; i++) {
+                                bytes[i] = binaryString.charCodeAt(i);
+                            }
+                            fileBuffer = bytes;
+                            filename = extractedFilename;
+                            console.log('📄 Tracker Data Agent: Found legacy file content in message');
+                        } catch (error) {
+                            console.warn('📄 Tracker Data Agent: Failed to parse legacy file content:', error);
                         }
-                        fileBuffer = bytes;
-                        filename = extractedFilename;
-                        console.log('📄 Tracker Data Agent: Found legacy file content in message');
-                    } catch (error) {
-                        console.warn('📄 Tracker Data Agent: Failed to parse legacy file content:', error);
                     }
                 }
             }

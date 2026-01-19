@@ -3,7 +3,7 @@
 // External libraries (alphabetically)
 import {tool} from '@langchain/core/tools';
 import {z} from 'zod';
-import { ChatModels } from '../../chat-model-factory';
+import {ChatModels} from '../../chat-model-factory';
 
 // Local imports (alphabetically by module)
 import {
@@ -16,6 +16,7 @@ import {
 	searchDhis2Metadata
 } from './helpers';
 import {createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool} from './base-tool';
+import type { ProcessedDocumentData } from '../../azure-document-intelligence';
 
 // Schemas
 import {Dhis2Schemas} from './schemas';
@@ -1792,7 +1793,7 @@ async function createDhis2ReportingFormAggregated({
 /**
  * Process Scanned Register - Extract tracker data from PDF documents
  * Uses Azure Document Intelligence to analyze facility registers and extract patient data
- * Based on Python implementation: splits PDF, processes each page, extracts TableData fields
+ * Processes tables.cells structure where first row is headers, subsequent rows are data
  */
 export const processScannedRegister = tool(
     async (input: {
@@ -1805,7 +1806,6 @@ export const processScannedRegister = tool(
             const { processDocumentWithAI, splitPdfIntoPages } = await import('../../azure-document-intelligence');
 
             console.log(`Processing scanned register: ${input.filename}`);
-
             // Split PDF into pages for processing (matching Python implementation)
             const pages = await splitPdfIntoPages(input.fileBuffer);
 
@@ -1821,49 +1821,52 @@ export const processScannedRegister = tool(
                 try {
                     const pageResult = await processDocumentWithAI(pages[i], `${input.filename}_page_${i + 1}.pdf`);
 
-                    // Process documents from this page (matching Python implementation structure)
+                    // Process tables from this page using the proper tables.cells structure
+                    if (pageResult.tables && pageResult.tables.length > 0) {
+                        for (const table of pageResult.tables) {
+							console.log('Table', table);
+                            const processingBlock = processTableCells(table.cells);
+                            if (processingBlock.length > 0) {
+                                cleanData.push(processingBlock);
+                                console.log(`Extracted ${processingBlock.length} records from table on page ${i + 1}`);
+                            } else {
+                                console.log(`No records found in table on page ${i + 1}`);
+                            }
+                        }
+                    } else {
+                        console.log(`No tables found on page ${i + 1}`);
+                    }
+
+                    // Check key-value pairs for org unit information
+                    if (pageResult.keyValuePairs) {
+                        for (const kvp of pageResult.keyValuePairs) {
+                            const keyContent = (kvp as any).key?.content || (kvp as any).key || '';
+                            const valueContent = (kvp as any).value?.content || (kvp as any).value || '';
+
+                            if (keyContent && (keyContent === "OrgUnit" || keyContent.toString().includes("OrgUnit"))) {
+                                if (valueContent && !orgUnit) {
+                                    orgUnit = valueContent.toString();
+                                    console.log(`Found org unit: ${orgUnit}`);
+                                }
+                            }
+                        }
+                    }
+
+                    // Also check documents for org unit (backward compatibility)
                     if (pageResult.documents) {
                         for (const doc of pageResult.documents) {
-                            if (doc.fields) {
-                                for (const [name, field] of Object.entries(doc.fields)) {
-                                    // Extract org unit if found (matching Python logic)
-                                    if (name === "OrgUnit" || name.includes("OrgUnit")) {
-                                        const orgUnitValue = (field as any)?.valueString || (field as any)?.content;
-                                        if (orgUnitValue && !orgUnit) {
-                                            orgUnit = orgUnitValue;
-                                            console.log(`Found org unit: ${orgUnit}`);
-                                        }
-                                    }
-
-                                    // Extract table data (matching Python implementation)
-                                    if (name === "TableData" || name.includes("TableData")) {
-                                        const processingBlock: Array<{ [key: string]: { value: string; confidence: number } }> = [];
-
-                                        // Handle different field structures (matching Python logic)
-                                        const fieldAny = field as any;
-                                        if (fieldAny && fieldAny.valueArray) {
-                                            // Direct array of rows - matching Python's processing_block.append(process_row(row))
-                                            for (const row of fieldAny.valueArray) {
-                                                processingBlock.push(processRow(row));
-                                            }
-                                        } else if (fieldAny && fieldAny.valueObject) {
-                                            // Single row object - matching Python's process_row({valueObject: field.valueObject})
-                                            processingBlock.push(processRow({ valueObject: fieldAny.valueObject }));
-                                        }
-
-                                        if (processingBlock.length > 0) {
-                                            cleanData.push([processingBlock]);
-                                            console.log(`Extracted ${processingBlock.length} records from TableData on page ${i + 1}`);
-                                        } else {
-                                            console.log(`No records found in TableData on page ${i + 1}`);
-                                        }
+                            for (const [fieldName, field] of Object.entries(doc.fields || {})) {
+                                if (fieldName.includes("OrgUnit")) {
+                                    const orgUnitValue = (field as any)?.valueString;
+                                    if (orgUnitValue && !orgUnit) {
+                                        orgUnit = orgUnitValue;
+                                        console.log(`Found org unit: ${orgUnit}`);
                                     }
                                 }
                             }
                         }
-                    } else {
-                        console.log(`No documents found on page ${i + 1}`);
                     }
+
                 } catch (error) {
                     console.error(`Error processing page ${i + 1}:`, error);
                     // Continue with other pages
@@ -1905,62 +1908,7 @@ export const processScannedRegister = tool(
     }
 );
 
-/**
- * Upload Document to Azure Storage - Prepare document for processing
- */
-export const uploadDocumentToAzure = tool(
-    async (input: {
-        fileBuffer: Buffer;
-        filename: string;
-        containerName?: string;
-    }) => {
-        try {
-            const { uploadToBlobStorage, validateDocumentFile } = await import('../../azure-document-intelligence');
 
-            console.log(`Uploading document: ${input.filename}`);
-
-            // Validate file
-            const validation = validateDocumentFile(input.filename, input.fileBuffer.length);
-            if (!validation.valid) {
-                return JSON.stringify({
-                    success: false,
-                    error: validation.error
-                });
-            }
-
-            // Upload to Azure Blob Storage
-            const uploadResult = await uploadToBlobStorage(
-                input.fileBuffer,
-                input.filename,
-                input.containerName
-            );
-
-            return JSON.stringify({
-                success: true,
-                blobUrl: uploadResult.blobUrl,
-                sasUrl: uploadResult.sasUrl,
-                blobName: uploadResult.blobName,
-                message: `Successfully uploaded ${input.filename} to Azure Blob Storage`
-            });
-
-        } catch (error) {
-            console.error('Error uploading document:', error);
-            return JSON.stringify({
-                success: false,
-                error: `Failed to upload document: ${error.message}`
-            });
-        }
-    },
-    {
-        name: "upload_document_to_azure",
-        description: "Upload a document (PDF/image) to Azure Blob Storage and generate a secure SAS URL for processing. Validates file type and size before upload.",
-        schema: z.object({
-            fileBuffer: z.instanceof(Uint8Array).describe("The file buffer to upload"),
-            filename: z.string().describe("Original filename"),
-            containerName: z.string().optional().describe("Azure storage container name (defaults to configured container)")
-        })
-    }
-);
 
 /**
  * Map Extracted Data to DHIS2 Tracker Format
@@ -2152,28 +2100,89 @@ export const registerTrackerEntities = tool(
 );
 
 /**
+ * Process table cells from Azure Document Intelligence response
+ * Converts cells array to row objects using headers from first row
+ */
+function processTableCells(cells: any[]): Array<{ [key: string]: { value: string; confidence: number } }> {
+    const rows: Array<{ [key: string]: { value: string; confidence: number } }> = [];
+
+    if (!cells || cells.length === 0) {
+        return rows;
+    }
+
+    // Group cells by rowIndex
+    const cellsByRow: { [rowIndex: number]: any[] } = {};
+    cells.forEach(cell => {
+        const rowIndex = cell.rowIndex;
+        if (!cellsByRow[rowIndex]) {
+            cellsByRow[rowIndex] = [];
+        }
+        cellsByRow[rowIndex].push(cell);
+    });
+
+    // Sort cells within each row by columnIndex
+    Object.keys(cellsByRow).forEach(rowIndexStr => {
+        const rowIndex = parseInt(rowIndexStr);
+        cellsByRow[rowIndex].sort((a, b) => a.columnIndex - b.columnIndex);
+    });
+
+    // Get headers from first row (rowIndex 0)
+    const headerRow = cellsByRow[0];
+    if (!headerRow) {
+        console.warn('No header row found in table');
+        return rows;
+    }
+
+    const headers = headerRow.map((cell: any) => cell.content?.trim() || `Column_${cell.columnIndex}`);
+
+    // Process data rows (rowIndex > 0)
+    const rowIndices = Object.keys(cellsByRow)
+        .map(idx => parseInt(idx))
+        .filter(idx => idx > 0)
+        .sort((a, b) => a - b);
+
+    for (const rowIndex of rowIndices) {
+        const rowCells = cellsByRow[rowIndex];
+        const processedRow: { [key: string]: { value: string; confidence: number } } = {};
+
+        // Map each cell to its corresponding header
+        rowCells.forEach((cell: any) => {
+            const columnIndex = cell.columnIndex;
+            const headerName = headers[columnIndex] || `Column_${columnIndex}`;
+
+            // Clean up header name for use as object key
+            const cleanHeaderName = headerName.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+
+            processedRow[cleanHeaderName] = {
+                value: cell.content?.trim() || '',
+                confidence: 0.8 // Default confidence since cells don't provide confidence in this format
+            };
+        });
+
+        if (Object.keys(processedRow).length > 0) {
+            rows.push(processedRow);
+        }
+    }
+
+    return rows;
+}
+
+/**
  * Process row data from Azure Document Intelligence (matching Python implementation)
  */
 function processRow(row: any): { [key: string]: { value: string; confidence: number } } {
     const processedRow: { [key: string]: { value: string; confidence: number } } = {};
 
-    // Handle different row structures (matching Python logic)
-    if (row.valueObject) {
-        // Direct valueObject structure
+    // Match Python logic: row['valueObject']
+    if (row && typeof row === 'object' && row.valueObject) {
         const obj = row.valueObject;
         for (const [key, value] of Object.entries(obj)) {
-            processedRow[key] = {
-                value: (value as any)?.valueString || (value as any)?.content || String(value) || '',
-                confidence: (value as any)?.confidence || 0
-            };
-        }
-    } else {
-        // Direct object structure
-        for (const [key, value] of Object.entries(row)) {
-            processedRow[key] = {
-                value: (value as any)?.valueString || (value as any)?.content || String(value) || '',
-                confidence: (value as any)?.confidence || 0
-            };
+            if (value && typeof value === 'object') {
+                processedRow[key] = {
+                    "value": (value as any)?.valueString || String(value) || "",
+                    "confidence": (value as any)?.confidence || 0
+                };
+            }
         }
     }
 
@@ -2181,26 +2190,81 @@ function processRow(row: any): { [key: string]: { value: string; confidence: num
 }
 
 /**
- * Merge patient records by ART No Patient ID (utility function)
+ * Find patient ID field from various possible column names
+ */
+function findPatientIdField(row: { [key: string]: { value: string; confidence: number } }): { value: string; confidence: number } | null {
+    // List of possible patient ID column variations (normalized to lowercase, trimmed)
+    const patientIdPatterns = [
+        "art no patient id:",
+        "art no patient id",
+        "art patient id:",
+        "art patient id",
+        "patient art id:",
+        "patient art id",
+        "art id:",
+        "art id",
+        "patient id:",
+        "patient id",
+        "art number:",
+        "art number",
+        "patient number:",
+        "patient number",
+        "id:",
+        "id"
+    ];
+
+    // Check each possible column name
+    for (const [colName, field] of Object.entries(row)) {
+        const normalizedColName = colName.toLowerCase().trim().replace(/\s+/g, ' ');
+
+        // Check if this column matches any of our patterns
+        for (const pattern of patientIdPatterns) {
+            if (normalizedColName.includes(pattern) || pattern.includes(normalizedColName)) {
+                console.log(`Found patient ID field: "${colName}" -> "${field.value}"`);
+                return field;
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Merge patient records by patient ID with flexible column matching (utility function)
  */
 function mergePatientRecords(tableData: Array<Array<{ [key: string]: { value: string; confidence: number } }>>): Array<{ [key: string]: { value: string; confidence: number } }> {
     const merged = new Map<string, { [key: string]: { value: string; confidence: number } }>();
+    let totalRows = 0;
+    let rowsWithPatientId = 0;
+
+    console.log(`Starting patient record merging with ${tableData.length} tables`);
 
     // Process each table
     for (const table of tableData) {
+        console.log(`Processing table with ${table.length} rows`);
+
         // Process each row in the table
         for (const row of table) {
-            const patientId = row["ART No Patient ID:"]?.value?.trim();
+            totalRows++;
+
+            // Find patient ID using flexible matching
+            const patientIdField = findPatientIdField(row);
+            const patientId = patientIdField?.value?.trim();
 
             if (!patientId) {
+                console.log(`Row ${totalRows}: No patient ID found, skipping. Available columns: ${Object.keys(row).join(', ')}`);
                 continue; // Skip rows without patient ID
             }
 
+            rowsWithPatientId++;
+
             if (!merged.has(patientId)) {
                 merged.set(patientId, { ...row });
+                console.log(`New patient record: ${patientId}`);
             } else {
                 // Merge with existing record (keep higher confidence values)
                 const existing = merged.get(patientId)!;
+                console.log(`Merging additional data for patient: ${patientId}`);
 
                 for (const [key, field] of Object.entries(row)) {
                     if (!existing[key] || field.confidence > existing[key].confidence) {
@@ -2211,7 +2275,10 @@ function mergePatientRecords(tableData: Array<Array<{ [key: string]: { value: st
         }
     }
 
-    return Array.from(merged.values());
+    const result = Array.from(merged.values());
+    console.log(`Patient merging complete: ${totalRows} total rows, ${rowsWithPatientId} with patient IDs, ${result.length} unique patients`);
+
+    return result;
 }
 
 // =============================================================================

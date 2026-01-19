@@ -1,10 +1,12 @@
-import { DocumentAnalysisClient, AzureKeyCredential } from '@azure/ai-form-recognizer';
+import {AzureKeyCredential, DocumentAnalysisClient} from '@azure/ai-form-recognizer';
+import {PDFDocument} from 'pdf-lib';
 import * as path from 'path';
 
 // Environment variables
-const DOC_INTELLIGENCE_ENDPOINT = process.env.DOC_INTELLIGENCE_ENDPOINT;
-const DOC_INTELLIGENCE_KEY = process.env.DOC_INTELLIGENCE_KEY;
-const MODEL_ID = process.env.MODEL_ID || 'prebuilt-layout';
+const env = (import.meta as any).env;
+const DOC_INTELLIGENCE_ENDPOINT = env.DHIS2_DOC_INTELLIGENCE_ENDPOINT;
+const DOC_INTELLIGENCE_KEY = env.DHIS2_DOC_INTELLIGENCE_KEY;
+const MODEL_ID = env.DHIS2_MODEL_ID || 'prebuilt-layout';
 
 // Initialize clients
 let documentAnalysisClient: DocumentAnalysisClient | null = null;
@@ -24,23 +26,8 @@ function getDocumentAnalysisClient(): DocumentAnalysisClient {
 
 export interface ProcessedDocumentData {
     tables: Array<{
-        rows: Array<{
-            [key: string]: {
-                value: string;
-                confidence: number;
-            };
-        }>;
-    }>;
-    keyValuePairs: Array<{
-        key: string;
-        value: string;
-        confidence: number;
-    }>;
-    entities: Array<{
-        category: string;
-        subCategory?: string;
-        content: string;
-        confidence: number;
+        headers: string[];
+        rows: string[][];
     }>;
 }
 
@@ -69,48 +56,24 @@ export async function processDocumentWithAI(
             throw new Error('Document analysis failed - no result returned');
         }
 
-        console.log(`Document analysis completed. Found ${result.documents?.length || 0} documents, ${result.pages?.length || 0} pages`);
+        console.log(`Document analysis completed. Found ${result.documents?.length || 0} documents`);
 
         // Extract structured data
         const processedData: ProcessedDocumentData = {
-            tables: [],
-            keyValuePairs: [],
-            entities: []
+            tables: []
         };
 
-        // Process tables from documents (Azure Form Recognizer v5 structure)
-        if (result.documents) {
-            for (const document of result.documents) {
-                if (document.fields) {
-                    for (const [fieldName, field] of Object.entries(document.fields)) {
-                        if (fieldName.toLowerCase().includes('table')) {
-                            const tableData = processTableField(field as any);
-                            if (tableData.rows.length > 0) {
-                                processedData.tables.push(tableData);
-                            }
-                        }
+        // Process structured table fields from custom model (e.g., TableDataHandVersionPG3)
+        if (result.documents && result.documents[0]?.fields) {
+            for (const [fieldName, field] of Object.entries(result.documents[0].fields)) {
+                if (fieldName.startsWith('TableData') && Array.isArray(field['values'])) {
+                    const tableData = processStructuredTableField(field['values']);
+                    if (tableData && tableData.rows.length > 0) {
+                        processedData.tables.push(tableData);
                     }
                 }
             }
         }
-
-        // Process key-value pairs
-        if (result.keyValuePairs) {
-            for (const kvp of result.keyValuePairs) {
-                if (kvp.key && kvp.value) {
-                    processedData.keyValuePairs.push({
-                        key: kvp.key.content || '',
-                        value: kvp.value.content || '',
-                        confidence: kvp.confidence || 0
-                    });
-                }
-            }
-        }
-
-        // Note: Entities processing removed as it's not in the current API structure
-        // Entities are typically handled through custom models or different analysis types
-
-        console.log(`Extracted ${processedData.tables.length} tables, ${processedData.keyValuePairs.length} key-value pairs, ${processedData.entities.length} entities`);
 
         return processedData;
 
@@ -120,154 +83,79 @@ export async function processDocumentWithAI(
     }
 }
 
-/**
- * Process table from Azure Form Recognizer page result
- */
-function processTableFromPage(table: any, result: any): { rows: Array<{ [key: string]: { value: string; confidence: number } }> } {
-    const rows: Array<{ [key: string]: { value: string; confidence: number } }> = [];
 
-    if (table.cells && table.cells.length > 0) {
-        // Group cells by row index
-        const cellsByRow: { [rowIndex: number]: any[] } = {};
-        for (const cell of table.cells) {
-            const rowIndex = cell.rowIndex;
-            if (!cellsByRow[rowIndex]) {
-                cellsByRow[rowIndex] = [];
-            }
-            cellsByRow[rowIndex].push(cell);
+
+/**
+ * Process structured table field from custom model (e.g., TableDataHandVersionPG3)
+ */
+function processStructuredTableField(field: any): { headers: string[]; rows: string[][] } | null {
+    try {
+        // The field is an array of row objects
+        if (!Array.isArray(field) || field.length === 0) {
+            return null;
         }
+
+        // Extract headers from the first row's properties keys
+        const firstRow = field[0].properties;
+        if (!firstRow ) {
+            return null;
+        }
+
+        const headers = Object.keys(firstRow);
+        const rows: string[][] = [];
 
         // Process each row
-        const sortedRowIndices = Object.keys(cellsByRow).map(Number).sort((a, b) => a - b);
-
-        for (const rowIndex of sortedRowIndices) {
-            const rowCells = cellsByRow[rowIndex];
-            const processedRow: { [key: string]: { value: string; confidence: number } } = {};
-
-            // Sort cells by column index
-            rowCells.sort((a, b) => a.columnIndex - b.columnIndex);
-
-            // Process each cell in the row
-            for (const cell of rowCells) {
-                // Use column header or generate column name
-                let columnName = `Column_${cell.columnIndex}`;
-                if (cell.columnHeader) {
-                    columnName = cell.columnHeader.content || columnName;
+        for (const row of field) {
+            if (row && row.properties) {
+                const rowData: string[] = [];
+                for (const header of headers) {
+                    const cell = row.properties[header];
+                    // Handle missing values gracefully
+                    const value = cell?.value || cell?.content || '';
+                    rowData.push(value);
                 }
-
-                processedRow[columnName] = {
-                    value: cell.content || '',
-                    confidence: cell.confidence || 0
-                };
-            }
-
-            if (Object.keys(processedRow).length > 0) {
-                rows.push(processedRow);
+                rows.push(rowData);
             }
         }
-    }
 
-    return { rows };
-}
-
-/**
- * Process table field from Azure Form Recognizer result
- */
-function processTableField(field: any): { rows: Array<{ [key: string]: { value: string; confidence: number } }>; } {
-    const rows: Array<{ [key: string]: { value: string; confidence: number } }> = [];
-
-    try {
-        // Handle different possible structures in Azure Form Recognizer API
-        const fieldValue = (field as any).value || (field as any).content || field;
-
-        // If it's an array of objects (table rows)
-        if (Array.isArray(fieldValue)) {
-            for (const row of fieldValue) {
-                const processedRow: { [key: string]: { value: string; confidence: number } } = {};
-
-                // Process each property in the row as a column
-                if (typeof row === 'object' && row !== null) {
-                    for (const [key, cell] of Object.entries(row)) {
-                        const cellValue = cell as any;
-                        if (typeof cellValue === 'object' && cellValue !== null) {
-                            processedRow[key] = {
-                                value: cellValue.content || cellValue.value || String(cellValue) || '',
-                                confidence: cellValue.confidence || 0
-                            };
-                        } else {
-                            processedRow[key] = {
-                                value: String(cellValue) || '',
-                                confidence: 0
-                            };
-                        }
-                    }
-                }
-
-                if (Object.keys(processedRow).length > 0) {
-                    rows.push(processedRow);
-                }
-            }
-        }
-        // If it's a single object with array property
-        else if (fieldValue && typeof fieldValue === 'object' && fieldValue.values) {
-            // Handle nested array structure
-            const values = fieldValue.values;
-            if (Array.isArray(values)) {
-                for (const row of values) {
-                    const processedRow: { [key: string]: { value: string; confidence: number } } = {};
-
-                    if (row && typeof row === 'object') {
-                        for (const [key, cell] of Object.entries(row)) {
-                            const cellValue = cell as any;
-                            processedRow[key] = {
-                                value: cellValue.content || cellValue.value || String(cellValue) || '',
-                                confidence: cellValue.confidence || 0
-                            };
-                        }
-                    }
-
-                    if (Object.keys(processedRow).length > 0) {
-                        rows.push(processedRow);
-                    }
-                }
-            }
-        }
+        return { headers, rows };
     } catch (error) {
-        console.warn('Error processing table field:', error);
+        console.warn('Error processing structured table field:', error);
+        return null;
     }
-
-    return { rows };
 }
+
+
 
 /**
  * Split PDF into individual pages for processing
  */
 export async function splitPdfIntoPages(pdfBuffer: Uint8Array): Promise<Uint8Array[]> {
-    // For now, return the original PDF as a single "page"
-    // In a production implementation, you would use a PDF library like pdf-lib
-    // to split the PDF into individual pages
-    console.warn('PDF splitting not implemented. Processing entire PDF as one document.');
-    return [pdfBuffer];
-}
+    try {
+        const pdfDoc = await PDFDocument.load(pdfBuffer);
+        const pageCount = pdfDoc.getPageCount();
 
-/**
- * Get content type based on file extension
- */
-function getContentType(filename: string): string {
-    const ext = path.extname(filename).toLowerCase();
-    switch (ext) {
-        case '.pdf':
-            return 'application/pdf';
-        case '.png':
-            return 'image/png';
-        case '.jpg':
-        case '.jpeg':
-            return 'image/jpeg';
-        case '.tiff':
-        case '.tif':
-            return 'image/tiff';
-        default:
-            return 'application/octet-stream';
+        console.log(`Splitting PDF into ${pageCount} pages`);
+
+        const pageBuffers: Uint8Array[] = [];
+
+        for (let i = 0; i < pageCount; i++) {
+            // Create a new PDF document for each page
+            const newPdf = await PDFDocument.create();
+
+            // Copy the specific page from the original document
+            const [page] = await newPdf.copyPages(pdfDoc, [i]);
+            newPdf.addPage(page);
+
+            // Save the new PDF as a buffer
+            const pageBuffer = await newPdf.save();
+            pageBuffers.push(new Uint8Array(pageBuffer));
+        }
+
+        return pageBuffers;
+    } catch (error) {
+        console.error('Error splitting PDF into pages:', error);
+        throw new Error(`Failed to split PDF: ${error.message}`);
     }
 }
 

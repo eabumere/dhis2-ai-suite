@@ -236,14 +236,44 @@ const MyApp: FC = () => {
             if (attachments.length > 0) {
                 for (const attachment of attachments) {
                     try {
-                        // Read file content as text for now (could be enhanced for binary files)
-                        const fileContent = await attachment.file.text();
+                        // Determine if file is binary or text based on MIME type
+                        const isBinary = attachment.type.startsWith('application/') ||
+                                       attachment.type.startsWith('image/') ||
+                                       attachment.name.toLowerCase().endsWith('.pdf');
 
-                        // Add file content to messages (embed in content to avoid type issues)
-                        messages.push({
+                        let fileContent: Uint8Array | string;
+
+                        if (isBinary) {
+                            // For binary files, read as ArrayBuffer and convert to Uint8Array
+                            const arrayBuffer = await attachment.file.arrayBuffer();
+                            fileContent = new Uint8Array(arrayBuffer);
+                            console.log(`📁 Read binary file: ${attachment.name} (${fileContent.length} bytes)`);
+                        } else {
+                            // For text files, read as text
+                            fileContent = await attachment.file.text();
+                            console.log(`📄 Read text file: ${attachment.name} (${fileContent.length} characters)`);
+                        }
+
+                        // Add file content to messages with proper typing
+                        const fileMessage: any = {
                             role: 'user',
-                            content: `File: ${attachment.name}\nContent:\n${fileContent}`
-                        });
+                            content: `File: ${attachment.name}`,
+                            attachments: [{
+                                id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                name: attachment.name,
+                                type: attachment.type,
+                                size: attachment.size
+                            }]
+                        };
+
+                        // Store binary content separately to preserve it
+                        if (isBinary) {
+                            fileMessage.binaryContent = fileContent;
+                        } else {
+                            fileMessage.content += `\nContent:\n${fileContent}`;
+                        }
+
+                        messages.push(fileMessage);
                     } catch (fileError) {
                         console.warn(`Could not read file ${attachment.name}:`, fileError);
                         // Still include the message but without file content

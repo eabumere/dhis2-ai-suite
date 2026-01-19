@@ -20,6 +20,7 @@ export interface FileRegistryEntry {
     size: number;
     type: string;
     content: Uint8Array | string; // Raw file content
+    isBinary: boolean; // Whether content is binary data or text
     uploadedAt: number;
     lastAccessed?: number;
 }
@@ -1093,18 +1094,25 @@ class WorkflowOrchestrator {
         name: string;
         type: string;
         size: number;
+        isBinary?: boolean;
     }): void {
+        // Determine if content is binary based on type or explicit flag
+        const isBinary = metadata.isBinary !== undefined ?
+            metadata.isBinary :
+            this.isBinaryFileType(metadata.type);
+
         const entry: FileRegistryEntry = {
             id: fileId,
             name: metadata.name,
             type: metadata.type,
             size: metadata.size,
             content: content,
+            isBinary: isBinary,
             uploadedAt: Date.now()
         };
 
         this.fileRegistry.set(fileId, entry);
-        console.log(`📁 Registered file: ${fileId} (${metadata.size} bytes)`);
+        console.log(`📁 Registered file: ${fileId} (${metadata.size} bytes, ${isBinary ? 'binary' : 'text'})`);
     }
 
     // Get file content by ID
@@ -1147,19 +1155,74 @@ class WorkflowOrchestrator {
     processMessagesForFileReferences(messages: any[]): any[] {
         return messages.map(message => {
             if (message.role === 'user' && message.content && typeof message.content === 'string') {
-                // Check if message contains file content
+                // Check if message contains file content (legacy format or new format)
                 const fileContentMatch = message.content.match(/File:\s*([^\n]+)\nContent:\n([\s\S]*)$/);
-                if (fileContentMatch) {
-                    const [, filename, fileContent] = fileContentMatch;
+                const hasBinaryContent = message.binaryContent instanceof Uint8Array;
+                const hasAttachments = message.attachments && message.attachments.length > 0;
+
+                if (fileContentMatch || hasBinaryContent || hasAttachments) {
+                    // Extract filename from various sources
+                    let filename = 'unknown_file';
+                    if (fileContentMatch) {
+                        filename = fileContentMatch[1];
+                    } else if (hasAttachments) {
+                        filename = message.attachments[0].name;
+                    } else if (message.content.startsWith('File: ')) {
+                        filename = message.content.replace('File: ', '').split('\n')[0];
+                    }
 
                     // Generate file ID
                     const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+                    // Get attachment info from message
+                    const attachment = message.attachments?.[0];
+                    const mimeType = attachment?.type || this.getFileTypeFromName(filename);
+                    const isBinary = this.isBinaryFileType(mimeType);
+
+                    let processedContent: Uint8Array | string;
+                    let contentSize = 0;
+
+                    if (hasBinaryContent) {
+                        // Use binary content directly from message
+                        processedContent = message.binaryContent;
+                        contentSize = processedContent.length;
+                        console.log(`📁 Using binary content from message: ${filename} (${contentSize} bytes)`);
+                    } else if (fileContentMatch) {
+                        // Legacy format: content embedded in string
+                        const [, , rawContent] = fileContentMatch;
+
+                        if (isBinary) {
+                            // For binary files in legacy format, content should be Uint8Array
+                            if (rawContent instanceof Uint8Array) {
+                                processedContent = rawContent;
+                                contentSize = processedContent.length;
+                            } else {
+                                console.error(`❌ Expected Uint8Array for binary file ${filename}, got ${typeof rawContent}`);
+                                // Fallback: try to handle as string (might be corrupted)
+                                processedContent = new Uint8Array(rawContent.length);
+                                for (let i = 0; i < rawContent.length; i++) {
+                                    processedContent[i] = rawContent.charCodeAt(i);
+                                }
+                                contentSize = processedContent.length;
+                            }
+                        } else {
+                            // For text files, content is already a string
+                            processedContent = typeof rawContent === 'string' ? rawContent : String(rawContent);
+                            contentSize = processedContent.length;
+                        }
+                    } else {
+                        // No content found - create placeholder
+                        processedContent = '';
+                        contentSize = 0;
+                        console.warn(`⚠️ No content found for file ${filename}`);
+                    }
+
                     // Register file in orchestrator
-                    this.registerFile(fileId, fileContent, {
+                    this.registerFile(fileId, processedContent, {
                         name: filename,
-                        type: this.getFileTypeFromName(filename),
-                        size: fileContent.length
+                        type: mimeType,
+                        size: contentSize,
+                        isBinary: isBinary
                     });
 
                     // Replace file content with reference
@@ -1168,24 +1231,47 @@ class WorkflowOrchestrator {
                         content: message.content.replace(
                             /File:\s*[^\n]+\nContent:\n[\s\S]*$/,
                             `file:${fileId}`
+                        ).replace(
+                            /^File:\s*[^\n]+$/,
+                            `file:${fileId}`
                         ),
                         attachments: [{
                             id: fileId,
                             name: filename,
-                            type: this.getFileTypeFromName(filename),
-                            size: fileContent.length
+                            type: mimeType,
+                            size: contentSize
                         }]
                     };
+
+                    // Remove binaryContent from processed message (no longer needed)
+                    if (processedMessage.binaryContent) {
+                        delete processedMessage.binaryContent;
+                    }
 
                     // Set as current file for agents to access
                     this.currentFileId = fileId;
 
-                    console.log(`🔄 Converted file content to reference: ${filename} → ${fileId} (set as current file)`);
+                    console.log(`🔄 Converted file content to reference: ${filename} → ${fileId} (${isBinary ? 'binary' : 'text'}, set as current file)`);
                     return processedMessage;
                 }
             }
             return message;
         });
+    }
+
+    // Check if a file type is binary
+    private isBinaryFileType(mimeType: string): boolean {
+        const binaryTypes = [
+            'application/pdf',
+            'image/png',
+            'image/jpeg',
+            'image/jpg',
+            'image/gif',
+            'image/tiff',
+            'image/bmp',
+            'application/octet-stream'
+        ];
+        return binaryTypes.includes(mimeType.toLowerCase());
     }
 
     // Get MIME type from filename

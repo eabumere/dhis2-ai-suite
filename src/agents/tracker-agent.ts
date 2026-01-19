@@ -1,46 +1,5 @@
-import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
-import { HumanMessage } from '@langchain/core/messages';
-import {
-    // Tracker data processing tools
-    processScannedRegister,
-    uploadDocumentToAzure,
-    mapToDhis2TrackerFormat,
-    registerTrackerEntities,
-
-    // Tracker program and entity management tools
-    createDhis2Program,
-    createDhis2TrackedEntityType,
-    createDhis2TrackedEntityAttribute,
-    createDhis2TrackedEntityInstance,
-    createDhis2Enrollment,
-    createDhis2ProgramStage,
-    createDhis2ProgramRule,
-    createDhis2ProgramIndicator,
-    createDhis2RelationshipType,
-    createDhis2Relationship,
-    createDhis2Event,
-    createDhis2OrganisationUnit,
-    createDhis2OptionSet,
-    createDhis2AggregatedMetadata,
-
-    // Update tools for tracker
-    updateDhis2Program,
-    updateDhis2TrackedEntityType,
-    updateDhis2TrackedEntityAttribute,
-    updateDhis2TrackedEntityInstance,
-    updateDhis2Enrollment,
-    updateDhis2ProgramStage,
-    updateDhis2ProgramRule,
-    updateDhis2ProgramIndicator,
-    updateDhis2RelationshipType,
-    updateDhis2Relationship,
-    updateDhis2Event,
-    updateDhis2OrganisationUnit,
-    updateDhis2OptionSet,
-
-    // Utility tools
-    resolveResourceReference,
-} from '../utils/tools/metadata';
+import {Annotation, END, START, StateGraph} from '@langchain/langgraph/web';
+import {mapToDhis2TrackerFormat, processScannedRegister, registerTrackerEntities,} from '../utils/tools/metadata';
 
 // Types for tracker data processing
 export interface ExtractedPatientData {
@@ -160,11 +119,18 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
     if (state.orchestrator && typeof state.orchestrator.getCurrentFile === 'function') {
         const fileEntry = state.orchestrator.getCurrentFile();
         if (fileEntry && fileEntry.content) {
-            fileBuffer = typeof fileEntry.content === 'string'
-                ? new TextEncoder().encode(fileEntry.content)
-                : fileEntry.content as Uint8Array;
+            // Handle binary vs text files appropriately
+            if (fileEntry.isBinary) {
+                // For binary files, content should be Uint8Array
+                fileBuffer = fileEntry.content as Uint8Array;
+            } else {
+                // For text files, content is string - encode to UTF-8 bytes
+                fileBuffer = typeof fileEntry.content === 'string'
+                    ? new TextEncoder().encode(fileEntry.content)
+                    : fileEntry.content as Uint8Array;
+            }
             filename = fileEntry.name;
-            console.log(`📄 Tracker Data Agent: Retrieved current file from orchestrator: ${filename} (${fileBuffer.length} bytes)`);
+            console.log(`📄 Tracker Data Agent: Retrieved current file from orchestrator: ${filename} (${fileBuffer.length} bytes, ${fileEntry.isBinary ? 'binary' : 'text'})`);
         } else {
             console.warn('📄 Tracker Data Agent: No current file available in orchestrator');
         }
@@ -204,11 +170,18 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
                     if (state.orchestrator && typeof state.orchestrator.getFile === 'function') {
                         const fileEntry = state.orchestrator.getFile(fileId);
                         if (fileEntry && fileEntry.content) {
-                            fileBuffer = typeof fileEntry.content === 'string'
-                                ? new TextEncoder().encode(fileEntry.content)
-                                : fileEntry.content as Uint8Array;
+                            // Handle binary vs text files appropriately
+                            if (fileEntry.isBinary) {
+                                // For binary files, content should be Uint8Array
+                                fileBuffer = fileEntry.content as Uint8Array;
+                            } else {
+                                // For text files, content is string - encode to UTF-8 bytes
+                                fileBuffer = typeof fileEntry.content === 'string'
+                                    ? new TextEncoder().encode(fileEntry.content)
+                                    : fileEntry.content as Uint8Array;
+                            }
                             filename = fileEntry.name;
-                            console.log(`📄 Tracker Data Agent: Retrieved file from orchestrator (fallback): ${filename} (${fileBuffer.length} bytes)`);
+                            console.log(`📄 Tracker Data Agent: Retrieved file from orchestrator (fallback): ${filename} (${fileBuffer.length} bytes, ${fileEntry.isBinary ? 'binary' : 'text'})`);
                             break;
                         } else {
                             console.warn(`📄 Tracker Data Agent: File reference ${fileId} not found in orchestrator`);

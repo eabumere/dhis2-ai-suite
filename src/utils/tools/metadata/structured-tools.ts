@@ -1825,7 +1825,7 @@ export const processScannedRegister = tool(
                     if (pageResult.tables && pageResult.tables.length > 0) {
                         for (const table of pageResult.tables) {
 							console.log('Table', table);
-                            const processingBlock = processTableCells(table.cells);
+                            const processingBlock = processHeadersRowsTable(table);
                             if (processingBlock.length > 0) {
                                 cleanData.push(processingBlock);
                                 console.log(`Extracted ${processingBlock.length} records from table on page ${i + 1}`);
@@ -1836,37 +1836,6 @@ export const processScannedRegister = tool(
                     } else {
                         console.log(`No tables found on page ${i + 1}`);
                     }
-
-                    // Check key-value pairs for org unit information
-                    if (pageResult.keyValuePairs) {
-                        for (const kvp of pageResult.keyValuePairs) {
-                            const keyContent = (kvp as any).key?.content || (kvp as any).key || '';
-                            const valueContent = (kvp as any).value?.content || (kvp as any).value || '';
-
-                            if (keyContent && (keyContent === "OrgUnit" || keyContent.toString().includes("OrgUnit"))) {
-                                if (valueContent && !orgUnit) {
-                                    orgUnit = valueContent.toString();
-                                    console.log(`Found org unit: ${orgUnit}`);
-                                }
-                            }
-                        }
-                    }
-
-                    // Also check documents for org unit (backward compatibility)
-                    if (pageResult.documents) {
-                        for (const doc of pageResult.documents) {
-                            for (const [fieldName, field] of Object.entries(doc.fields || {})) {
-                                if (fieldName.includes("OrgUnit")) {
-                                    const orgUnitValue = (field as any)?.valueString;
-                                    if (orgUnitValue && !orgUnit) {
-                                        orgUnit = orgUnitValue;
-                                        console.log(`Found org unit: ${orgUnit}`);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                 } catch (error) {
                     console.error(`Error processing page ${i + 1}:`, error);
                     // Continue with other pages
@@ -2040,42 +2009,88 @@ export const registerTrackerEntities = tool(
         try {
             console.log(`Registering ${input.trackerPayload.trackedEntities?.length || 0} tracker entities in DHIS2`);
 
-            // Use the existing createDhis2TrackedEntityInstance tool
-            const results = [];
+            // Import DHIS2 API directly to avoid schema issues with individual tools
+            const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
 
-            for (const tei of input.trackerPayload.trackedEntities || []) {
-                try {
-                    const result = await createDhis2TrackedEntityInstance.invoke({
-                        resource: tei
-                    });
+            try {
+                // Send all entities in a single payload
+                const payload = {
+                    trackedEntities: input.trackerPayload.trackedEntities || []
+                };
 
-                    const parsedResult = JSON.parse(result);
-                    results.push({
-                        success: parsedResult.success,
-                        tei: tei,
-                        result: parsedResult
+                const response = await Dhis2Api.mutate({
+                    resource: 'trackedEntityInstances',
+                    type: 'create',
+                    data: payload
+                });
+
+                // Process the response for all entities
+                const totalEntities = payload.trackedEntities.length;
+                const successful = [];
+                const failed = [];
+
+                // DHIS2 returns response with importSummaries for each entity
+                if (response && response.success && response.data) {
+                    const importSummaries = response.data.response?.importSummaries || [];
+
+                    payload.trackedEntities.forEach((tei, index) => {
+                        const summary = importSummaries[index];
+                        if (summary && summary.status === 'SUCCESS') {
+                            successful.push({ tei, summary });
+                        } else {
+                            failed.push({
+                                tei,
+                                error: summary?.description || 'Import failed'
+                            });
+                        }
                     });
-                } catch (error) {
-                    console.error('Error creating tracked entity:', error);
-                    results.push({
-                        success: false,
-                        tei: tei,
-                        error: error.message
+                } else {
+                    // If no detailed response, mark all as failed
+                    payload.trackedEntities.forEach(tei => {
+                        failed.push({
+                            tei,
+                            error: response?.error || 'Unknown error'
+                        });
                     });
                 }
+
+                return JSON.stringify({
+                    success: successful.length > 0,
+                    totalEntities,
+                    successful: successful.length,
+                    failed: failed.length,
+                    results: [
+                        ...successful.map(item => ({
+                            success: true,
+                            tei: item.tei,
+                            result: item.summary
+                        })),
+                        ...failed.map(item => ({
+                            success: false,
+                            tei: item.tei,
+                            error: item.error
+                        }))
+                    ],
+                    message: `Processed ${totalEntities} entities: ${successful.length} successful, ${failed.length} failed`
+                });
+
+            } catch (error) {
+                console.error('Error registering tracker entities:', error);
+                const totalEntities = input.trackerPayload.trackedEntities?.length || 0;
+
+                return JSON.stringify({
+                    success: false,
+                    totalEntities,
+                    successful: 0,
+                    failed: totalEntities,
+                    results: (input.trackerPayload.trackedEntities || []).map(tei => ({
+                        success: false,
+                        tei,
+                        error: error.message
+                    })),
+                    message: `Failed to register tracker entities: ${error.message}`
+                });
             }
-
-            const successful = results.filter(r => r.success).length;
-            const failed = results.filter(r => !r.success).length;
-
-            return JSON.stringify({
-                success: successful > 0,
-                totalEntities: results.length,
-                successful,
-                failed,
-                results,
-                message: `Processed ${results.length} entities: ${successful} successful, ${failed} failed`
-            });
 
         } catch (error) {
             console.error('Error registering tracker entities:', error);
@@ -2093,11 +2108,75 @@ export const registerTrackerEntities = tool(
         name: "register_tracker_entities",
         description: "Create tracker entities (tracked entity instances) in DHIS2 from the mapped tracker payload. Handles enrollment and attribute creation.",
         schema: z.object({
-            trackerPayload: z.any().describe("DHIS2 tracker payload with trackedEntities array"),
+            trackerPayload: z.object({
+                trackedEntities: z.array(z.any())
+            }).describe("DHIS2 tracker payload with trackedEntities array"),
             importStrategy: z.enum(['CREATE', 'UPDATE', 'CREATE_AND_UPDATE']).default('CREATE_AND_UPDATE').describe("Import strategy for handling existing entities")
         })
     }
 );
+
+/**
+ * Process table with headers/rows structure and merge patient records directly
+ * Converts headers/rows to merged patient records by ART No Patient ID
+ */
+function processHeadersRowsTable(table: { headers: string[]; rows: string[][] }): Array<{ [key: string]: { value: string; confidence: number } }> {
+    if (!table || !table.headers || !table.rows) {
+        console.warn('Invalid table structure: missing headers or rows');
+        return [];
+    }
+
+    const headers = table.headers;
+    const tableRows = table.rows;
+    const mergedPatients = new Map<string, { [key: string]: { value: string; confidence: number } }>();
+
+    console.log(`Processing and merging table with ${headers.length} headers and ${tableRows.length} rows`);
+
+    // Process each row and merge by patient ID
+    for (const row of tableRows) {
+        const processedRow: { [key: string]: { value: string; confidence: number } } = {};
+
+        // Map each cell value to its corresponding header
+        headers.forEach((header: string, columnIndex: number) => {
+            const cellValue = row[columnIndex] || '';
+            const cleanHeaderName = header.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+
+            processedRow[cleanHeaderName] = {
+                value: cellValue,
+                confidence: 0.9 // High confidence for user-provided data
+            };
+        });
+
+        if (Object.keys(processedRow).length > 0) {
+            // Find patient ID and merge
+            const patientIdField = findPatientIdField(processedRow);
+            const patientId = patientIdField?.value?.trim();
+
+            if (patientId) {
+                if (!mergedPatients.has(patientId)) {
+                    mergedPatients.set(patientId, { ...processedRow });
+                    console.log(`New patient record: ${patientId}`);
+                } else {
+                    // Merge with existing record (keep higher confidence values)
+                    const existing = mergedPatients.get(patientId)!;
+                    console.log(`Merging additional data for patient: ${patientId}`);
+
+                    for (const [key, field] of Object.entries(processedRow)) {
+                        if (!existing[key] || field.confidence > existing[key].confidence) {
+                            existing[key] = field;
+                        }
+                    }
+                }
+            } else {
+                console.log(`Row skipped: No patient ID found`);
+            }
+        }
+    }
+
+    const result = Array.from(mergedPatients.values());
+    console.log(`Merged ${result.length} unique patients from ${tableRows.length} rows`);
+    return result;
+}
 
 /**
  * Process table cells from Azure Document Intelligence response

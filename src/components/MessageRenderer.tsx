@@ -123,8 +123,39 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                 console.log('🎨 MessageRenderer data_grid props:', {
                     displayHeaders: message.data?.displayHeaders,
                     headers: message.data?.headers,
-                    dataSetName: message.data?.dataSetName
+                    dataSetName: message.data?.dataSetName,
+                    reviewMode: message.data?.reviewMode
                 });
+
+                // Check if this is a tracker review grid
+                if (message.data?.reviewMode) {
+                    return (
+                        <div>
+                            <div style={{ marginBottom: '8px' }}>{message.content}</div>
+                            {message.data && (
+                                <TrackerDataGrid
+                                    extractedPatients={message.data.extractedPatients || []}
+                                    mappedTrackerData={message.data.mappedTrackerData || []}
+                                    reviewMode={true}
+                                    onConfirmSave={() => {
+                                        workflowOrchestrator.handleDataGridInteraction({
+                                            type: 'confirm_save',
+                                            data: {}
+                                        });
+                                    }}
+                                    onCancelSave={() => {
+                                        workflowOrchestrator.handleDataGridInteraction({
+                                            type: 'cancel_save',
+                                            data: {}
+                                        });
+                                    }}
+                                />
+                            )}
+                        </div>
+                    );
+                }
+
+                // Default: render aggregate data grid
                 return (
                     <div>
                         <div style={{ marginBottom: '8px' }}>{message.content}</div>

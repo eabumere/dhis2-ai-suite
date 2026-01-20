@@ -77,6 +77,17 @@ const TrackerDataAnnotation = Annotation.Root({
         default: () => ''
     }),
 
+    // Review state - for showing data grid before saving
+    showReviewGrid: Annotation<boolean>({
+        reducer: (left, right) => right !== undefined ? right : left,
+        default: () => false
+    }),
+
+    userConfirmedSave: Annotation<boolean>({
+        reducer: (left, right) => right !== undefined ? right : left,
+        default: () => false
+    }),
+
     // Messages and orchestrator reference
     messages: Annotation<any[]>({
         reducer: (left: any[], right: any[]) => right ? right : left,
@@ -322,9 +333,9 @@ async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State):
 
         console.log(`📄 Tracker Data Agent: Mapped ${parsedResult.totalPatients} patients with ${parsedResult.totalAttributes} attributes`);
 
+        // Set mapped data but don't go to review step yet - let conditional edge handle it
         return {
-            mappedTrackerData: parsedResult.payload.trackedEntities,
-            uiAction: 'register_tracker_entities'
+            mappedTrackerData: parsedResult.payload.trackedEntities
         };
 
     } catch (error) {
@@ -336,6 +347,18 @@ async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State):
             }
         };
     }
+}
+
+// 4.5. Review extracted data before saving
+async function review_extracted_data(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('📄 Tracker Data Agent: Presenting extracted data for review');
+
+    // Show the review grid and wait for user interaction (don't complete workflow)
+    return {
+        showReviewGrid: true,
+        uiAction: 'wait_for_confirmation'
+        // Note: No finalResult - workflow should pause here for user interaction
+    };
 }
 
 // 5. Register tracker entities in DHIS2
@@ -408,6 +431,7 @@ const trackerDataWorkflow = new StateGraph(TrackerDataAnnotation);
 trackerDataWorkflow.addNode('handle_document_upload', handle_document_upload);
 trackerDataWorkflow.addNode('extract_patient_data', extract_patient_data);
 trackerDataWorkflow.addNode('map_to_tracker_format', map_to_tracker_format);
+trackerDataWorkflow.addNode('review_extracted_data', review_extracted_data);
 trackerDataWorkflow.addNode('register_tracker_entities', register_tracker_entities);
 trackerDataWorkflow.addNode('display_processing_results', display_processing_results);
 
@@ -430,9 +454,15 @@ trackerDataWorkflow.addConditionalEdges('extract_patient_data', (state) => {
 
 // @ts-ignore
 trackerDataWorkflow.addConditionalEdges('map_to_tracker_format', (state) => {
-    if (state.uiAction === 'register_tracker_entities') return 'register_tracker_entities';
+    // If we have mapped data, go to review step
+    if (state.mappedTrackerData && state.mappedTrackerData.length > 0) {
+        return 'review_extracted_data';
+    }
     return END;
 });
+
+// Note: review_extracted_data node handles UI interaction and pauses workflow
+// The workflow will resume via handleUIInteraction when user confirms/cancels
 
 // @ts-ignore
 trackerDataWorkflow.addConditionalEdges('register_tracker_entities', (state) => {
@@ -467,15 +497,61 @@ export function createTrackerDataAgent(orchestrator: any) {
                 // Execute StateGraph workflow
                 const result = await trackerDataStateGraph.invoke(initialState);
 
-                // Format for compatibility with existing interface
+                // Check if workflow reached review step (no finalResult but has review data)
+                if (!result.finalResult && result.showReviewGrid && result.extractedPatients?.length > 0) {
+                    console.log('📄 Tracker Data Agent: Workflow paused at review step for user interaction');
+
+                    // Return result indicating user interaction is needed
+                    const reviewResult = {
+                        type: 'show_review_grid',
+                        message: 'Please review the extracted patient data before saving',
+                        data: {
+                            extractedPatients: result.extractedPatients,
+                            mappedTrackerData: result.mappedTrackerData,
+                            reviewMode: true,
+                            totalPatients: result.extractedPatients?.length || 0,
+                            extractedFrom: result.uploadedDocument?.filename || 'document'
+                        },
+                        requiresUserAction: true,
+                        actions: ['confirm_save', 'cancel_save']
+                    };
+
+                    return {
+                        messages: [{
+                            content: JSON.stringify(reviewResult),
+                            name: undefined,
+                            additional_kwargs: {},
+                            response_metadata: {}
+                        }]
+                    };
+                }
+
+                // Normal workflow completion with finalResult
+                if (result.finalResult) {
+                    return {
+                        messages: [{
+                            content: JSON.stringify(result.finalResult),
+                            name: undefined,
+                            additional_kwargs: {},
+                            response_metadata: {}
+                        }]
+                    };
+                }
+
+                // Unexpected case - no finalResult and not in review mode
+                console.warn('📄 Tracker Data Agent: Workflow completed without finalResult or review data');
                 return {
                     messages: [{
-                        content: JSON.stringify(result.finalResult),
+                        content: JSON.stringify({
+                            success: false,
+                            error: 'Workflow completed unexpectedly without result'
+                        }),
                         name: undefined,
                         additional_kwargs: {},
                         response_metadata: {}
                     }]
                 };
+
             } catch (error) {
                 console.error('📄 Tracker Data Agent: Workflow execution failed:', error);
                 return {
@@ -528,6 +604,44 @@ export function createTrackerDataAgent(orchestrator: any) {
                         filename: data.filename
                     };
                     updatedState.uiAction = 'process_document';
+                    break;
+
+                case 'confirm_save':
+                    // User confirmed saving the extracted data - directly register entities
+                    console.log('📄 Tracker Data Agent: User confirmed save - directly registering tracker entities');
+
+                    // Directly call the registration function with current state
+                    try {
+                        const registrationResult = await register_tracker_entities(currentState);
+                        console.log('📄 Tracker Data Agent: Registration completed:', registrationResult);
+
+                        // Return the registration result directly
+                        return {
+                            ...currentState,
+                            finalResult: registrationResult.finalResult || registrationResult,
+                            showReviewGrid: false,
+                            userConfirmedSave: true
+                        };
+                    } catch (error) {
+                        console.error('📄 Tracker Data Agent: Direct registration failed:', error);
+                        return {
+                            ...currentState,
+                            finalResult: {
+                                success: false,
+                                error: `Failed to register tracker entities: ${error.message}`
+                            }
+                        };
+                    }
+
+                case 'cancel_save':
+                    // User cancelled saving the data
+                    console.log('📄 Tracker Data Agent: User cancelled save - ending workflow');
+                    updatedState.finalResult = {
+                        success: false,
+                        cancelled: true,
+                        message: 'Data save cancelled by user',
+                        type: 'tracker_processing_cancelled'
+                    };
                     break;
 
                 case 'retry_processing':

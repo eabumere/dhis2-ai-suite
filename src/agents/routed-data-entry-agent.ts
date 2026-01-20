@@ -18,6 +18,12 @@ const DataEntryRouterAnnotation = Annotation.Root({
 		default: () => ''
 	}),
 
+	// Data entry type context (passed from router agent for follow-ups)
+	dataEntryType: Annotation<'tracker' | 'aggregate' | null>({
+		reducer: (left, right) => right || left,
+		default: () => null
+	}),
+
 	// Orchestrator reference for direct calls and rendering
 	orchestrator: Annotation<any>({
 		reducer: (left, right) => right || left,
@@ -52,9 +58,15 @@ async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnota
 		msg.type === 'data_grid' && msg.timestamp > Date.now() - 300000 // Within last 5 minutes
 	);
 
-	// Check for data grid action intent (if we have data grid context)
-	if (hasDataGridContext) {
-		const actionIntent = await detectDataGridActionIntent(query);
+	// For follow-ups, use the dataEntryType context passed from the router agent
+	const isFollowUp = !!state.dataEntryType;
+	const followUpType = state.dataEntryType;
+
+	console.log(`🔍 Data Entry Router: Follow-up context - isFollowUp: ${isFollowUp}, type: ${followUpType}`);
+
+	// Check for data grid action intent (if we have data grid context or follow-up context)
+	if (hasDataGridContext || isFollowUp) {
+		const actionIntent = await detectDataGridActionIntent(query, state.orchestrator, followUpType);
 		console.log(`🔍 Detected data grid action intent: ${actionIntent}`);
 
 		if (actionIntent === 'resolve_all') {
@@ -85,6 +97,36 @@ async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnota
 					success: true,
 					message: 'Data submission initiated. Processing and validating data for DHIS2 submission.',
 					action: 'submit_triggered'
+				}
+			};
+		} else if (actionIntent === 'confirm_save') {
+			console.log('✅ Triggering tracker confirm save action via orchestrator');
+			// Trigger tracker save action
+			state.orchestrator.handleDataGridInteraction({
+				type: 'confirm_save',
+				data: {}
+			});
+
+			return {
+				finalResult: {
+					success: true,
+					message: 'Tracker data save initiated. Processing and validating tracker data for DHIS2 submission.',
+					action: 'tracker_save_triggered'
+				}
+			};
+		} else if (actionIntent === 'cancel_save') {
+			console.log('❌ Triggering tracker cancel save action via orchestrator');
+			// Trigger tracker cancel action
+			state.orchestrator.handleDataGridInteraction({
+				type: 'cancel_save',
+				data: {}
+			});
+
+			return {
+				finalResult: {
+					success: true,
+					message: 'Tracker data save cancelled.',
+					action: 'tracker_cancel_triggered'
 				}
 			};
 		}
@@ -244,17 +286,58 @@ async function invoke_tracker_agent(state: typeof DataEntryRouterAnnotation.Stat
 }
 
 // Detect data grid action intent (resolve/submit via natural language)
-async function detectDataGridActionIntent(query: string): Promise<'resolve_all' | 'submit_data' | null> {
+async function detectDataGridActionIntent(query: string, orchestrator: any, followUpType?: 'tracker' | 'aggregate' | null): Promise<'resolve_all' | 'submit_data' | 'confirm_save' | 'cancel_save' | null> {
 	try {
 		console.log('🔍 Data Entry Router: Detecting data grid action intent for:', query);
 
+		// Use follow-up context if available (passed from router agent), otherwise infer from conversation
+		let isTrackerReviewGrid = false;
+		let isAggregateDataGrid = false;
+
+		if (followUpType) {
+			// Use context passed from router agent (for follow-ups)
+			isTrackerReviewGrid = followUpType === 'tracker';
+			isAggregateDataGrid = followUpType === 'aggregate';
+			console.log(`🔍 Data Entry Router: Using follow-up context - Tracker: ${isTrackerReviewGrid}, Aggregate: ${isAggregateDataGrid}`);
+		} else {
+			// Fallback: infer from conversation history
+			if (orchestrator?.currentUIState?.conversation) {
+				// Find the most recent data_grid message
+				const recentDataGrid = orchestrator.currentUIState.conversation
+					.filter((msg: any) => msg.type === 'data_grid')
+					.pop(); // Get the last one
+
+				if (recentDataGrid?.data) {
+					isTrackerReviewGrid = recentDataGrid.data.reviewMode === true;
+					isAggregateDataGrid = !isTrackerReviewGrid && recentDataGrid.data.headers && Array.isArray(recentDataGrid.data.headers);
+				}
+			}
+			console.log(`🔍 Data Entry Router: Inferred grid context - Tracker Review: ${isTrackerReviewGrid}, Aggregate: ${isAggregateDataGrid}`);
+		}
+
 		const detectionPrompt = `
-Analyze this user query in the context of a DHIS2 data entry interface with unresolved items that need to be resolved before submission.
+Analyze this user query in the context of a DHIS2 data entry interface${isTrackerReviewGrid ? ' showing tracker data for review' : isAggregateDataGrid ? ' with aggregate data that may have unresolved items' : ''}.
 
 Determine if the user is asking to perform one of these specific actions:
+${isTrackerReviewGrid ? `
+- confirm_save: User wants to save/confirm the reviewed tracker data to DHIS2
+- cancel_save: User wants to cancel the tracker data save operation` : `
 - resolve_all: User wants to resolve/fix/complete all pending unresolved items
-- submit_data: User wants to submit/send the data to DHIS2
+- submit_data: User wants to submit/send the data to DHIS2`}
 
+${isTrackerReviewGrid ? `
+Examples of confirm_save:
+- "save the data"
+- "confirm save"
+- "save to DHIS2"
+- "submit the tracker data"
+- "confirm the patient data"
+
+Examples of cancel_save:
+- "cancel"
+- "cancel save"
+- "don't save"
+- "abort"` : `
 Examples of resolve_all:
 - "resolve all the pending items"
 - "fix the unresolved entries"
@@ -267,9 +350,9 @@ Examples of submit_data:
 - "send to DHIS2"
 - "confirm submission"
 - "upload the data"
-- "submit now"
+- "submit now"`}
 
-Return ONLY one of these values: "resolve_all", "submit_data", or null if neither matches.
+Return ONLY one of these values: ${isTrackerReviewGrid ? '"confirm_save", "cancel_save"' : '"resolve_all", "submit_data"'}, or null if neither matches.
 
 Query: "${query}"
 
@@ -278,9 +361,13 @@ Response:`;
 		const result = await model.invoke([new HumanMessage(detectionPrompt)]);
 		const intent = (result.content as string).trim();
 
-		// Validate the response
-		if (intent === 'resolve_all' || intent === 'submit_data') {
-			return intent;
+		// Validate the response based on context
+		const validIntents = isTrackerReviewGrid
+			? ['confirm_save', 'cancel_save']
+			: ['resolve_all', 'submit_data'];
+
+		if (validIntents.includes(intent)) {
+			return intent as any;
 		}
 
 		return null;
@@ -379,6 +466,7 @@ export function createRoutedDataEntryAgent(orchestrator: any) {
 
 			const initialState: Partial<typeof DataEntryRouterAnnotation.State> = {
 				messages: input.messages || [],
+				dataEntryType: input.dataEntryType || null, // Use data entry type context from router
 				orchestrator: orchestrator,
 				dataEntryCategory: 'unknown',
 				originalQuery: '',

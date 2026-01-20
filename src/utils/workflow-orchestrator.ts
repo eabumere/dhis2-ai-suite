@@ -641,6 +641,28 @@ class WorkflowOrchestrator {
             );
         }
 
+        // Check if this is a tracker review grid
+        if (dataEntryResult.type === 'show_review_grid' && dataEntryResult.data) {
+            const content = dataEntryResult.message || 'Please review the extracted patient data before saving';
+
+            // Add the review grid as a specialized data_grid message with review actions
+            const reviewMessage = this.addAssistantMessage(
+                content,
+                'data_grid',
+                {
+                    ...dataEntryResult.data,
+                    reviewMode: true,
+                    actions: dataEntryResult.actions || ['confirm_save', 'cancel_save'],
+                    requiresUserAction: dataEntryResult.requiresUserAction || true
+                }
+            );
+
+            // For review grids, don't complete the workflow - return the message and let user interact
+            // The workflow should remain active and wait for user confirmation/cancellation
+            console.log('📋 Review grid displayed - workflow paused for user interaction');
+            return reviewMessage;
+        }
+
         // Check if this is a resolution error
         if (dataEntryResult.type === 'resolution_error' && dataEntryResult.data) {
             const content = dataEntryResult.message || 'Error resolving data entry field';
@@ -963,7 +985,7 @@ class WorkflowOrchestrator {
     }
 
     // Handle data grid interactions
-    handleDataGridInteraction(interaction: any) {
+    async handleDataGridInteraction(interaction: any) {
         console.log('📊 Handling data grid interaction:', interaction);
 
         const { type, data } = interaction;
@@ -1019,6 +1041,99 @@ class WorkflowOrchestrator {
                     'Add row functionality will be implemented soon.',
                     'response'
                 );
+                break;
+
+            case 'confirm_save':
+            case 'cancel_save':
+                console.log(`📋 Handling tracker interaction: ${type}`);
+
+                // For tracker interactions, get data from the conversation instead of active workflow
+                // Find the tracker review grid message in the conversation
+                const reviewMessage = this.currentUIState.conversation
+                    .filter(msg => msg.type === 'data_grid' && msg.data?.reviewMode)
+                    .pop();
+
+                if (reviewMessage?.data) {
+                    // Import the tracker agent dynamically
+                    try {
+                        const { createTrackerDataAgent } = await import('../agents/tracker-agent');
+                        const trackerAgent = createTrackerDataAgent(this);
+
+                        if (trackerAgent?.handleUIInteraction) {
+                            // Create current state from the review message data
+                            const currentState = {
+                                uploadedDocument: null, // Not needed for continuation
+                                extractedPatients: reviewMessage.data.extractedPatients || [],
+                                mappedTrackerData: reviewMessage.data.mappedTrackerData || [],
+                                orgUnit: '', // Default
+                                programId: '', // Default
+                                attributeMappings: {}, // Default
+                                uiAction: '',
+                                messages: [],
+                                orchestrator: this,
+                                finalResult: null
+                            };
+
+                            // Call the tracker agent's UI interaction handler
+                            const updatedState = await trackerAgent.handleUIInteraction(
+                                { type, data },
+                                currentState
+                            );
+
+                            // Handle the result
+                            if (updatedState.finalResult) {
+                                this.updateUIState({
+                                    showProcessing: false,
+                                    showResults: true,
+                                    results: updatedState.finalResult,
+                                    resultsType: 'tracker_processing_complete'
+                                });
+
+                                // Add completion message
+                                this.addAssistantMessage(
+                                    updatedState.finalResult.message || 'Tracker processing completed',
+                                    'tracker_processing_complete',
+                                    updatedState.finalResult
+                                );
+                            } else {
+                                // If no final result, show a confirmation message
+                                const actionMessage = type === 'confirm_save'
+                                    ? '✅ Data saved to DHIS2 successfully!'
+                                    : '❌ Save cancelled by user.';
+
+                                this.addAssistantMessage(
+                                    actionMessage,
+                                    'response'
+                                );
+
+                                // Reset UI
+                                this.updateUIState({
+                                    showProcessing: false,
+                                    showQueryInput: true,
+                                    queryEnabled: true
+                                });
+                            }
+                        } else {
+                            console.warn('Tracker agent handleUIInteraction not available');
+                            this.addAssistantMessage(
+                                'Unable to process tracker interaction - agent not available',
+                                'error'
+                            );
+                        }
+                    } catch (error) {
+                        console.error('Failed to import tracker agent:', error);
+                        this.addAssistantMessage(
+                            'Unable to process tracker interaction - agent loading failed',
+                            'error'
+                        );
+                    }
+                } else {
+                    console.warn('No tracker review grid found in conversation');
+                    this.addAssistantMessage(
+                        'Unable to process tracker interaction - no review data found',
+                        'error'
+                    );
+                }
                 break;
 
             case 'resolve_all':

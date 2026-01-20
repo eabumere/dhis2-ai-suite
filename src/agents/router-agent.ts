@@ -20,6 +20,12 @@ const RouterAnnotation = Annotation.Root({
 		default: () => ''
 	}),
 
+	// Data entry context for follow-ups
+	dataEntryType: Annotation<'tracker' | 'aggregate' | null>({
+		reducer: (left, right) => right || left,
+		default: () => null
+	}),
+
 	// Orchestrator reference for direct calls and rendering
 	orchestrator: Annotation<any>({
 		reducer: (left, right) => right || left,
@@ -128,13 +134,15 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 	const followUpInfo = await detectFollowUpIntent(query, fullConversationHistory);
 	console.log(`🔍 Router: Follow-up check: ${followUpInfo.isFollowUp ? 'YES' : 'NO'}`, followUpInfo);
 
-	if (followUpInfo.isFollowUp && followUpInfo.targetAgent) {
-		console.log(`🔄 Router: Detected follow-up to ${followUpInfo.targetAgent}, routing directly`);
-		return {
-			workflowType: followUpInfo.targetAgent,
-			originalQuery: query
-		};
-	}
+		if (followUpInfo.isFollowUp && followUpInfo.targetAgent) {
+			console.log(`🔄 Router: Detected follow-up to ${followUpInfo.targetAgent}${followUpInfo.dataEntryType ? ` (${followUpInfo.dataEntryType})` : ''}, routing directly`);
+			return {
+				workflowType: followUpInfo.targetAgent,
+				originalQuery: query,
+				// Store data entry type context for the data entry router
+				dataEntryType: followUpInfo.dataEntryType
+			};
+		}
 
 	// Not a follow-up, proceed with normal classification
 	const workflowType = await detectWorkflowTypeLLM(query, fullConversationHistory);
@@ -277,7 +285,8 @@ async function invoke_data_entry_router(state: typeof RouterAnnotation.State): P
 		const fullConversationHistory = state.orchestrator?.currentUIState?.conversation || state.messages;
 		const dataEntryAgent = createRoutedDataEntryAgent(state.orchestrator);
 		const result = await dataEntryAgent.invoke({
-			messages: fullConversationHistory
+			messages: fullConversationHistory,
+			dataEntryType: state.dataEntryType // Pass data entry type context
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;
@@ -443,17 +452,39 @@ Example output format:
 async function detectFollowUpIntent(query: string, conversationHistory: any[]): Promise<{
 	isFollowUp: boolean;
 	targetAgent?: string;
+	dataEntryType?: 'tracker' | 'aggregate'; // Add context about data entry type
 	reasoning: string;
 }> {
 	try {
 		console.log('🔍 Router: Detecting follow-up intent for:', query);
 
-		// Extract recent conversation context (last 3 messages for follow-up detection)
+		// Extract recent conversation context (last 5 messages for better context)
 		const recentMessages = conversationHistory
 			.filter(msg => msg.role !== 'user' || msg.content !== query) // Exclude current query
-			.slice(-3) // Last 3 messages for context
-			.map(msg => `${msg.role}: ${typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}`)
+			.slice(-5) // Last 5 messages for context
+			.map(msg => {
+				let content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+				// Include data grid information if present
+				if (msg.type === 'data_grid' && msg.data) {
+					content += ` [DataGrid: reviewMode=${msg.data.reviewMode}, hasHeaders=${!!msg.data.headers}]`;
+				}
+				return `${msg.role}: ${content}`;
+			})
 			.join('\n');
+
+		// Check for recent data grid context to determine data entry type
+		let recentDataEntryType: 'tracker' | 'aggregate' | null = null;
+		const recentDataGrid = conversationHistory
+			.filter(msg => msg.type === 'data_grid')
+			.slice(-1)[0]; // Most recent data grid
+
+		if (recentDataGrid?.data) {
+			if (recentDataGrid.data.reviewMode === true) {
+				recentDataEntryType = 'tracker';
+			} else if (recentDataGrid.data.headers && Array.isArray(recentDataGrid.data.headers)) {
+				recentDataEntryType = 'aggregate';
+			}
+		}
 
 		const followUpPrompt = `
 Analyze this user query and recent conversation context to determine if it is a follow-up question/request.
@@ -469,17 +500,21 @@ Determine if this query is:
 
 Available agents: direct_search, analytics_routing, crud, data_entry
 
-If this is a follow-up, specify which agent it should route to based on the recent conversation context.
+If this is a follow-up to data_entry, also determine the data entry type:
+- tracker: If context shows tracker data review, patient data, or "save to DHIS2" operations
+- aggregate: If context shows data grid with headers like dataElement, orgUnit, period, etc.
 
 Return JSON with:
 {
   "isFollowUp": boolean,
   "targetAgent": "agent_name" (only if isFollowUp is true),
-  "reasoning": "brief explanation"
+  "dataEntryType": "tracker|aggregate" (only if targetAgent is "data_entry"),
+  "reasoning": "brief explanation including data entry type detection"
 }
 
 Examples:
-- "Update the first value to 10" after data submission → {"isFollowUp": true, "targetAgent": "data_entry", "reasoning": "Refers to previously submitted data values"}
+- "Submit the patient data" after tracker review → {"isFollowUp": true, "targetAgent": "data_entry", "dataEntryType": "tracker", "reasoning": "Follow-up to tracker data review operation"}
+- "Submit the data" after aggregate data entry → {"isFollowUp": true, "targetAgent": "data_entry", "dataEntryType": "aggregate", "reasoning": "Follow-up to aggregate data submission"}
 - "Show me indicators" (new query) → {"isFollowUp": false, "reasoning": "New search request"}
 `;
 
@@ -488,9 +523,16 @@ Examples:
 
 		console.log('🔍 Router: Follow-up detection result:', followUpInfo);
 
+		// If LLM didn't detect dataEntryType but we found it from context, use that
+		if (followUpInfo.targetAgent === 'data_entry' && !followUpInfo.dataEntryType && recentDataEntryType) {
+			followUpInfo.dataEntryType = recentDataEntryType;
+			followUpInfo.reasoning += ` (inferred ${recentDataEntryType} from recent data grid context)`;
+		}
+
 		return {
 			isFollowUp: followUpInfo.isFollowUp || false,
 			targetAgent: followUpInfo.targetAgent,
+			dataEntryType: followUpInfo.dataEntryType,
 			reasoning: followUpInfo.reasoning || 'No reasoning provided'
 		};
 	} catch (error) {

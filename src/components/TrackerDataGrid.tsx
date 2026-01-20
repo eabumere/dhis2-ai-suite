@@ -37,16 +37,19 @@ interface TrackerDataValue {
 interface TrackerDataGridProps {
     extractedPatients: ExtractedPatientData[];
     mappedTrackerData: TrackerDataValue[];
-    onConfigureProcessing: (config: {
+    onConfigureProcessing?: (config: {
         orgUnit: string;
         programId: string;
         attributeMappings: Record<string, string>;
     }) => void;
-    onUploadDocument: (file: File) => void;
-    onRetryProcessing: () => void;
+    onUploadDocument?: (file: File) => void;
+    onRetryProcessing?: () => void;
+    onConfirmSave?: () => void;
+    onCancelSave?: () => void;
     processingStep?: string;
     processingProgress?: number;
     error?: string;
+    reviewMode?: boolean;
 }
 
 const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
@@ -55,9 +58,12 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
     onConfigureProcessing,
     onUploadDocument,
     onRetryProcessing,
+    onConfirmSave,
+    onCancelSave,
     processingStep,
     processingProgress,
-    error
+    error,
+    reviewMode = false
 }) => {
     const [configModalVisible, setConfigModalVisible] = useState(false);
     const [uploadModalVisible, setUploadModalVisible] = useState(false);
@@ -196,17 +202,43 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
         },
     ];
 
-    // Transform extracted patients data for display
-    const patientTableData = React.useMemo(() => {
+    // Create dynamic columns from extracted field names
+    const dynamicPatientColumns = React.useMemo(() => {
         if (extractedPatients.length === 0) return [];
 
-        // Use first patient as representative for field structure
+        // Get all field names from the first patient (they should be consistent)
         const firstPatient = extractedPatients[0];
-        return Object.entries(firstPatient).map(([fieldName, fieldData]) => ({
+        const fieldNames = Object.keys(firstPatient);
+
+        // Create columns for each field
+        const columns = fieldNames.map(fieldName => ({
+            title: fieldName,
+            dataIndex: fieldName,
             key: fieldName,
-            fieldName,
-            value: fieldData.value,
-            confidence: fieldData.confidence,
+            width: 150,
+            render: (value: { value: string; confidence: number }) => (
+                <span style={{
+                    color: value.confidence < 0.8 ? '#ff4d4f' : 'inherit',
+                    fontWeight: value.confidence < 0.8 ? 'bold' : 'normal'
+                }}>
+                    {value.value || '-'}
+                    {value.confidence < 0.8 && (
+                        <span style={{ fontSize: '12px', color: '#ff4d4f', marginLeft: '4px' }}>
+                            ({Math.round(value.confidence * 100)}%)
+                        </span>
+                    )}
+                </span>
+            ),
+        }));
+
+        return columns;
+    }, [extractedPatients]);
+
+    // Transform extracted patients data for patient-by-patient display
+    const patientTableData = React.useMemo(() => {
+        return extractedPatients.map((patient, index) => ({
+            key: index,
+            ...patient, // Spread all field data
         }));
     }, [extractedPatients]);
 
@@ -217,6 +249,78 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
             ...patient,
         }));
     }, [mappedTrackerData]);
+
+    if (reviewMode) {
+        return (
+            <div style={{ padding: '20px' }}>
+                <div style={{ marginBottom: '20px' }}>
+                    <h2>📋 Review Extracted Patient Data</h2>
+                    <p>Please review the extracted patient data before saving to DHIS2. Each row represents one patient.</p>
+                </div>
+
+                {error && (
+                    <Alert
+                        message="Processing Error"
+                        description={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: '20px' }}
+                    />
+                )}
+
+                {/* Patient Table in Review Mode */}
+                {extractedPatients.length > 0 && (
+                    <div style={{ marginBottom: '30px' }}>
+                        <div style={{
+                            overflow: 'auto',
+                            maxHeight: '400px',
+                            border: '1px solid #f0f0f0',
+                            borderRadius: '4px'
+                        }}>
+                            <Table
+                                columns={dynamicPatientColumns}
+                                dataSource={patientTableData}
+                                size="middle"
+                                pagination={false}
+                                scroll={{
+                                    x: 'max-content',
+                                    y: 'calc(100% - 40px)'  // Fill container height minus padding
+                                }}
+                                bordered
+                                sticky
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {/* Action Buttons */}
+                <div style={{
+                    display: 'flex',
+                    gap: '10px',
+                    justifyContent: 'flex-end',
+                    padding: '20px',
+                    borderTop: '1px solid #f0f0f0'
+                }}>
+                    <Button
+                        type="primary"
+                        size="large"
+                        onClick={onConfirmSave}
+                        style={{ minWidth: '120px' }}
+                    >
+                        ✅ Save to DHIS2
+                    </Button>
+                    <Button
+                        danger
+                        size="large"
+                        onClick={onCancelSave}
+                        style={{ minWidth: '120px' }}
+                    >
+                        ❌ Cancel
+                    </Button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div style={{ padding: '20px' }}>
@@ -273,11 +377,12 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                 <div style={{ marginBottom: '30px' }}>
                     <h3>📋 Extracted Patient Data ({extractedPatients.length} patients)</h3>
                     <Table
-                        columns={patientColumns}
+                        columns={dynamicPatientColumns}
                         dataSource={patientTableData}
                         size="small"
                         pagination={false}
-                        scroll={{ y: 300 }}
+                        scroll={{ x: 'max-content', y: 300 }}
+                        bordered
                     />
                 </div>
             )}

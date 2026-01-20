@@ -1514,11 +1514,15 @@ async function handleDataValueUpdate(query: string, conversationHistory: any[], 
 			if (recentSubmission) {
 				// Extract submitted data from the conversation message
 				const content = recentSubmission.content;
-				if (content && typeof content === 'object') {
-					if ('submittedData' in content && Array.isArray(content.submittedData)) {
-						submittedData = content.submittedData;
-					} else if ('data' in content && content.data && typeof content.data === 'object' && 'submittedData' in content.data && Array.isArray(content.data.submittedData)) {
-						submittedData = content.data.submittedData;
+				if (content && typeof content === 'object' && content !== null) {
+					const contentObj = content as any; // Type assertion for dynamic content
+					if ('submittedData' in contentObj && Array.isArray(contentObj.submittedData)) {
+						submittedData = contentObj.submittedData;
+					} else if ('data' in contentObj && contentObj.data && typeof contentObj.data === 'object' && contentObj.data !== null) {
+						const dataObj = contentObj.data as any;
+						if ('submittedData' in dataObj && Array.isArray(dataObj.submittedData)) {
+							submittedData = dataObj.submittedData;
+						}
 					}
 				}
 				console.log('🔄 Aggregate Data Agent: Found submitted data in conversation:', submittedData.length, 'values');

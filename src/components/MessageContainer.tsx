@@ -1,6 +1,6 @@
 import React, { FC, useEffect, useRef } from 'react';
 import { ConversationMessage } from '../utils/workflow-orchestrator';
-import MessageRenderer from './MessageRenderer';
+import MessageRenderer, { ThreadedMessageRenderer } from './MessageRenderer';
 
 interface MessageContainerProps {
     messages: ConversationMessage[];
@@ -46,9 +46,7 @@ const MessageContainer: FC<MessageContainerProps> = ({ messages, className = '' 
                     No conversation history yet. Start by entering a query below.
                 </div>
             ) : (
-                messages.map((message) => (
-                    <MessageRenderer key={message.id} message={message} />
-                ))
+                <ThreadedMessageRenderer messages={messages} />
             )}
         </div>
     );

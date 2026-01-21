@@ -95,8 +95,29 @@ export interface ResolutionContext {
     searchResults: any[];
 }
 
+// Recovery context interface
+export interface RecoveryOption {
+    id: string;
+    label: string;
+    description: string;
+    action: () => Promise<Partial<typeof AggregateDataAnnotation.State>>;
+}
+
+export interface RecoveryContext {
+    failedStep: string;
+    errorDetails: any;
+    recoveryOptions: RecoveryOption[];
+    userGuidance: string;
+}
+
 // State annotation for the aggregate data state graph
 const AggregateDataAnnotation = Annotation.Root({
+    // Recovery context for handling failures
+    recoveryContext: Annotation<RecoveryContext | null>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+
     // CSV processing state
     uploadedData: Annotation<any[][]>({
         reducer: (left, right) => right || left,
@@ -532,11 +553,48 @@ async function resolve_data_set(state: typeof AggregateDataAnnotation.State): Pr
         }
 
         if (dataSets.length === 0) {
-            return {
-                finalResult: {
-                    success: false,
-                    error: 'No data sets found in DHIS2. Please ensure data sets have been created before submitting data.'
+            // Instead of terminating, set up recovery context for dataset resolution failure
+            const recoveryOptions: RecoveryOption[] = [
+                {
+                    id: 'create_new_dataset',
+                    label: 'Create new data set',
+                    description: 'Define and create a new data set for data submission',
+                    action: async () => ({
+                        uiAction: 'create_new_dataset',
+                        recoveryAction: 'create_new_dataset'
+                    })
+                },
+                {
+                    id: 'search_again',
+                    label: 'Search with different terms',
+                    description: 'Try different keywords to find existing data sets',
+                    action: async () => ({
+                        uiAction: 'search_datasets_again',
+                        recoveryAction: 'search_again'
+                    })
+                },
+                {
+                    id: 'manual_entry',
+                    label: 'Enter data set ID manually',
+                    description: 'Provide the exact data set ID if you know it',
+                    action: async () => ({
+                        uiAction: 'manual_dataset_entry',
+                        recoveryAction: 'manual_entry'
+                    })
                 }
+            ];
+
+            return {
+                recoveryContext: {
+                    failedStep: 'dataset_resolution',
+                    errorDetails: {
+                        reason: 'No matching data sets found',
+                        searchQuery: dataSetName || 'all available datasets'
+                    },
+                    recoveryOptions,
+                    userGuidance: 'No data sets were found matching your request. Choose how to proceed:'
+                },
+                uiAction: 'show_recovery_options'
             };
         } else if (dataSets.length === 1) {
             // Single match - auto-resolve
@@ -1209,20 +1267,60 @@ async function handle_no_matches(state: typeof AggregateDataAnnotation.State): P
     const { item } = state.currentResolution;
     console.log(`📊 Aggregate Data Agent: No matches found for ${item.fieldType}: "${item.originalValue}"`);
 
-    const errorMessage = {
-        type: 'resolution_error',
-        message: `No matches found for "${item.originalValue}" in ${item.fieldType}. Please check the name or provide the correct ID.`,
-        data: {
-            fieldType: item.fieldType,
-            searchQuery: item.originalValue,
-            rowIndex: item.rowIndex,
-            colIndex: item.colIndex,
-            suggestions: ['Check spelling', 'Try partial name', 'Use exact ID if known']
+    // Instead of terminating, set up recovery context
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'manual_entry',
+            label: 'Enter manually',
+            description: `Enter the correct ${item.fieldType} ID manually`,
+            action: async () => ({
+                uiAction: 'continue_resolution',
+                recoveryAction: 'manual_entry',
+                fieldType: item.fieldType,
+                rowIndex: item.rowIndex,
+                colIndex: item.colIndex
+            })
+        },
+        {
+            id: 'skip_field',
+            label: 'Skip this field',
+            description: 'Continue without resolving this field (may cause validation errors)',
+            action: async () => ({
+                uiAction: 'continue_resolution',
+                recoveryAction: 'skip_field',
+                fieldType: item.fieldType,
+                rowIndex: item.rowIndex,
+                colIndex: item.colIndex
+            })
+        },
+        {
+            id: 'search_again',
+            label: 'Search again',
+            description: 'Try a different search term',
+            action: async () => ({
+                uiAction: 'continue_resolution',
+                recoveryAction: 'search_again',
+                fieldType: item.fieldType,
+                rowIndex: item.rowIndex,
+                colIndex: item.colIndex
+            })
         }
-    };
+    ];
 
     return {
-        finalResult: errorMessage
+        recoveryContext: {
+            failedStep: 'name_resolution',
+            errorDetails: {
+                fieldType: item.fieldType,
+                searchQuery: item.originalValue,
+                rowIndex: item.rowIndex,
+                colIndex: item.colIndex,
+                reason: 'No matches found in DHIS2'
+            },
+            recoveryOptions,
+            userGuidance: `No ${item.fieldType} matches found for "${item.originalValue}". Choose how to proceed:`
+        },
+        uiAction: 'show_recovery_options'
     };
 }
 
@@ -1235,6 +1333,199 @@ async function apply_resolution_selection(state: typeof AggregateDataAnnotation.
 
     return {
         uiAction: 'find_next_resolution'
+    };
+}
+
+// Recovery functions for handling failures gracefully
+
+// Dataset resolution recovery - when no datasets are found
+async function handle_dataset_resolution_recovery(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('🔄 Handling dataset resolution recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'create_new_dataset',
+            label: 'Create new data set',
+            description: 'Define and create a new data set for data submission',
+            action: async () => ({
+                uiAction: 'create_new_dataset',
+                recoveryAction: 'create_new_dataset'
+            })
+        },
+        {
+            id: 'search_again',
+            label: 'Search with different terms',
+            description: 'Try different keywords to find existing data sets',
+            action: async () => ({
+                uiAction: 'search_datasets_again',
+                recoveryAction: 'search_again'
+            })
+        },
+        {
+            id: 'manual_entry',
+            label: 'Enter data set ID manually',
+            description: 'Provide the exact data set ID if you know it',
+            action: async () => ({
+                uiAction: 'manual_dataset_entry',
+                recoveryAction: 'manual_entry'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'dataset_resolution',
+            errorDetails: {
+                reason: 'No matching data sets found',
+                searchQuery: state.messages?.[state.messages.length - 1]?.content || 'Unknown'
+            },
+            recoveryOptions,
+            userGuidance: 'No data sets were found matching your request. Choose how to proceed:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Header mapping recovery - when LLM mapping fails
+async function handle_header_mapping_recovery(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('🔄 Handling header mapping recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'manual_mapping',
+            label: 'Map columns manually',
+            description: 'Select which CSV columns correspond to DHIS2 fields',
+            action: async () => ({
+                uiAction: 'manual_header_mapping',
+                recoveryAction: 'manual_mapping'
+            })
+        },
+        {
+            id: 'use_original_headers',
+            label: 'Use original column names',
+            description: 'Continue with unmapped headers (may cause resolution issues)',
+            action: async () => ({
+                uiAction: 'proceed_with_original_headers',
+                recoveryAction: 'use_original_headers'
+            })
+        },
+        {
+            id: 'retry_mapping',
+            label: 'Retry mapping',
+            description: 'Try the header mapping process again',
+            action: async () => ({
+                uiAction: 'retry_header_mapping',
+                recoveryAction: 'retry_mapping'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'header_mapping',
+            errorDetails: {
+                reason: 'Could not automatically map CSV headers to DHIS2 fields',
+                headers: state.uploadedData?.[0] || []
+            },
+            recoveryOptions,
+            userGuidance: 'CSV header mapping failed. Choose how to handle column mapping:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// CSV parsing recovery - when CSV parsing fails
+async function handle_csv_parsing_recovery(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('🔄 Handling CSV parsing recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'fix_csv_format',
+            label: 'Fix CSV format',
+            description: 'Correct formatting issues in your CSV file',
+            action: async () => ({
+                uiAction: 'show_csv_format_help',
+                recoveryAction: 'fix_csv_format'
+            })
+        },
+        {
+            id: 'upload_again',
+            label: 'Upload corrected file',
+            description: 'Upload a corrected version of your CSV file',
+            action: async () => ({
+                uiAction: 'reupload_csv',
+                recoveryAction: 'upload_again'
+            })
+        },
+        {
+            id: 'manual_entry',
+            label: 'Enter data manually',
+            description: 'Switch to manual data entry instead of CSV upload',
+            action: async () => ({
+                uiAction: 'switch_to_manual_entry',
+                recoveryAction: 'manual_entry'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'csv_parsing',
+            errorDetails: {
+                reason: 'CSV file could not be parsed due to formatting issues',
+                supportedFormat: 'Standard CSV with headers'
+            },
+            recoveryOptions,
+            userGuidance: 'CSV parsing failed. Choose how to resolve the file format issue:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Validation recovery - when data validation fails
+async function handle_validation_recovery(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
+    console.log('🔄 Handling validation recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'fix_validation_errors',
+            label: 'Fix validation errors',
+            description: 'Review and correct the validation issues highlighted',
+            action: async () => ({
+                uiAction: 'show_validation_errors',
+                recoveryAction: 'fix_validation_errors'
+            })
+        },
+        {
+            id: 'submit_anyway',
+            label: 'Submit valid data only',
+            description: 'Submit only the valid data values, skip invalid ones',
+            action: async () => ({
+                uiAction: 'submit_valid_only',
+                recoveryAction: 'submit_anyway'
+            })
+        },
+        {
+            id: 'cancel_submission',
+            label: 'Cancel and review',
+            description: 'Cancel submission to review and fix all issues',
+            action: async () => ({
+                uiAction: 'cancel_validation',
+                recoveryAction: 'cancel_submission'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'validation',
+            errorDetails: {
+                reason: 'Data validation failed - some values do not meet DHIS2 requirements'
+            },
+            recoveryOptions,
+            userGuidance: 'Data validation found issues. Choose how to proceed:'
+        },
+        uiAction: 'show_recovery_options'
     };
 }
 
@@ -1799,30 +2090,382 @@ async function load_and_display_data_set(state: typeof AggregateDataAnnotation.S
 async function update_data_set(state: typeof AggregateDataAnnotation.State, dataSetInfo: any, criteria: any, newValues: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('📝 Updating data set:', dataSetInfo.dataSetName, criteria, newValues);
 
-    // This would implement the actual update logic
-    // For now, return a placeholder response
-    return {
-        finalResult: {
-            success: true,
-            message: `Data set "${dataSetInfo.dataSetName}" updated successfully`,
-            data: { criteria, newValues }
+    try {
+        // Get the current submitted data for this data set
+        const currentData = dataSetInfo.submittedData || [];
+        if (currentData.length === 0) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `No data found in data set "${dataSetInfo.dataSetName}" to update`
+                }
+            };
         }
+
+        // Parse criteria to identify which data values to update
+        const { matchedDataValues, updateCount } = parseUpdateCriteria(currentData, criteria);
+
+        if (matchedDataValues.length === 0) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `No data values matched the update criteria: ${JSON.stringify(criteria)}`
+                }
+            };
+        }
+
+        console.log(`📝 Found ${matchedDataValues.length} data values to update`);
+
+        // Prepare data values for DHIS2 API update
+        const dataValuesToUpdate = matchedDataValues.map(dataValue => ({
+            dataElement: dataValue.dataElement,
+            period: dataValue.period,
+            orgUnit: dataValue.orgUnit,
+            value: newValues.value !== undefined ? newValues.value : dataValue.value,
+            ...(dataValue.categoryOptionCombo && { categoryOptionCombo: dataValue.categoryOptionCombo }),
+            ...(dataValue.attributeOptionCombo && { attributeOptionCombo: dataValue.attributeOptionCombo })
+        }));
+
+        // Update data values in DHIS2
+        const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+        const updatePromises = dataValuesToUpdate.map(async (dataValue) => {
+            const mutationConfig = {
+                resource: 'dataValues',
+                type: 'create', // DHIS2 uses 'create' for data values (upsert behavior)
+                data: dataValue
+            };
+
+            try {
+                const response = await Dhis2Api.mutate(mutationConfig);
+                return { dataValue, success: response.success, error: response.error };
+            } catch (error) {
+                return { dataValue, success: false, error: error.message };
+            }
+        });
+
+        const updateResults = await Promise.all(updatePromises);
+        const successfulUpdates = updateResults.filter(result => result.success);
+        const failedUpdates = updateResults.filter(result => !result.success);
+
+        console.log(`📝 Update results: ${successfulUpdates.length} successful, ${failedUpdates.length} failed`);
+
+        // Update local state if updates were successful
+        if (successfulUpdates.length > 0) {
+            const updatedDataSets = new Map(state.submittedDataSets);
+
+            // Update the submitted data in the data set
+            const updatedData = currentData.map(dataValue => {
+                const matchingUpdate = successfulUpdates.find(update =>
+                    update.dataValue.dataElement === dataValue.dataElement &&
+                    update.dataValue.period === dataValue.period &&
+                    update.dataValue.orgUnit === dataValue.orgUnit &&
+                    update.dataValue.categoryOptionCombo === dataValue.categoryOptionCombo &&
+                    update.dataValue.attributeOptionCombo === dataValue.attributeOptionCombo
+                );
+
+                if (matchingUpdate) {
+                    return {
+                        ...dataValue,
+                        value: matchingUpdate.dataValue.value,
+                        lastModified: new Date()
+                    };
+                }
+                return dataValue;
+            });
+
+            updatedDataSets.set(dataSetInfo.dataSetId, {
+                ...dataSetInfo,
+                submittedData: updatedData,
+                lastModified: new Date()
+            });
+
+            // Construct updated grid data for visual refresh
+            const updatedGridData = constructGridDataFromSubmittedData(updatedDataSets.get(dataSetInfo.dataSetId)!);
+
+            return {
+                submittedDataSets: updatedDataSets,
+                finalResult: {
+                    success: true,
+                    message: `Successfully updated ${successfulUpdates.length} data values in "${dataSetInfo.dataSetName}". ${failedUpdates.length > 0 ? `Failed to update ${failedUpdates.length} values.` : ''}`,
+                    data: {
+                        updatedCount: successfulUpdates.length,
+                        failedCount: failedUpdates.length,
+                        criteria,
+                        newValues,
+                        failedUpdates: failedUpdates.map(f => ({ dataValue: f.dataValue, error: f.error })),
+                        // Include updated grid data for UI refresh
+                        gridRefresh: {
+                            type: 'data_grid',
+                            message: `Data set "${dataSetInfo.dataSetName}" updated successfully`,
+                            data: updatedGridData
+                        }
+                    }
+                }
+            };
+        } else {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `Failed to update any data values. ${failedUpdates.map(f => f.error).join('; ')}`,
+                    data: { failedUpdates }
+                }
+            };
+        }
+
+    } catch (error) {
+        console.error('📝 Error updating data set:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Data set update failed: ${error.message}`
+            }
+        };
+    }
+}
+
+// Parse update criteria to identify which data values to update
+function parseUpdateCriteria(currentData: AggregatedDataValue[], criteria: any): { matchedDataValues: AggregatedDataValue[], updateCount: number } {
+    const matchedDataValues: AggregatedDataValue[] = [];
+
+    // Handle different types of criteria
+    if (criteria.row !== undefined) {
+        // Update specific row by index
+        const rowIndex = parseInt(criteria.row);
+        if (rowIndex >= 0 && rowIndex < currentData.length) {
+            matchedDataValues.push(currentData[rowIndex]);
+        }
+    } else if (criteria.dataElement) {
+        // Update all data values for a specific data element
+        currentData.forEach(dataValue => {
+            if (dataValue.dataElement === criteria.dataElement) {
+                matchedDataValues.push(dataValue);
+            }
+        });
+    } else if (criteria.orgUnit) {
+        // Update all data values for a specific org unit
+        currentData.forEach(dataValue => {
+            if (dataValue.orgUnit === criteria.orgUnit) {
+                matchedDataValues.push(dataValue);
+            }
+        });
+    } else if (criteria.period) {
+        // Update all data values for a specific period
+        currentData.forEach(dataValue => {
+            if (dataValue.period === criteria.period) {
+                matchedDataValues.push(dataValue);
+            }
+        });
+    } else if (criteria.newRow) {
+        // This would be for adding new rows - not applicable for updates
+        console.log('⚠️ parseUpdateCriteria: newRow criteria not supported for updates');
+    } else {
+        // Default: update all data values if no specific criteria
+        console.log('⚠️ parseUpdateCriteria: No specific criteria provided, would update all values');
+        matchedDataValues.push(...currentData);
+    }
+
+    return {
+        matchedDataValues,
+        updateCount: matchedDataValues.length
     };
 }
+
+// Parse delete criteria to identify which data values to delete
+function parseDeleteCriteria(currentData: AggregatedDataValue[], criteria: any): { matchedDataValues: AggregatedDataValue[], updateCount: number } {
+    const matchedDataValues: AggregatedDataValue[] = [];
+
+    // Handle different types of criteria
+    if (criteria.row !== undefined) {
+        // Delete specific row by index
+        const rowIndex = parseInt(criteria.row);
+        if (rowIndex >= 0 && rowIndex < currentData.length) {
+            matchedDataValues.push(currentData[rowIndex]);
+        }
+    } else if (criteria.dataElement) {
+        // Delete all data values for a specific data element
+        currentData.forEach(dataValue => {
+            if (dataValue.dataElement === criteria.dataElement) {
+                matchedDataValues.push(dataValue);
+            }
+        });
+    } else if (criteria.orgUnit) {
+        // Delete all data values for a specific org unit
+        currentData.forEach(dataValue => {
+            if (dataValue.orgUnit === criteria.orgUnit) {
+                matchedDataValues.push(dataValue);
+            }
+        });
+    } else if (criteria.period) {
+        // Delete all data values for a specific period
+        currentData.forEach(dataValue => {
+            if (dataValue.period === criteria.period) {
+                matchedDataValues.push(dataValue);
+            }
+        });
+    } else {
+        // Default: delete all data values if no specific criteria
+        console.log('⚠️ parseDeleteCriteria: No specific criteria provided, would delete all values');
+        matchedDataValues.push(...currentData);
+    }
+
+    return {
+        matchedDataValues,
+        updateCount: matchedDataValues.length
+    };
+}
+
+// Construct grid data from submitted data for UI refresh
+function constructGridDataFromSubmittedData(dataSetInfo: any): any {
+    const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
+
+    // Convert submitted data back to grid row format
+    const rows = (dataSetInfo.submittedData || []).map((dataValue: AggregatedDataValue) => [
+        dataValue.dataElement || '',
+        dataValue.orgUnit || '',
+        dataValue.period || '',
+        dataValue.categoryOptionCombos || '',
+        dataValue.attributeOptionCombos || '',
+        dataValue.value?.toString() || ''
+    ]);
+
+    return {
+        headers: headers,
+        displayHeaders: ['Data Element', 'Organisation Unit', 'Time Period', 'Category Option Combo', 'Attribute Option Combo', 'Value'],
+        rows: rows,
+        resolutionState: [], // No resolution needed for existing data
+        resourceDetails: [],
+        displayNames: [], // Would need to be populated if we want to show names
+        dataSetId: dataSetInfo.dataSetId,
+        dataSetName: dataSetInfo.dataSetName,
+        isExistingData: true,
+        actions: ['update_data_set', 'edit_cell', 'delete_row', 'add_row']
+    };
+}
+
+
+
+
 
 // Delete data from an existing data set
 async function delete_from_data_set(state: typeof AggregateDataAnnotation.State, dataSetInfo: any, criteria: any): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('🗑️ Deleting from data set:', dataSetInfo.dataSetName, criteria);
 
-    // This would implement the actual delete logic
-    // For now, return a placeholder response
-    return {
-        finalResult: {
-            success: true,
-            message: `Data deleted from "${dataSetInfo.dataSetName}" successfully`,
-            data: { criteria }
+    try {
+        // Get the current submitted data for this data set
+        const currentData = dataSetInfo.submittedData || [];
+        if (currentData.length === 0) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `No data found in data set "${dataSetInfo.dataSetName}" to delete`
+                }
+            };
         }
-    };
+
+        // Parse criteria to identify which data values to delete
+        const { matchedDataValues, updateCount } = parseDeleteCriteria(currentData, criteria);
+
+        if (matchedDataValues.length === 0) {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `No data values matched the delete criteria: ${JSON.stringify(criteria)}`
+                }
+            };
+        }
+
+        console.log(`🗑️ Found ${matchedDataValues.length} data values to delete`);
+
+        // Prepare data values for DHIS2 API delete
+        const deletePromises = matchedDataValues.map(async (dataValue) => {
+            const deleteParams = new URLSearchParams({
+                de: dataValue.dataElement,
+                pe: dataValue.period,
+                ou: dataValue.orgUnit
+            });
+
+            // Add optional parameters
+            if (dataValue.categoryOptionCombos) {
+                deleteParams.append('co', dataValue.categoryOptionCombos);
+            }
+            if (dataValue.attributeOptionCombos) {
+                deleteParams.append('cc', dataValue.attributeOptionCombos);
+            }
+
+            const mutationConfig = {
+                resource: `dataValues?${deleteParams.toString()}`,
+                type: 'delete'
+            };
+
+            try {
+                const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+                const response = await Dhis2Api.mutate(mutationConfig);
+                return { dataValue, success: response.success, error: response.error };
+            } catch (error) {
+                return { dataValue, success: false, error: error.message };
+            }
+        });
+
+        const deleteResults = await Promise.all(deletePromises);
+        const successfulDeletes = deleteResults.filter(result => result.success);
+        const failedDeletes = deleteResults.filter(result => !result.success);
+
+        console.log(`🗑️ Delete results: ${successfulDeletes.length} successful, ${failedDeletes.length} failed`);
+
+        // Update local state if deletes were successful
+        if (successfulDeletes.length > 0) {
+            const updatedDataSets = new Map(state.submittedDataSets);
+
+            // Remove deleted data values from the submitted data
+            const remainingData = currentData.filter(dataValue => {
+                return !successfulDeletes.some(deleteResult => {
+                    const deleted = deleteResult.dataValue;
+                    return dataValue.dataElement === deleted.dataElement &&
+                           dataValue.period === deleted.period &&
+                           dataValue.orgUnit === deleted.orgUnit &&
+                           dataValue.categoryOptionCombos === deleted.categoryOptionCombos &&
+                           dataValue.attributeOptionCombos === deleted.attributeOptionCombos;
+                });
+            });
+
+            updatedDataSets.set(dataSetInfo.dataSetId, {
+                ...dataSetInfo,
+                submittedData: remainingData,
+                lastModified: new Date()
+            });
+
+            return {
+                submittedDataSets: updatedDataSets,
+                finalResult: {
+                    success: true,
+                    message: `Successfully deleted ${successfulDeletes.length} data values from "${dataSetInfo.dataSetName}". ${failedDeletes.length > 0 ? `Failed to delete ${failedDeletes.length} values.` : ''}`,
+                    data: {
+                        deletedCount: successfulDeletes.length,
+                        failedCount: failedDeletes.length,
+                        criteria,
+                        failedDeletes: failedDeletes.map(f => ({ dataValue: f.dataValue, error: f.error }))
+                    }
+                }
+            };
+        } else {
+            return {
+                finalResult: {
+                    success: false,
+                    error: `Failed to delete any data values. ${failedDeletes.map(f => f.error).join('; ')}`,
+                    data: { failedDeletes }
+                }
+            };
+        }
+
+    } catch (error) {
+        console.error('🗑️ Error deleting from data set:', error);
+        return {
+            finalResult: {
+                success: false,
+                error: `Data set delete failed: ${error.message}`
+            }
+        };
+    }
 }
 
 // Extract data set name from user prompt using LLM
@@ -2375,6 +3018,12 @@ aggregateDataWorkflow.addNode('handle_no_matches', handle_no_matches);
 aggregateDataWorkflow.addNode('apply_resolution_selection', apply_resolution_selection);
 aggregateDataWorkflow.addNode('validate_and_submit', validate_and_submit);
 
+// Recovery nodes
+aggregateDataWorkflow.addNode('handle_dataset_resolution_recovery', handle_dataset_resolution_recovery);
+aggregateDataWorkflow.addNode('handle_header_mapping_recovery', handle_header_mapping_recovery);
+aggregateDataWorkflow.addNode('handle_csv_parsing_recovery', handle_csv_parsing_recovery);
+aggregateDataWorkflow.addNode('handle_validation_recovery', handle_validation_recovery);
+
 // Add edges
 // @ts-ignore
 aggregateDataWorkflow.addEdge(START, 'parse_csv_upload');
@@ -2441,6 +3090,9 @@ aggregateDataWorkflow.addConditionalEdges('auto_resolve_single_match', (state) =
 
 // @ts-ignore
 aggregateDataWorkflow.addConditionalEdges('handle_no_matches', (state) => {
+    if (state.recoveryContext) {
+        return 'handle_dataset_resolution_recovery'; // Route to recovery if context is set
+    }
     return END; // Wait for user to handle error
 });
 

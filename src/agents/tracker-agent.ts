@@ -32,8 +32,29 @@ export interface TrackerDataValue {
     }>;
 }
 
+// Recovery context interface for tracker agent
+export interface TrackerRecoveryContext {
+    failedStep: string;
+    errorDetails: any;
+    recoveryOptions: RecoveryOption[];
+    userGuidance: string;
+}
+
+export interface RecoveryOption {
+    id: string;
+    label: string;
+    description: string;
+    action: () => Promise<Partial<typeof TrackerDataAnnotation.State>>;
+}
+
 // State annotation for the tracker data state graph
 const TrackerDataAnnotation = Annotation.Root({
+    // Recovery context for handling failures
+    recoveryContext: Annotation<TrackerRecoveryContext | null>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+
     // Document processing state
     uploadedDocument: Annotation<{
         buffer: Uint8Array;
@@ -475,6 +496,204 @@ async function display_processing_results(state: typeof TrackerDataAnnotation.St
     };
 }
 
+
+
+// Recovery functions for handling failures gracefully
+
+// Document processing recovery - when OCR/document processing fails
+async function handle_document_processing_recovery(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('🔄 Handling document processing recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'manual_entry',
+            label: 'Enter data manually',
+            description: 'Switch to manual data entry instead of document processing',
+            action: async () => ({
+                uiAction: 'switch_to_manual_entry',
+                recoveryAction: 'manual_entry'
+            })
+        },
+        {
+            id: 'upload_again',
+            label: 'Upload different file',
+            description: 'Upload a clearer or different document for processing',
+            action: async () => ({
+                uiAction: 'reupload_document',
+                recoveryAction: 'upload_again'
+            })
+        },
+        {
+            id: 'retry_processing',
+            label: 'Retry processing',
+            description: 'Try processing the same document again',
+            action: async () => ({
+                uiAction: 'retry_document_processing',
+                recoveryAction: 'retry_processing'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'document_processing',
+            errorDetails: {
+                reason: 'OCR/document processing failed',
+                filename: state.uploadedDocument?.filename,
+                fileSize: state.uploadedDocument?.buffer?.length
+            },
+            recoveryOptions,
+            userGuidance: 'Document processing failed. Choose how to continue:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Header matching recovery - when LLM mapping fails
+async function handle_header_matching_recovery(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('🔄 Handling header matching recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'manual_mapping',
+            label: 'Map columns manually',
+            description: 'Select which document columns correspond to DHIS2 attributes',
+            action: async () => ({
+                uiAction: 'manual_header_mapping',
+                recoveryAction: 'manual_mapping'
+            })
+        },
+        {
+            id: 'use_defaults',
+            label: 'Use default mappings',
+            description: 'Continue with automatic attribute detection',
+            action: async () => ({
+                uiAction: 'use_default_mappings',
+                recoveryAction: 'use_defaults'
+            })
+        },
+        {
+            id: 'skip_mapping',
+            label: 'Skip attribute mapping',
+            description: 'Continue with basic entity creation (limited attributes)',
+            action: async () => ({
+                uiAction: 'skip_attribute_mapping',
+                recoveryAction: 'skip_mapping'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'header_matching',
+            errorDetails: {
+                reason: 'Could not automatically match document headers to DHIS2 attributes',
+                headers: state.extractedPatients?.length > 0 ? Object.keys(state.extractedPatients[0]) : []
+            },
+            recoveryOptions,
+            userGuidance: 'Header mapping failed. Choose how to handle attribute mapping:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Validation recovery - when data validation fails
+async function handle_validation_recovery(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('🔄 Handling validation recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'fix_validation_errors',
+            label: 'Review and fix errors',
+            description: 'Review validation errors and correct them manually',
+            action: async () => ({
+                uiAction: 'show_validation_errors',
+                recoveryAction: 'fix_validation_errors'
+            })
+        },
+        {
+            id: 'save_valid_only',
+            label: 'Save valid records only',
+            description: 'Save only the records that passed validation',
+            action: async () => ({
+                uiAction: 'save_valid_records_only',
+                recoveryAction: 'save_valid_only'
+            })
+        },
+        {
+            id: 'force_save',
+            label: 'Force save all',
+            description: 'Save all records despite validation errors (not recommended)',
+            action: async () => ({
+                uiAction: 'force_save_all_records',
+                recoveryAction: 'force_save'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'validation',
+            errorDetails: {
+                reason: 'Some tracker data failed validation checks',
+                totalRecords: state.mappedTrackerData?.length || 0
+            },
+            recoveryOptions,
+            userGuidance: 'Data validation found issues. Choose how to proceed:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// File upload recovery - when file upload/processing fails
+async function handle_file_upload_recovery(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('🔄 Handling file upload recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'upload_again',
+            label: 'Upload file again',
+            description: 'Upload the file again (check file format and size)',
+            action: async () => ({
+                uiAction: 'reupload_file',
+                recoveryAction: 'upload_again'
+            })
+        },
+        {
+            id: 'convert_format',
+            label: 'Convert file format',
+            description: 'Convert your file to supported format (PDF, PNG, JPG)',
+            action: async () => ({
+                uiAction: 'convert_file_format',
+                recoveryAction: 'convert_format'
+            })
+        },
+        {
+            id: 'manual_entry',
+            label: 'Enter data manually',
+            description: 'Switch to manual data entry instead of file upload',
+            action: async () => ({
+                uiAction: 'switch_to_manual_entry',
+                recoveryAction: 'manual_entry'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'file_upload',
+            errorDetails: {
+                reason: 'File upload or initial processing failed',
+                supportedFormats: ['PDF', 'PNG', 'JPG', 'JPEG'],
+                maxSize: '10MB'
+            },
+            recoveryOptions,
+            userGuidance: 'File processing failed. Choose how to resolve the file issue:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
 // Create and compile StateGraph workflow
 const trackerDataWorkflow = new StateGraph(TrackerDataAnnotation);
 
@@ -485,6 +704,12 @@ trackerDataWorkflow.addNode('map_to_tracker_format', map_to_tracker_format);
 trackerDataWorkflow.addNode('review_extracted_data', review_extracted_data);
 trackerDataWorkflow.addNode('register_tracker_entities', register_tracker_entities);
 trackerDataWorkflow.addNode('display_processing_results', display_processing_results);
+
+// Recovery nodes
+trackerDataWorkflow.addNode('handle_document_processing_recovery', handle_document_processing_recovery);
+trackerDataWorkflow.addNode('handle_header_matching_recovery', handle_header_matching_recovery);
+trackerDataWorkflow.addNode('handle_validation_recovery', handle_validation_recovery);
+trackerDataWorkflow.addNode('handle_file_upload_recovery', handle_file_upload_recovery);
 
 // Add edges
 // @ts-ignore

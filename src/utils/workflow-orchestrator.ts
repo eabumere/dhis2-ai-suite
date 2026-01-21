@@ -5,6 +5,13 @@ export interface SelectionOptions {
     type: 'indicator' | 'dataElement';
 }
 
+export interface RecoveryOption {
+    id: string;
+    label: string;
+    description: string;
+    action: string;
+}
+
 export interface FileAttachment {
     file: File;
     id: string;
@@ -32,8 +39,58 @@ export interface ConversationMessage {
     content: string;
     attachments?: FileAttachment[];
     data?: any;
+    threadId?: string; // For grouping related messages (request → processing → result)
     type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection'
-	    | 'tracker_processing_complete' | 'data_set_selection';
+	    | 'tracker_processing_complete' | 'data_set_selection' | 'success' | 'warning' | 'info' | 'progress';
+}
+
+export interface WorkflowStep {
+    id: string;
+    label: string;
+    description?: string;
+    status: 'pending' | 'active' | 'completed' | 'error';
+    progress?: number; // 0-100
+    startTime?: number;
+    endTime?: number;
+    error?: string;
+}
+
+export interface WorkflowProgress {
+    workflowId: string;
+    steps: WorkflowStep[];
+    overallProgress: number;
+    currentStep?: string;
+    startTime: number;
+    estimatedTimeRemaining?: number;
+}
+
+export type ErrorSeverity = 'info' | 'warning' | 'error' | 'critical';
+export type ErrorClassification = 'recoverable' | 'non-recoverable' | 'partial-success';
+
+export interface ClassifiedError {
+    originalError: any;
+    classification: ErrorClassification;
+    severity: ErrorSeverity;
+    errorCode?: string;
+    userMessage: string;
+    technicalMessage: string;
+    recoveryStrategies: RecoveryStrategy[];
+    context: {
+        workflowId?: string;
+        stepId?: string;
+        agent?: string;
+        operation?: string;
+    };
+}
+
+export interface RecoveryStrategy {
+    id: string;
+    name: string;
+    description: string;
+    action: string;
+    priority: number; // 1 = highest priority
+    requiresUserInput: boolean;
+    automated: boolean;
 }
 
 export interface WorkflowUIState {
@@ -59,10 +116,6 @@ export interface WorkflowUIState {
     showSelection: boolean;
     selectionOptions: SelectionOptions[];
     selectionMultiple: boolean;
-
-    // Error states
-    showError: boolean;
-    errorMessage?: string;
 
     // General states
     currentWorkflowId?: string;
@@ -114,7 +167,6 @@ class WorkflowOrchestrator {
         showSelection: false,
         selectionOptions: [],
         selectionMultiple: true,
-        showError: false,
         conversation: [],
         showConversation: true
     };
@@ -142,7 +194,6 @@ class WorkflowOrchestrator {
             showSelection: false,
             selectionOptions: [],
             selectionMultiple: true,
-            showError: false,
             conversation: [],
             showConversation: true
         };
@@ -162,7 +213,6 @@ class WorkflowOrchestrator {
             showSelection: false,
             selectionOptions: [],
             selectionMultiple: true,
-            showError: false,
             conversation: [], // Clear conversation history for new session
             showConversation: true
         };
@@ -206,7 +256,7 @@ class WorkflowOrchestrator {
         this.updateUIState({
             showQueryInput: false,
             showProcessing: true,
-            processingMessage: 'Thinking...',
+            processingMessage: 'Analyzing your request...',
             currentWorkflowId: workflowId
         });
 
@@ -227,6 +277,9 @@ class WorkflowOrchestrator {
                 iterationCount++;
 
                 console.log(`🔄 Workflow ${workflowId} iteration ${iterationCount} with input:`, currentInput);
+
+                // Update progress message for agent execution
+                this.addProgressMessage(`Processing with ${flowType} agent...`);
 
                 const result = await agentFn(currentInput);
                 console.log(`📋 Workflow ${workflowId} iteration ${iterationCount} result:`, result);
@@ -339,6 +392,9 @@ class WorkflowOrchestrator {
                     // Notify UI of completion
                     this.uiCallbacks?.onWorkflowComplete(workflowId, result);
 
+                    // Add completion feedback
+                    this.addProgressMessage('✅ Operation completed successfully');
+
                     // Handle rendering based on result type - orchestrator controls all UI decisions
                     if (result?.success !== false) {
                         console.log('🎭 Workflow completion: handling successful result', result);
@@ -356,7 +412,6 @@ class WorkflowOrchestrator {
                                 showProcessing: false,
                                 showQueryInput: true,
                                 queryEnabled: true,
-                                showError: false
                             });
                         } else {
                             // Check for other specialized result types
@@ -383,7 +438,6 @@ class WorkflowOrchestrator {
                                     showProcessing: false,
                                     showQueryInput: true,
                                     queryEnabled: true,
-                                    showError: false
                                 });
                             } else {
                                 // Default: update UI state for generic results
@@ -393,14 +447,11 @@ class WorkflowOrchestrator {
                                     showResults: true,
                                     results: result,
                                     resultsType: result.type || 'default',
-                                    showError: false
                                 });
                             }
                         }
                     } else if (result?.error) {
                         this.updateUIState({
-                            showError: true,
-                            errorMessage: result.error,
                             showProcessing: false
                         });
                     }
@@ -424,8 +475,6 @@ class WorkflowOrchestrator {
             // Notify UI of error
             this.uiCallbacks?.onWorkflowError(workflowId, error.message);
             this.updateUIState({
-                showError: true,
-                errorMessage: error.message,
                 showProcessing: false
             });
 
@@ -447,7 +496,6 @@ class WorkflowOrchestrator {
         this.updateUIState({
             showProcessing: true,
             processingMessage: message,
-            showError: false
         });
     }
 
@@ -476,7 +524,6 @@ class WorkflowOrchestrator {
                 showResults: true,
                 results: result,
                 resultsType: resultType,
-                showError: false
             });
         }
     }
@@ -627,13 +674,15 @@ class WorkflowOrchestrator {
 
     // Add user message to conversation
     addUserMessage(content: string, type: ConversationMessage['type'] = 'query', data?: any) {
+        const threadId = `thread_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const message: ConversationMessage = {
             id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             timestamp: Date.now(),
             role: 'user',
             content,
             data,
-            type
+            type,
+            threadId
         };
 
         this.updateUIState({
@@ -644,14 +693,17 @@ class WorkflowOrchestrator {
     }
 
     // Add assistant message to conversation
-    addAssistantMessage(content: string, type: ConversationMessage['type'] = 'response', data?: any) {
+    addAssistantMessage(content: string, type: ConversationMessage['type'] = 'response', data?: any, threadId?: string) {
+        // Use provided threadId or find the most recent user message thread
+        const finalThreadId = threadId || this.getCurrentThreadId();
         const message: ConversationMessage = {
             id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             timestamp: Date.now(),
             role: 'assistant',
             content,
             data,
-            type
+            type,
+            threadId: finalThreadId
         };
 
         this.updateUIState({
@@ -659,6 +711,55 @@ class WorkflowOrchestrator {
         });
 
         return message;
+    }
+
+    // Add progress message to conversation (updates existing or creates new)
+    addProgressMessage(content: string, data?: any) {
+        // Use the current thread ID for progress messages
+        const threadId = this.getCurrentThreadId();
+
+        // Check if there's already a progress message in the conversation for this thread
+        const existingProgressIndex = this.currentUIState.conversation.findIndex(
+            msg => msg.type === 'progress' && msg.role === 'assistant' && msg.threadId === threadId
+        );
+
+        const progressMessage: ConversationMessage = {
+            id: existingProgressIndex >= 0
+                ? this.currentUIState.conversation[existingProgressIndex].id
+                : `progress_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            role: 'assistant',
+            content,
+            data,
+            type: 'progress',
+            threadId
+        };
+
+        if (existingProgressIndex >= 0) {
+            // Update existing progress message
+            const updatedConversation = [...this.currentUIState.conversation];
+            updatedConversation[existingProgressIndex] = progressMessage;
+            this.updateUIState({
+                conversation: updatedConversation
+            });
+        } else {
+            // Add new progress message
+            this.updateUIState({
+                conversation: [...this.currentUIState.conversation, progressMessage]
+            });
+        }
+
+        return progressMessage;
+    }
+
+    // Get the current thread ID (most recent user message thread)
+    private getCurrentThreadId(): string | undefined {
+        // Find the most recent user message and return its threadId
+        const userMessages = this.currentUIState.conversation
+            .filter(msg => msg.role === 'user')
+            .sort((a, b) => b.timestamp - a.timestamp);
+
+        return userMessages[0]?.threadId;
     }
 
     // Specialized method for rendering direct search results in conversation
@@ -1022,7 +1123,6 @@ class WorkflowOrchestrator {
             showResults: true,
             results: result,
             resultsType: result.type || 'default',
-            showError: false
         });
     }
 
@@ -1124,14 +1224,11 @@ class WorkflowOrchestrator {
                             showProcessing: false,
                             showQueryInput: true,
                             queryEnabled: true,
-                            showError: false
                         });
                     }
                 }).catch((error: any) => {
                     console.error('❌ Workflow continuation failed:', error);
                     this.updateUIState({
-                        showError: true,
-                        errorMessage: error.message,
                         showProcessing: false
                     });
                 });
@@ -1579,6 +1676,841 @@ class WorkflowOrchestrator {
             'json': 'application/json'
         };
         return mimeTypes[ext] || 'application/octet-stream';
+    }
+
+    // Progress tracking methods for workflow steps
+
+    // Initialize workflow progress with steps
+    initializeWorkflowProgress(workflowId: string, steps: Omit<WorkflowStep, 'status' | 'startTime' | 'endTime'>[]): WorkflowProgress {
+        const workflowProgress: WorkflowProgress = {
+            workflowId,
+            steps: steps.map(step => ({
+                ...step,
+                status: 'pending' as const,
+                startTime: undefined,
+                endTime: undefined
+            })),
+            overallProgress: 0,
+            startTime: Date.now()
+        };
+
+        // Store in active workflows
+        const existingWorkflow = this.activeWorkflows.get(workflowId);
+        if (existingWorkflow) {
+            existingWorkflow.progress = workflowProgress;
+            this.activeWorkflows.set(workflowId, existingWorkflow);
+        }
+
+        console.log(`📊 Initialized workflow progress for ${workflowId}:`, workflowProgress);
+        return workflowProgress;
+    }
+
+    // Update step progress
+    updateStepProgress(workflowId: string, stepId: string, updates: Partial<WorkflowStep>): void {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow?.progress) {
+            console.warn(`No progress tracking found for workflow ${workflowId}`);
+            return;
+        }
+
+        const stepIndex = workflow.progress.steps.findIndex(step => step.id === stepId);
+        if (stepIndex === -1) {
+            console.warn(`Step ${stepId} not found in workflow ${workflowId}`);
+            return;
+        }
+
+        // Update step
+        const updatedStep = { ...workflow.progress.steps[stepIndex], ...updates };
+        workflow.progress.steps[stepIndex] = updatedStep;
+
+        // Update overall progress
+        const completedSteps = workflow.progress.steps.filter(step => step.status === 'completed').length;
+        const totalSteps = workflow.progress.steps.length;
+        workflow.progress.overallProgress = Math.round((completedSteps / totalSteps) * 100);
+
+        // Set current step
+        const activeStep = workflow.progress.steps.find(step => step.status === 'active');
+        workflow.progress.currentStep = activeStep?.id;
+
+        // Estimate time remaining (simple linear extrapolation)
+        if (workflow.progress.startTime && workflow.progress.overallProgress > 0) {
+            const elapsed = Date.now() - workflow.progress.startTime;
+            const estimatedTotal = (elapsed / workflow.progress.overallProgress) * 100;
+            workflow.progress.estimatedTimeRemaining = Math.max(0, estimatedTotal - elapsed);
+        }
+
+        console.log(`📊 Updated step progress for ${workflowId}.${stepId}:`, updatedStep);
+    }
+
+    // Start a step
+    startStep(workflowId: string, stepId: string): void {
+        this.updateStepProgress(workflowId, stepId, {
+            status: 'active',
+            startTime: Date.now()
+        });
+    }
+
+    // Complete a step
+    completeStep(workflowId: string, stepId: string): void {
+        this.updateStepProgress(workflowId, stepId, {
+            status: 'completed',
+            endTime: Date.now()
+        });
+    }
+
+    // Mark step as error
+    errorStep(workflowId: string, stepId: string, error: string): void {
+        this.updateStepProgress(workflowId, stepId, {
+            status: 'error',
+            error,
+            endTime: Date.now()
+        });
+    }
+
+    // Get workflow progress
+    getWorkflowProgress(workflowId: string): WorkflowProgress | null {
+        return this.activeWorkflows.get(workflowId)?.progress || null;
+    }
+
+    // Recovery workflow resumption capabilities
+
+    // Pause a workflow for user interaction
+    pauseWorkflow(workflowId: string, reason: string = 'User interaction required'): void {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (workflow) {
+            workflow.status = 'paused';
+            workflow.pauseReason = reason;
+            workflow.pausedAt = Date.now();
+            console.log(`⏸️ Workflow ${workflowId} paused: ${reason}`);
+        }
+    }
+
+    // Resume a paused workflow
+    async resumeWorkflow(workflowId: string, resumeData?: any): Promise<any> {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow || workflow.status !== 'paused') {
+            throw new Error(`Workflow ${workflowId} is not paused or does not exist`);
+        }
+
+        console.log(`▶️ Resuming workflow ${workflowId}`);
+
+        // Update workflow status
+        workflow.status = 'running';
+        delete workflow.pauseReason;
+        delete workflow.pausedAt;
+
+        // Continue workflow execution with resume data
+        const currentInput = {
+            ...workflow.input,
+            resumeData,
+            workflowId
+        };
+
+        // Get the agent function and continue
+        const agentFn = this.getAgentFunction(workflow.flowType);
+        if (!agentFn) {
+            throw new Error(`Unknown agent type: ${workflow.flowType}`);
+        }
+
+        return this.startWorkflow(workflow.flowType, currentInput, agentFn);
+    }
+
+    // Store workflow state for recovery
+    storeWorkflowState(workflowId: string, state: any): void {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (workflow) {
+            workflow.recoveryState = {
+                ...state,
+                storedAt: Date.now(),
+                workflowId
+            };
+            console.log(`💾 Stored recovery state for workflow ${workflowId}`);
+        }
+    }
+
+    // Retrieve stored workflow state
+    getWorkflowRecoveryState(workflowId: string): any {
+        return this.activeWorkflows.get(workflowId)?.recoveryState;
+    }
+
+    // Create recovery options for failed workflow
+    createRecoveryOptions(workflowId: string, error: any): RecoveryOption[] {
+        const workflow = this.activeWorkflows.get(workflowId);
+        const recoveryOptions: RecoveryOption[] = [];
+
+        if (!workflow) return recoveryOptions;
+
+        // Always offer retry option
+        recoveryOptions.push({
+            id: 'retry_workflow',
+            label: 'Retry Workflow',
+            description: 'Restart the workflow from the beginning',
+            action: 'retry'
+        });
+
+        // If workflow was paused, offer resume option
+        if (workflow.status === 'paused') {
+            recoveryOptions.push({
+                id: 'resume_workflow',
+                label: 'Resume Workflow',
+                description: 'Continue from where the workflow was paused',
+                action: 'resume'
+            });
+        }
+
+        // If there's stored recovery state, offer recovery from checkpoint
+        if (workflow.recoveryState) {
+            recoveryOptions.push({
+                id: 'recover_from_checkpoint',
+                label: 'Recover from Checkpoint',
+                description: 'Resume from the last successful checkpoint',
+                action: 'checkpoint_recovery'
+            });
+        }
+
+        // Offer manual data entry as fallback
+        recoveryOptions.push({
+            id: 'manual_entry',
+            label: 'Manual Data Entry',
+            description: 'Enter data manually instead of processing automatically',
+            action: 'manual_data_entry'
+        });
+
+        // Offer to contact support
+        recoveryOptions.push({
+            id: 'contact_support',
+            label: 'Contact Support',
+            description: 'Get help from technical support',
+            action: 'contact_support'
+        });
+
+        return recoveryOptions;
+    }
+
+    // Execute recovery action
+    async executeRecoveryAction(workflowId: string, actionId: string, actionData?: any): Promise<any> {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow) {
+            throw new Error(`Workflow ${workflowId} not found`);
+        }
+
+        console.log(`🔧 Executing recovery action ${actionId} for workflow ${workflowId}`);
+
+        switch (actionId) {
+            case 'retry':
+                // Restart the entire workflow
+                return this.startWorkflow(workflow.flowType, workflow.input, this.getAgentFunction(workflow.flowType));
+
+            case 'resume':
+                // Resume from paused state
+                return this.resumeWorkflow(workflowId, actionData);
+
+            case 'checkpoint_recovery':
+                // Resume from stored checkpoint
+                const recoveryState = this.getWorkflowRecoveryState(workflowId);
+                if (recoveryState) {
+                    return this.resumeWorkflow(workflowId, { checkpoint: recoveryState });
+                }
+                throw new Error('No recovery checkpoint available');
+
+            case 'manual_data_entry':
+                // Switch to manual data entry mode
+                this.addAssistantMessage(
+                    'Switching to manual data entry mode. Please provide the data you want to enter.',
+                    'info'
+                );
+                // This would trigger manual data entry UI
+                break;
+
+            case 'contact_support':
+                // Provide support contact information
+                this.addAssistantMessage(
+                    'Please contact technical support with the following information:\n' +
+                    `- Workflow ID: ${workflowId}\n` +
+                    `- Error: ${workflow.error || 'Unknown error'}\n` +
+                    `- Timestamp: ${new Date().toISOString()}`,
+                    'info'
+                );
+                break;
+
+            default:
+                throw new Error(`Unknown recovery action: ${actionId}`);
+        }
+    }
+
+    // Get resumable workflows
+    getResumableWorkflows(): any[] {
+        return Array.from(this.activeWorkflows.entries())
+            .filter(([_, workflow]) => workflow.status === 'paused' || workflow.recoveryState)
+            .map(([id, workflow]) => ({
+                id,
+                flowType: workflow.flowType,
+                pausedReason: workflow.pauseReason,
+                hasRecoveryState: !!workflow.recoveryState,
+                pausedAt: workflow.pausedAt
+            }));
+    }
+
+    // Error Classification System
+
+    // Classify an error and create recovery strategies
+    classifyError(error: any, context?: {
+        workflowId?: string;
+        stepId?: string;
+        agent?: string;
+        operation?: string;
+    }): ClassifiedError {
+        const errorMessage = error?.message || error?.error || String(error);
+        const errorCode = error?.code || error?.statusCode || 'UNKNOWN';
+
+        // Classify the error type
+        const classification = this.classifyErrorType(error, errorMessage, errorCode);
+
+        // Determine severity
+        const severity = this.determineErrorSeverity(error, classification);
+
+        // Create user-friendly message
+        const userMessage = this.createUserFriendlyMessage(error, classification, severity);
+
+        // Create technical message for debugging
+        const technicalMessage = this.createTechnicalMessage(error, context);
+
+        // Generate recovery strategies based on classification
+        const recoveryStrategies = this.generateRecoveryStrategies(classification, severity, context);
+
+        return {
+            originalError: error,
+            classification,
+            severity,
+            errorCode,
+            userMessage,
+            technicalMessage,
+            recoveryStrategies,
+            context: context || {}
+        };
+    }
+
+    // Classify error type based on error characteristics
+    private classifyErrorType(error: any, message: string, code: string): ErrorClassification {
+        const lowerMessage = message.toLowerCase();
+
+        // Check for recoverable errors
+        if (this.isRecoverableError(error, message, code)) {
+            return 'recoverable';
+        }
+
+        // Check for partial success
+        if (this.isPartialSuccess(error, message, code)) {
+            return 'partial-success';
+        }
+
+        // Default to non-recoverable
+        return 'non-recoverable';
+    }
+
+    // Determine if an error is recoverable
+    private isRecoverableError(error: any, message: string, code: string): boolean {
+        const recoverablePatterns = [
+            // Network/connection errors
+            'network error',
+            'connection refused',
+            'timeout',
+            'connection reset',
+
+            // Authentication errors
+            'unauthorized',
+            'invalid token',
+            'authentication failed',
+
+            // Resource not found (but user can specify)
+            'not found',
+            'does not exist',
+
+            // Validation errors that can be fixed
+            'invalid format',
+            'missing required field',
+            'invalid value',
+
+            // Permission errors that might be recoverable
+            'access denied',
+            'insufficient permissions',
+
+            // File processing errors
+            'file not found',
+            'unsupported format',
+            'corrupted file'
+        ];
+
+        const lowerMessage = message.toLowerCase();
+        return recoverablePatterns.some(pattern => lowerMessage.includes(pattern));
+    }
+
+    // Determine if this is a partial success
+    private isPartialSuccess(error: any, message: string, code: string): boolean {
+        const partialSuccessPatterns = [
+            'partial success',
+            'some items failed',
+            'partially processed',
+            'completed with warnings',
+            'finished with errors'
+        ];
+
+        const lowerMessage = message.toLowerCase();
+        return partialSuccessPatterns.some(pattern => lowerMessage.includes(pattern));
+    }
+
+    // Determine error severity
+    private determineErrorSeverity(error: any, classification: ErrorClassification): ErrorSeverity {
+        // Critical errors
+        if (classification === 'non-recoverable') {
+            return 'critical';
+        }
+
+        // Check error codes and types for severity
+        const errorCode = error?.code || error?.statusCode;
+        if (errorCode) {
+            if ([500, 502, 503, 504].includes(errorCode)) {
+                return 'critical'; // Server errors
+            }
+            if ([400, 401, 403].includes(errorCode)) {
+                return 'error'; // Client errors
+            }
+            if ([404].includes(errorCode)) {
+                return 'warning'; // Not found
+            }
+        }
+
+        // Default severity based on classification
+        switch (classification) {
+            case 'recoverable':
+                return 'warning';
+            case 'partial-success':
+                return 'info';
+            default:
+                return 'error';
+        }
+    }
+
+    // Create user-friendly error message
+    private createUserFriendlyMessage(error: any, classification: ErrorClassification, severity: ErrorSeverity): string {
+        const errorMessage = error?.message || error?.error || String(error);
+
+        // Customize message based on error type and severity
+        switch (classification) {
+            case 'recoverable':
+                return `I encountered an issue that can be resolved. ${this.getRecoveryHint(errorMessage)}`;
+
+            case 'partial-success':
+                return `The operation completed partially. Some items may need attention.`;
+
+            case 'non-recoverable':
+                return `A critical error occurred that requires technical assistance.`;
+
+            default:
+                return `An unexpected error occurred: ${errorMessage}`;
+        }
+    }
+
+    // Get recovery hint for recoverable errors
+    private getRecoveryHint(errorMessage: string): string {
+        const lowerMessage = errorMessage.toLowerCase();
+
+        if (lowerMessage.includes('not found') || lowerMessage.includes('does not exist')) {
+            return 'Please check the name or ID and try again.';
+        }
+        if (lowerMessage.includes('unauthorized') || lowerMessage.includes('authentication')) {
+            return 'Please check your credentials and try again.';
+        }
+        if (lowerMessage.includes('network') || lowerMessage.includes('connection')) {
+            return 'Please check your internet connection and try again.';
+        }
+        if (lowerMessage.includes('invalid format') || lowerMessage.includes('validation')) {
+            return 'Please check the data format and correct any issues.';
+        }
+
+        return 'Please try again or contact support if the problem persists.';
+    }
+
+    // Create technical message for debugging
+    private createTechnicalMessage(error: any, context?: any): string {
+        const parts = [];
+
+        if (error?.code || error?.statusCode) {
+            parts.push(`Code: ${error.code || error.statusCode}`);
+        }
+
+        if (error?.stack) {
+            parts.push(`Stack: ${error.stack}`);
+        }
+
+        if (context) {
+            parts.push(`Context: ${JSON.stringify(context)}`);
+        }
+
+        return parts.join('\n');
+    }
+
+    // Generate recovery strategies based on error classification
+    private generateRecoveryStrategies(
+        classification: ErrorClassification,
+        severity: ErrorSeverity,
+        context?: any
+    ): RecoveryStrategy[] {
+        const strategies: RecoveryStrategy[] = [];
+
+        // Always offer retry for recoverable errors
+        if (classification === 'recoverable') {
+            strategies.push({
+                id: 'retry',
+                name: 'Retry Operation',
+                description: 'Attempt the operation again',
+                action: 'retry',
+                priority: 1,
+                requiresUserInput: false,
+                automated: true
+            });
+        }
+
+        // Offer manual intervention for higher severity errors
+        if (classification === 'recoverable' || classification === 'partial-success') {
+            strategies.push({
+                id: 'manual_input',
+                name: 'Provide Manual Input',
+                description: 'Enter the required information manually',
+                action: 'manual_data_entry',
+                priority: 2,
+                requiresUserInput: true,
+                automated: false
+            });
+        }
+
+        // Offer alternative approaches
+        strategies.push({
+            id: 'alternative_approach',
+            name: 'Try Different Approach',
+            description: 'Use an alternative method or data source',
+            action: 'select_alternative',
+            priority: 3,
+            requiresUserInput: true,
+            automated: false
+        });
+
+        // Skip option for partial success
+        if (classification === 'partial-success') {
+            strategies.push({
+                id: 'skip_failed_items',
+                name: 'Skip Failed Items',
+                description: 'Continue with successfully processed items only',
+                action: 'skip_failed',
+                priority: 4,
+                requiresUserInput: false,
+                automated: true
+            });
+        }
+
+        // Contact support as last resort
+        strategies.push({
+            id: 'contact_support',
+            name: 'Contact Support',
+            description: 'Get help from technical support',
+            action: 'contact_support',
+            priority: 5,
+            requiresUserInput: false,
+            automated: false
+        });
+
+        return strategies;
+    }
+
+    // Handle classified error - create user-friendly response
+    handleClassifiedError(classifiedError: ClassifiedError): void {
+        // Add error message to conversation
+        this.addAssistantMessage(
+            classifiedError.userMessage,
+            'error',
+            {
+                classifiedError,
+                recoveryStrategies: classifiedError.recoveryStrategies
+            }
+        );
+
+        // Log technical details for debugging
+        console.error('🔍 Classified Error:', {
+            classification: classifiedError.classification,
+            severity: classifiedError.severity,
+            userMessage: classifiedError.userMessage,
+            technicalMessage: classifiedError.technicalMessage,
+            strategies: classifiedError.recoveryStrategies.length
+        });
+    }
+
+    // Get error recovery strategies for a workflow
+    getErrorRecoveryStrategies(workflowId: string): RecoveryStrategy[] {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow?.error) {
+            return [];
+        }
+
+        // Classify the workflow error
+        const classifiedError = this.classifyError(workflow.error, {
+            workflowId,
+            agent: workflow.flowType
+        });
+
+        return classifiedError.recoveryStrategies;
+    }
+
+    // Progress Persistence System
+
+    // Save workflow state to persistent storage
+    async saveWorkflowState(workflowId: string): Promise<void> {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow) {
+            throw new Error(`Workflow ${workflowId} not found`);
+        }
+
+        const workflowState = {
+            workflowId,
+            flowType: workflow.flowType,
+            status: workflow.status,
+            input: workflow.input,
+            progress: workflow.progress,
+            recoveryState: workflow.recoveryState,
+            pauseReason: workflow.pauseReason,
+            pausedAt: workflow.pausedAt,
+            startTime: workflow.startTime,
+            error: workflow.error,
+            savedAt: Date.now(),
+            version: '1.0'
+        };
+
+        try {
+            // Use localStorage for persistence (in production, this would be a proper database)
+            const key = `workflow_${workflowId}`;
+            localStorage.setItem(key, JSON.stringify(workflowState));
+            console.log(`💾 Saved workflow state for ${workflowId}`);
+        } catch (error) {
+            console.error(`Failed to save workflow state for ${workflowId}:`, error);
+            throw new Error('Failed to persist workflow state');
+        }
+    }
+
+    // Load workflow state from persistent storage
+    async loadWorkflowState(workflowId: string): Promise<any> {
+        try {
+            const key = `workflow_${workflowId}`;
+            const savedState = localStorage.getItem(key);
+
+            if (!savedState) {
+                throw new Error(`No saved state found for workflow ${workflowId}`);
+            }
+
+            const workflowState = JSON.parse(savedState);
+            console.log(`📂 Loaded workflow state for ${workflowId}`);
+            return workflowState;
+        } catch (error) {
+            console.error(`Failed to load workflow state for ${workflowId}:`, error);
+            throw new Error('Failed to load workflow state');
+        }
+    }
+
+    // Resume workflow from saved state
+    async resumeFromSavedState(workflowId: string): Promise<any> {
+        const savedState = await this.loadWorkflowState(workflowId);
+
+        // Restore workflow to active workflows
+        this.activeWorkflows.set(workflowId, {
+            ...savedState,
+            status: 'running'
+        });
+
+        console.log(`▶️ Resumed workflow ${workflowId} from saved state`);
+
+        // Continue workflow execution
+        return this.startWorkflow(savedState.flowType, savedState.input, this.getAgentFunction(savedState.flowType));
+    }
+
+    // Add progress checkpoint at key workflow stages
+    addProgressCheckpoint(workflowId: string, checkpointId: string, data?: any): void {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow) {
+            console.warn(`Cannot add checkpoint: workflow ${workflowId} not found`);
+            return;
+        }
+
+        if (!workflow.checkpoints) {
+            workflow.checkpoints = new Map();
+        }
+
+        const checkpoint = {
+            id: checkpointId,
+            timestamp: Date.now(),
+            data: data || {},
+            progress: workflow.progress
+        };
+
+        workflow.checkpoints.set(checkpointId, checkpoint);
+
+        // Auto-save workflow state at checkpoints
+        this.saveWorkflowState(workflowId).catch(error => {
+            console.warn('Failed to auto-save workflow state at checkpoint:', error);
+        });
+
+        console.log(`📍 Added progress checkpoint: ${checkpointId} for workflow ${workflowId}`);
+    }
+
+    // Get available checkpoints for a workflow
+    getWorkflowCheckpoints(workflowId: string): any[] {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow?.checkpoints) {
+            return [];
+        }
+
+        return Array.from(workflow.checkpoints.entries()).map(([id, checkpoint]) => ({
+            id,
+            timestamp: checkpoint.timestamp,
+            progress: checkpoint.progress?.overallProgress || 0
+        }));
+    }
+
+    // Resume workflow from specific checkpoint
+    async resumeFromCheckpoint(workflowId: string, checkpointId: string): Promise<any> {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow?.checkpoints) {
+            throw new Error(`No checkpoints found for workflow ${workflowId}`);
+        }
+
+        const checkpoint = workflow.checkpoints.get(checkpointId);
+        if (!checkpoint) {
+            throw new Error(`Checkpoint ${checkpointId} not found in workflow ${workflowId}`);
+        }
+
+        console.log(`⏮️ Resuming workflow ${workflowId} from checkpoint ${checkpointId}`);
+
+        // Restore workflow progress to checkpoint state
+        workflow.progress = checkpoint.progress;
+        workflow.status = 'running';
+
+        // Continue workflow execution with checkpoint data
+        const resumeInput = {
+            ...workflow.input,
+            checkpointData: checkpoint.data,
+            resumeFromCheckpoint: checkpointId
+        };
+
+        return this.startWorkflow(workflow.flowType, resumeInput, this.getAgentFunction(workflow.flowType));
+    }
+
+    // Store intermediate results for recovery
+    storeIntermediateResult(workflowId: string, resultId: string, result: any): void {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow) {
+            console.warn(`Cannot store intermediate result: workflow ${workflowId} not found`);
+            return;
+        }
+
+        if (!workflow.intermediateResults) {
+            workflow.intermediateResults = new Map();
+        }
+
+        const intermediateResult = {
+            id: resultId,
+            timestamp: Date.now(),
+            data: result
+        };
+
+        workflow.intermediateResults.set(resultId, intermediateResult);
+        console.log(`📦 Stored intermediate result: ${resultId} for workflow ${workflowId}`);
+    }
+
+    // Retrieve intermediate results
+    getIntermediateResults(workflowId: string): any[] {
+        const workflow = this.activeWorkflows.get(workflowId);
+        if (!workflow?.intermediateResults) {
+            return [];
+        }
+
+        return Array.from(workflow.intermediateResults.entries()).map(([id, result]) => ({
+            id,
+            timestamp: result.timestamp,
+            data: result.data
+        }));
+    }
+
+    // Clean up old saved states (garbage collection)
+    cleanupOldSavedStates(maxAge: number = 7 * 24 * 60 * 60 * 1000): void { // 7 days default
+        const now = Date.now();
+        const keysToRemove: string[] = [];
+
+        // Find old workflow states in localStorage
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key?.startsWith('workflow_')) {
+                try {
+                    const savedState = JSON.parse(localStorage.getItem(key) || '{}');
+                    if (savedState.savedAt && (now - savedState.savedAt) > maxAge) {
+                        keysToRemove.push(key);
+                    }
+                } catch (error) {
+                    // Invalid saved state, remove it
+                    keysToRemove.push(key);
+                }
+            }
+        }
+
+        // Remove old states
+        keysToRemove.forEach(key => {
+            localStorage.removeItem(key);
+            console.log(`🗑️ Cleaned up old saved state: ${key}`);
+        });
+
+        if (keysToRemove.length > 0) {
+            console.log(`🧹 Cleaned up ${keysToRemove.length} old workflow states`);
+        }
+    }
+
+    // Get list of resumable workflows from saved states
+    getResumableWorkflowsFromStorage(): any[] {
+        const resumableWorkflows: any[] = [];
+
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key?.startsWith('workflow_')) {
+                try {
+                    const savedState = JSON.parse(localStorage.getItem(key) || '{}');
+                    if (savedState.workflowId && (savedState.status === 'paused' || savedState.recoveryState)) {
+                        resumableWorkflows.push({
+                            id: savedState.workflowId,
+                            flowType: savedState.flowType,
+                            savedAt: savedState.savedAt,
+                            progress: savedState.progress?.overallProgress || 0,
+                            hasRecoveryState: !!savedState.recoveryState
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`Invalid saved state for key ${key}:`, error);
+                }
+            }
+        }
+
+        return resumableWorkflows;
+    }
+
+    // Enable auto-save for workflows at regular intervals
+    enableAutoSave(workflowId: string, intervalMs: number = 30000): () => void { // 30 seconds default
+        const autoSave = () => {
+            this.saveWorkflowState(workflowId).catch(error => {
+                console.warn('Auto-save failed:', error);
+            });
+        };
+
+        const intervalId = setInterval(autoSave, intervalMs);
+
+        // Return cleanup function
+        return () => {
+            clearInterval(intervalId);
+            console.log(`⏹️ Disabled auto-save for workflow ${workflowId}`);
+        };
     }
 
     // Tracker workflow handlers - moved from App.tsx

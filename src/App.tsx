@@ -58,7 +58,6 @@ const MyApp: FC = () => {
         showSelection: false,
         selectionOptions: [],
         selectionMultiple: true,
-        showError: false,
         conversation: [],
         showConversation: true
     });
@@ -120,10 +119,10 @@ const MyApp: FC = () => {
     // Handle query submission - now adds to conversation
     const handleQuerySubmit = async () => {
         if (!uiState.queryText.trim()) {
-            workflowOrchestrator.updateUIState({
-                showError: true,
-                errorMessage: 'Please enter a query'
-            });
+            workflowOrchestrator.addAssistantMessage(
+                'Empty query detected. Please enter a question or request before submitting. For example: "Show me HIV data" or "Upload CSV file".',
+                'error'
+            );
             return;
         }
 
@@ -199,9 +198,9 @@ const MyApp: FC = () => {
         } catch (error) {
             console.error('Query submission error:', error);
             workflowOrchestrator.addAssistantMessage(
-                `Error: ${error.message}`,
+                `Request processing failed: ${error.message}. This may be due to network issues, invalid input format, or system constraints. Please try rephrasing your query or check your connection. If the problem persists, contact support with the error details.`,
                 'error',
-                { error: error.message }
+                { error: error.message, errorType: 'query_processing', timestamp: new Date().toISOString() }
             );
         }
     };
@@ -214,10 +213,10 @@ const MyApp: FC = () => {
     // Handle enhanced query submission with file attachments
     const handleEnhancedQuerySubmit = async (text: string, attachments: FileAttachment[]) => {
         if (!text.trim() && attachments.length === 0) {
-            workflowOrchestrator.updateUIState({
-                showError: true,
-                errorMessage: 'Please enter a query or attach files'
-            });
+            workflowOrchestrator.addAssistantMessage(
+                'No input provided. Please either type a question or attach a file for processing. Supported file types: CSV, PDF, images. Try: "Upload my data file" or "Process this document".',
+                'error'
+            );
             return;
         }
 
@@ -331,9 +330,9 @@ const MyApp: FC = () => {
         } catch (error) {
             console.error('Enhanced query submission error:', error);
             workflowOrchestrator.addAssistantMessage(
-                `Error: ${error.message}`,
+                `File processing failed: ${error.message}. This may be due to unsupported file format, corrupted file content, or processing limits. Please check your file type (supported: CSV, PDF, images) and size (max 10MB). Try re-uploading or contact support if the issue persists.`,
                 'error',
-                { error: error.message }
+                { error: error.message, errorType: 'file_processing', supportedFormats: ['CSV', 'PDF', 'PNG', 'JPG', 'JPEG'], maxSize: '10MB' }
             );
         }
     };
@@ -416,7 +415,7 @@ const MyApp: FC = () => {
                     }}>
                         <MessageContainer messages={uiState.conversation} />
 
-                        {/* Processing overlay - only show spinner, no text box */}
+                        {/* Processing overlay - shows progress messages */}
                         {uiState.showProcessing && (
                             <div style={{
                                 position: 'absolute',
@@ -424,16 +423,44 @@ const MyApp: FC = () => {
                                 right: '20px',
                                 zIndex: 10,
                                 backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                borderRadius: '50%',
-                                padding: '12px',
-                                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                                border: '1px solid #e0e0e0'
+                                borderRadius: '12px',
+                                padding: '16px',
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                border: '1px solid #e0e0e0',
+                                minWidth: '200px',
+                                maxWidth: '300px'
                             }}>
                                 <div style={{
-                                    fontSize: '18px',
-                                    animation: 'spin 1s linear infinite'
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '12px'
                                 }}>
-                                    🔄
+                                    <div style={{
+                                        fontSize: '20px',
+                                        animation: 'spin 1s linear infinite'
+                                    }}>
+                                        🔄
+                                    </div>
+                                    <div style={{
+                                        flex: 1,
+                                        fontSize: '14px',
+                                        color: '#333',
+                                        lineHeight: '1.4'
+                                    }}>
+                                        <div style={{
+                                            fontWeight: 'bold',
+                                            marginBottom: '4px',
+                                            color: '#2c6693'
+                                        }}>
+                                            Processing...
+                                        </div>
+                                        <div style={{
+                                            fontSize: '13px',
+                                            color: '#666'
+                                        }}>
+                                            {uiState.processingMessage || 'Please wait while we process your request'}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -494,20 +521,7 @@ const MyApp: FC = () => {
                 </div>
             </div>
 
-            {/* Error Display - shown outside the chat area */}
-            {uiState.showError && uiState.errorMessage && (
-                <div style={{
-                    marginTop: '16px',
-                    padding: '12px 16px',
-                    backgroundColor: '#ffebee',
-                    color: '#c62828',
-                    borderRadius: '4px',
-                    border: '1px solid #ef5350',
-                    maxWidth: '800px'
-                }}>
-                    <strong>{i18n.t('Error')}:</strong> {uiState.errorMessage}
-                </div>
-            )}
+
 
             {/* Tracker Data Grid - Hidden by default, shown when tracker workflow is active */}
             {trackerState.extractedPatients.length > 0 && (

@@ -1,14 +1,435 @@
-import React, { FC } from 'react';
+import React, { FC, useState } from 'react';
 import { ConversationMessage, workflowOrchestrator } from '../utils/workflow-orchestrator';
 import AnalyticsChart from './AnalyticsChart';
 import MetadataSelector, { MetadataOption } from './MetadataSelector';
 import AggregateDataGrid from './AggregateDataGrid';
 import TrackerDataGrid from './TrackerDataGrid';
 import ResolutionSelector from './ResolutionSelector';
+import ActionButton from './ActionButton';
+
+interface ErrorMessageProps {
+    message: ConversationMessage;
+}
+
+const ErrorMessage: FC<ErrorMessageProps> = ({ message }) => {
+    const [showDetails, setShowDetails] = useState(false);
+    const [showRecoveryActions, setShowRecoveryActions] = useState(false);
+
+    const handleRecoveryAction = (actionId: string) => {
+        console.log('Recovery action selected:', actionId);
+        // TODO: Integrate with RecoveryModal or handle recovery actions
+        workflowOrchestrator.addAssistantMessage(
+            `Attempting recovery action: ${actionId}`,
+            'info'
+        );
+    };
+
+    const getRecoveryActions = () => {
+        // Extract recovery actions from message data or provide defaults
+        if (message.data?.recoveryOptions) {
+            return message.data.recoveryOptions;
+        }
+
+        // Default recovery actions based on error type
+        return [
+            { id: 'retry', label: 'Retry', action: 'retry' },
+            { id: 'skip', label: 'Skip', action: 'skip' },
+            { id: 'manual', label: 'Manual Entry', action: 'manual_data_entry' }
+        ];
+    };
+
+    return (
+        <div style={{
+            backgroundColor: '#ffebee',
+            border: '1px solid #ef5350',
+            borderRadius: '8px',
+            padding: '16px',
+            color: '#c62828'
+        }}>
+            {/* Error Header */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '8px'
+            }}>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '16px',
+                    fontWeight: 'bold'
+                }}>
+                    <span>❌ Error:</span>
+                    <span>{message.content}</span>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <ActionButton
+                        variant="retry"
+                        size="small"
+                        onClick={() => handleRecoveryAction('retry')}
+                    >
+                        Retry
+                    </ActionButton>
+                    <button
+                        onClick={() => setShowRecoveryActions(!showRecoveryActions)}
+                        style={{
+                            padding: '4px 8px',
+                            backgroundColor: 'transparent',
+                            border: '1px solid #c62828',
+                            borderRadius: '4px',
+                            color: '#c62828',
+                            cursor: 'pointer',
+                            fontSize: '12px'
+                        }}
+                    >
+                        {showRecoveryActions ? 'Hide Options' : 'More Options'}
+                    </button>
+                </div>
+            </div>
+
+            {/* Recovery Actions Panel */}
+            {showRecoveryActions && (
+                <div style={{
+                    backgroundColor: '#fff3e0',
+                    border: '1px solid #ff9800',
+                    borderRadius: '6px',
+                    padding: '12px',
+                    marginTop: '12px'
+                }}>
+                    <h5 style={{
+                        margin: '0 0 8px 0',
+                        color: '#e65100',
+                        fontSize: '14px'
+                    }}>
+                        Recovery Options:
+                    </h5>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {getRecoveryActions().map((action: any) => (
+                            <ActionButton
+                                key={action.id}
+                                variant={action.id === 'retry' ? 'retry' :
+                                        action.id === 'skip' ? 'skip' :
+                                        action.id === 'manual' ? 'manual' : 'alternative'}
+                                size="small"
+                                onClick={() => handleRecoveryAction(action.action)}
+                            >
+                                {action.label}
+                            </ActionButton>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Expandable Details */}
+            {message.data && (
+                <div style={{ marginTop: '12px' }}>
+                    <button
+                        onClick={() => setShowDetails(!showDetails)}
+                        style={{
+                            backgroundColor: 'transparent',
+                            border: 'none',
+                            color: '#c62828',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            textDecoration: 'underline',
+                            padding: '0'
+                        }}
+                    >
+                        {showDetails ? 'Hide Details ▲' : 'Show Details ▼'}
+                    </button>
+
+                    {showDetails && (
+                        <div style={{
+                            marginTop: '8px',
+                            padding: '12px',
+                            backgroundColor: '#fafafa',
+                            borderRadius: '4px',
+                            border: '1px solid #e0e0e0',
+                            fontSize: '12px',
+                            fontFamily: 'monospace',
+                            whiteSpace: 'pre-wrap',
+                            maxHeight: '200px',
+                            overflowY: 'auto'
+                        }}>
+                            {JSON.stringify(message.data, null, 2)}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
 
 interface MessageRendererProps {
     message: ConversationMessage;
 }
+
+interface ThreadedMessageRendererProps {
+    messages: ConversationMessage[];
+}
+
+interface ProgressMessageProps {
+    message: ConversationMessage;
+}
+
+const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
+    const progress = message.data?.progress || 0;
+    const steps = message.data?.steps || [];
+    const currentStep = message.data?.currentStep;
+
+    return (
+        <div style={{
+            backgroundColor: '#f3e5f5',
+            border: '1px solid #9c27b0',
+            borderRadius: '8px',
+            padding: '16px',
+            color: '#4a148c'
+        }}>
+            {/* Progress Header */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                marginBottom: '12px',
+                fontSize: '16px',
+                fontWeight: 'bold'
+            }}>
+                <span>🔄</span>
+                <span>{message.content}</span>
+                {progress > 0 && (
+                    <span style={{
+                        fontSize: '12px',
+                        color: '#666',
+                        marginLeft: 'auto'
+                    }}>
+                        {Math.round(progress)}%
+                    </span>
+                )}
+            </div>
+
+            {/* Progress Bar */}
+            {progress > 0 && (
+                <div style={{ marginBottom: '16px' }}>
+                    <div style={{
+                        width: '100%',
+                        height: '8px',
+                        backgroundColor: '#e0e0e0',
+                        borderRadius: '4px',
+                        overflow: 'hidden'
+                    }}>
+                        <div style={{
+                            width: `${progress}%`,
+                            height: '100%',
+                            backgroundColor: '#9c27b0',
+                            transition: 'width 0.5s ease'
+                        }} />
+                    </div>
+                </div>
+            )}
+
+            {/* Steps Progress (if available) */}
+            {steps.length > 0 && (
+                <div style={{ marginBottom: '12px' }}>
+                    <div style={{
+                        fontSize: '12px',
+                        color: '#666',
+                        marginBottom: '8px',
+                        fontWeight: 'bold'
+                    }}>
+                        Steps:
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {steps.map((step: any, index: number) => {
+                            const isCompleted = step.status === 'completed';
+                            const isActive = step.status === 'active';
+                            const isCurrent = step.id === currentStep;
+
+                            return (
+                                <div
+                                    key={step.id}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        padding: '4px 0'
+                                    }}
+                                >
+                                    <div style={{
+                                        width: '16px',
+                                        height: '16px',
+                                        borderRadius: '50%',
+                                        backgroundColor: isCompleted ? '#4caf50' :
+                                                       isActive ? '#2196f3' : '#e0e0e0',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontSize: '10px',
+                                        color: 'white'
+                                    }}>
+                                        {isCompleted ? '✓' : isActive ? '●' : '○'}
+                                    </div>
+                                    <span style={{
+                                        fontSize: '12px',
+                                        color: isCompleted ? '#4caf50' :
+                                               isActive ? '#2196f3' : '#666',
+                                        fontWeight: isCurrent ? 'bold' : 'normal'
+                                    }}>
+                                        {step.label}
+                                    </span>
+                                    {step.progress !== undefined && isActive && (
+                                        <div style={{
+                                            marginLeft: 'auto',
+                                            fontSize: '10px',
+                                            color: '#666'
+                                        }}>
+                                            {step.progress}%
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* Additional Details */}
+            {message.data && Object.keys(message.data).length > 0 && (
+                <div style={{
+                    padding: '8px',
+                    backgroundColor: '#fafafa',
+                    borderRadius: '4px',
+                    border: '1px solid #e9ecef',
+                    fontSize: '11px',
+                    color: '#666'
+                }}>
+                    {message.data.details || message.data.message || 'Processing...'}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ThreadedMessageRenderer: FC<ThreadedMessageRendererProps> = ({ messages }) => {
+    // Group messages by threadId
+    const groupedMessages = messages.reduce((groups, message) => {
+        const threadId = message.threadId || 'unthreaded';
+        if (!groups[threadId]) {
+            groups[threadId] = [];
+        }
+        groups[threadId].push(message);
+        return groups;
+    }, {} as Record<string, ConversationMessage[]>);
+
+    // Sort messages within each thread by timestamp
+    Object.keys(groupedMessages).forEach(threadId => {
+        groupedMessages[threadId].sort((a, b) => a.timestamp - b.timestamp);
+    });
+
+    const renderThread = (threadId: string, threadMessages: ConversationMessage[]) => {
+        const isThreaded = threadId !== 'unthreaded';
+        const firstMessage = threadMessages[0];
+        const isUserThread = firstMessage?.role === 'user';
+
+        if (!isThreaded) {
+            // Render unthreaded messages normally
+            return threadMessages.map(message => (
+                <MessageRenderer key={message.id} message={message} />
+            ));
+        }
+
+        // Render threaded messages with visual grouping
+        return (
+            <div
+                key={threadId}
+                style={{
+                    position: 'relative',
+                    marginBottom: '16px',
+                    paddingLeft: '20px'
+                }}
+            >
+                {/* Thread indicator line */}
+                <div style={{
+                    position: 'absolute',
+                    left: '8px',
+                    top: '12px',
+                    bottom: '12px',
+                    width: '2px',
+                    backgroundColor: isUserThread ? '#2c6693' : '#4CAF50',
+                    borderRadius: '1px',
+                    opacity: 0.6
+                }} />
+
+                {/* Thread header dot */}
+                <div style={{
+                    position: 'absolute',
+                    left: '4px',
+                    top: '8px',
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '50%',
+                    backgroundColor: isUserThread ? '#2c6693' : '#4CAF50',
+                    border: '2px solid white',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                    zIndex: 1
+                }} />
+
+                {/* Messages in thread */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {threadMessages.map((message, index) => (
+                        <div
+                            key={message.id}
+                            style={{
+                                position: 'relative',
+                                marginLeft: index === 0 ? '0' : '16px'
+                            }}
+                        >
+                            {/* Connection dot for subsequent messages */}
+                            {index > 0 && (
+                                <div style={{
+                                    position: 'absolute',
+                                    left: '-20px',
+                                    top: '16px',
+                                    width: '8px',
+                                    height: '8px',
+                                    borderRadius: '50%',
+                                    backgroundColor: isUserThread ? '#2c6693' : '#4CAF50',
+                                    border: '2px solid white',
+                                    opacity: 0.8
+                                }} />
+                            )}
+
+                            <MessageRenderer message={message} />
+                        </div>
+                    ))}
+                </div>
+
+                {/* Thread summary for collapsed view (future enhancement) */}
+                {threadMessages.length > 3 && (
+                    <div style={{
+                        marginTop: '8px',
+                        marginLeft: '16px',
+                        fontSize: '11px',
+                        color: '#666',
+                        fontStyle: 'italic'
+                    }}>
+                        Thread: {threadMessages.length} messages
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {Object.entries(groupedMessages).map(([threadId, threadMessages]) =>
+                renderThread(threadId, threadMessages)
+            )}
+        </div>
+    );
+};
 
 // Helper function to determine field type from header
 const getFieldTypeFromHeader = (header: string): 'dataElement' | 'orgUnit' | 'period' | 'categoryOptionCombos' | 'attributeOptionCombos' | 'value' | null => {
@@ -68,15 +489,18 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                 );
 
             case 'error':
+                return <ErrorMessage message={message} />;
+
+            case 'success':
                 return (
                     <div style={{
-                        backgroundColor: '#ffebee',
-                        border: '1px solid #ef5350',
+                        backgroundColor: '#e8f5e8',
+                        border: '1px solid #4caf50',
                         borderRadius: '4px',
                         padding: '12px',
-                        color: '#c62828'
+                        color: '#2e7d32'
                     }}>
-                        <strong>Error:</strong> {message.content}
+                        <strong>✅ Success:</strong> {message.content}
                         {message.data && (
                             <div style={{ marginTop: '8px', fontSize: '12px' }}>
                                 <strong>Details:</strong>
@@ -87,6 +511,51 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                         )}
                     </div>
                 );
+
+            case 'warning':
+                return (
+                    <div style={{
+                        backgroundColor: '#fff3e0',
+                        border: '1px solid #ff9800',
+                        borderRadius: '4px',
+                        padding: '12px',
+                        color: '#e65100'
+                    }}>
+                        <strong>⚠️ Warning:</strong> {message.content}
+                        {message.data && (
+                            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                                <strong>Details:</strong>
+                                <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px' }}>
+                                    {JSON.stringify(message.data, null, 2).substring(0, 500)}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                );
+
+            case 'info':
+                return (
+                    <div style={{
+                        backgroundColor: '#e3f2fd',
+                        border: '1px solid #2196f3',
+                        borderRadius: '4px',
+                        padding: '12px',
+                        color: '#0d47a1'
+                    }}>
+                        <strong>ℹ️ Info:</strong> {message.content}
+                        {message.data && (
+                            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                                <strong>Details:</strong>
+                                <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px' }}>
+                                    {JSON.stringify(message.data, null, 2).substring(0, 500)}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                );
+
+            case 'progress':
+                return <ProgressMessage message={message} />;
 
             case 'selection':
                 return (

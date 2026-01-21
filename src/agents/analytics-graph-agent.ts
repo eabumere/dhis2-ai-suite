@@ -17,11 +17,32 @@ import { addConversation, conversationContext, createAnalyticsDataContext } from
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
+// Recovery context interface for analytics agent
+export interface AnalyticsRecoveryContext {
+    failedStep: string;
+    errorDetails: any;
+    recoveryOptions: RecoveryOption[];
+    userGuidance: string;
+}
+
+export interface RecoveryOption {
+    id: string;
+    label: string;
+    description: string;
+    action: () => Promise<Partial<typeof GraphAnnotation.State>>;
+}
+
 // Define the state using Annotation API (as per LangGraph official docs)
 const GraphAnnotation = Annotation.Root({
+	// Recovery context for handling failures
+	recoveryContext: Annotation<AnalyticsRecoveryContext | null>({
+		reducer: (left, right) => right || left,
+		default: () => null
+	}),
+
 	// Input state
 	messages: Annotation<any[]>({
-		reducer: (left: any[], right: any) => {
+		reducer: (left: any[], right: any[]) => {
 			if (Array.isArray(right)) {
 				return left.concat(right);
 			}
@@ -1486,6 +1507,202 @@ function extractOrgUnitKeywords(query: string): string[] {
 	);
 }
 
+// Recovery functions for handling failures gracefully
+
+// Query parsing recovery - when intent classification or query parsing fails
+async function handle_query_parsing_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+    console.log('🔄 Handling query parsing recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'rephrase_query',
+            label: 'Rephrase your query',
+            description: 'Try asking the question in a different way with clearer terms',
+            action: async () => ({
+                uiAction: 'show_query_examples',
+                recoveryAction: 'rephrase_query'
+            })
+        },
+        {
+            id: 'provide_examples',
+            label: 'See example queries',
+            description: 'View examples of analytics queries that work well',
+            action: async () => ({
+                uiAction: 'show_query_examples',
+                recoveryAction: 'provide_examples'
+            })
+        },
+        {
+            id: 'simplify_query',
+            label: 'Simplify the query',
+            description: 'Break down complex queries into simpler parts',
+            action: async () => ({
+                uiAction: 'show_simplified_examples',
+                recoveryAction: 'simplify_query'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'query_parsing',
+            errorDetails: {
+                reason: 'Could not understand the analytics query structure',
+                originalQuery: state.query,
+                suggestion: 'Try using specific indicator names, time periods, or geographic locations'
+            },
+            recoveryOptions,
+            userGuidance: 'Query parsing failed. Try rephrasing with more specific terms:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Data access recovery - when DHIS2 API calls fail or no data is returned
+async function handle_data_access_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+    console.log('🔄 Handling data access recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'check_permissions',
+            label: 'Check data permissions',
+            description: 'Verify you have access to the requested data in DHIS2',
+            action: async () => ({
+                uiAction: 'show_permission_help',
+                recoveryAction: 'check_permissions'
+            })
+        },
+        {
+            id: 'try_different_period',
+            label: 'Try different time period',
+            description: 'Use a different time period that may have data available',
+            action: async () => ({
+                uiAction: 'suggest_alternative_periods',
+                recoveryAction: 'try_different_period'
+            })
+        },
+        {
+            id: 'broaden_search',
+            label: 'Broaden your search',
+            description: 'Use broader terms or remove specific filters to find more data',
+            action: async () => ({
+                uiAction: 'show_broader_queries',
+                recoveryAction: 'broaden_search'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'data_access',
+            errorDetails: {
+                reason: 'Could not access or retrieve analytics data from DHIS2',
+                possibleCauses: ['Permission issues', 'No data for selected criteria', 'API connectivity problems']
+            },
+            recoveryOptions,
+            userGuidance: 'Data access failed. Choose how to resolve the issue:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Chart generation recovery - when chart building fails
+async function handle_chart_generation_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+    console.log('🔄 Handling chart generation recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'show_table_instead',
+            label: 'Show data as table',
+            description: 'Display the analytics data in table format instead of chart',
+            action: async () => ({
+                uiAction: 'switch_to_table_view',
+                recoveryAction: 'show_table_instead'
+            })
+        },
+        {
+            id: 'try_different_chart',
+            label: 'Try different chart type',
+            description: 'Use a different visualization type (line, pie, etc.)',
+            action: async () => ({
+                uiAction: 'suggest_chart_alternatives',
+                recoveryAction: 'try_different_chart'
+            })
+        },
+        {
+            id: 'export_raw_data',
+            label: 'Export raw data',
+            description: 'Download the data for external analysis and visualization',
+            action: async () => ({
+                uiAction: 'show_export_options',
+                recoveryAction: 'export_raw_data'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'chart_generation',
+            errorDetails: {
+                reason: 'Chart generation failed but data was successfully retrieved',
+                dataAvailable: !!state.data?.data,
+                chartTypeAttempted: 'bar'
+            },
+            recoveryOptions,
+            userGuidance: 'Chart generation failed but data is available. Choose how to view your data:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
+// Timeout recovery - when queries take too long or are interrupted
+async function handle_timeout_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+    console.log('🔄 Handling timeout recovery');
+
+    const recoveryOptions: RecoveryOption[] = [
+        {
+            id: 'retry_with_less_data',
+            label: 'Retry with less data',
+            description: 'Reduce the scope of your query to speed up processing',
+            action: async () => ({
+                uiAction: 'show_scope_reduction_options',
+                recoveryAction: 'retry_with_less_data'
+            })
+        },
+        {
+            id: 'continue_in_background',
+            label: 'Continue in background',
+            description: 'Process the query in the background and notify when complete',
+            action: async () => ({
+                uiAction: 'start_background_processing',
+                recoveryAction: 'continue_in_background'
+            })
+        },
+        {
+            id: 'save_partial_results',
+            label: 'Save partial results',
+            description: 'Save any results that were obtained before timeout',
+            action: async () => ({
+                uiAction: 'show_partial_results',
+                recoveryAction: 'save_partial_results'
+            })
+        }
+    ];
+
+    return {
+        recoveryContext: {
+            failedStep: 'timeout',
+            errorDetails: {
+                reason: 'Query processing timed out or took too long',
+                suggestion: 'Try narrowing your search criteria or reducing data volume'
+            },
+            recoveryOptions,
+            userGuidance: 'Query timed out. Choose how to proceed with your analytics request:'
+        },
+        uiAction: 'show_recovery_options'
+    };
+}
+
 // Create the StateGraph workflow according to LangGraph docs
 const workflow = new StateGraph(GraphAnnotation);
 
@@ -1499,6 +1716,12 @@ workflow.addNode('search_org_units', searchOrgUnits);
 workflow.addNode('search_disaggregations', searchDisaggregations);
 workflow.addNode('query_data', queryData);
 workflow.addNode('build_chart', buildChart);
+
+// Recovery nodes
+workflow.addNode('handle_query_parsing_recovery', handle_query_parsing_recovery);
+workflow.addNode('handle_data_access_recovery', handle_data_access_recovery);
+workflow.addNode('handle_chart_generation_recovery', handle_chart_generation_recovery);
+workflow.addNode('handle_timeout_recovery', handle_timeout_recovery);
 
 // Add edges
 // @ts-ignore

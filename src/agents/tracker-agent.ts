@@ -1,5 +1,7 @@
 import {Annotation, END, START, StateGraph} from '@langchain/langgraph/web';
 import {mapToDhis2TrackerFormat, processScannedRegister, registerTrackerEntities,} from '../utils/tools/metadata';
+import {matchPdfHeadersToMapping} from '../utils/tools/metadata/header-matching';
+import {dhis2Config} from '../utils/env-config';
 
 // Types for tracker data processing
 export interface ExtractedPatientData {
@@ -67,6 +69,11 @@ const TrackerDataAnnotation = Annotation.Root({
     }),
 
     attributeMappings: Annotation<Record<string, string>>({
+        reducer: (left, right) => right || left,
+        default: () => ({})
+    }),
+
+    headerDisplayNames: Annotation<Record<string, string>>({
         reducer: (left, right) => right || left,
         default: () => ({})
     }),
@@ -310,15 +317,57 @@ async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State):
     console.log(`📄 Tracker Data Agent: Mapping ${state.extractedPatients.length} patients to DHIS2 tracker format`);
 
     // Use default org unit and program if not specified
-    const orgUnit = state.orgUnit || 'cYSowRjnmHE'; // Default facility org unit
-    const programId = state.programId || 'o3jXXatOefs'; // Default HIV program
+    const orgUnit = state.orgUnit || dhis2Config.getDefaultOrgUnit();
+    const programId = state.programId || dhis2Config.getDefaultProgramId();
 
     try {
+                // First, try to use LLM header matching if we have extracted headers
+        let enhancedMappings: Record<string, string> = {};
+        let headerDisplayNames: Record<string, string> = {};
+
+        if (state.extractedPatients.length > 0) {
+            // Extract unique header names from the first patient record
+            const headers = Object.keys(state.extractedPatients[0]);
+            console.log(`📄 Tracker Data Agent: Detected headers: ${headers.join(', ')}`);
+
+            // Use LLM to match headers to DHIS2 attributes
+            const llmMatchingResult = await matchPdfHeadersToMapping.invoke({
+                pdfHeaders: headers,
+                programId: programId, // Required parameter for dynamic attribute fetching
+                confidenceThreshold: 0.7,
+                context: 'DHIS2 tracker data mapping',
+                attributeMappings: state.attributeMappings // Optional custom overrides
+            });
+
+            if (llmMatchingResult.matches && llmMatchingResult.matches.length > 0) {
+                console.log(`📄 Tracker Data Agent: LLM header matching successful - ${llmMatchingResult.matches.length} matches found`);
+
+                // Convert matches to mapping formats
+                const newMappings: Record<string, string> = {};
+                const displayNames: Record<string, string> = {};
+
+                for (const match of llmMatchingResult.matches) {
+                    newMappings[match.pdfHeader] = match.attributeId;
+                    displayNames[match.attributeId] = match.attributeName;
+                }
+
+                enhancedMappings = { ...state.attributeMappings, ...newMappings };
+                headerDisplayNames = displayNames;
+
+                console.log(`📄 Tracker Data Agent: Created mappings:`, enhancedMappings);
+                console.log(`📄 Tracker Data Agent: Created display names:`, headerDisplayNames);
+            } else {
+                console.warn('📄 Tracker Data Agent: LLM header matching failed, using empty mappings');
+                enhancedMappings = {};
+                headerDisplayNames = {};
+            }
+        }
+
         const mappingResult = await mapToDhis2TrackerFormat.invoke({
             patients: state.extractedPatients,
             orgUnit,
             programId,
-            attributeMappings: state.attributeMappings
+            attributeMappings: enhancedMappings
         });
 
         const parsedResult = JSON.parse(mappingResult);
@@ -335,7 +384,9 @@ async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State):
 
         // Set mapped data but don't go to review step yet - let conditional edge handle it
         return {
-            mappedTrackerData: parsedResult.payload.trackedEntities
+            mappedTrackerData: parsedResult.payload.trackedEntities,
+            attributeMappings: enhancedMappings, // Update state with enhanced mappings
+            headerDisplayNames: headerDisplayNames // Update state with display names
         };
 
     } catch (error) {
@@ -508,6 +559,8 @@ export function createTrackerDataAgent(orchestrator: any) {
                         data: {
                             extractedPatients: result.extractedPatients,
                             mappedTrackerData: result.mappedTrackerData,
+                            headerMappings: result.attributeMappings || {},
+                            headerDisplayNames: result.headerDisplayNames || {},
                             reviewMode: true,
                             totalPatients: result.extractedPatients?.length || 0,
                             extractedFrom: result.uploadedDocument?.filename || 'document'
@@ -615,10 +668,69 @@ export function createTrackerDataAgent(orchestrator: any) {
                         const registrationResult = await register_tracker_entities(currentState);
                         console.log('📄 Tracker Data Agent: Registration completed:', registrationResult);
 
-                        // Return the registration result directly
+                        // Parse the detailed response to create better user feedback
+                        let detailedMessage = '';
+                        let resultDetails: any = {};
+
+                        try {
+                            // The registrationResult is the finalResult from the state graph
+                            const finalResult = registrationResult.finalResult;
+                            const parsedResult = typeof finalResult === 'string' ? JSON.parse(finalResult) : finalResult;
+
+                            if (parsedResult?.success !== false) {
+                                const total = parsedResult?.details?.totalPatients || parsedResult?.totalPatients || 0;
+                                const successful = parsedResult?.details?.successful || parsedResult?.successful || 0;
+                                const failed = parsedResult?.details?.failed || parsedResult?.failed || 0;
+
+                                // Store details for the enhanced result
+                                resultDetails = {
+                                    totalEntities: total,
+                                    successful: successful,
+                                    failed: failed
+                                };
+
+                                // Create user-friendly message with details
+                                if (successful > 0) {
+                                    detailedMessage = `✅ Successfully registered ${successful} tracker ${successful === 1 ? 'entity' : 'entities'} in DHIS2`;
+                                    if (total > successful) {
+                                        detailedMessage += ` (${failed} failed)`;
+                                    }
+                                    detailedMessage += '.';
+                                } else {
+                                    detailedMessage = `❌ Failed to register tracker entities (${failed} failed).`;
+                                }
+
+                                // Add program context if available
+                                if (currentState.programId) {
+                                    detailedMessage += ` Program: ${currentState.programId}.`;
+                                }
+                            } else {
+                                detailedMessage = parsedResult?.message || finalResult?.message || 'Registration completed with issues.';
+                            }
+                        } catch (parseError) {
+                            // Fallback to original message if parsing fails
+                            console.warn('Failed to parse registration result for detailed feedback:', parseError);
+                            detailedMessage = registrationResult.finalResult?.message ||
+                                registrationResult.message ||
+                                'Tracker entities registered successfully.';
+                        }
+
+                        // Create enhanced final result with detailed message
+                        const enhancedResult = {
+                            success: registrationResult.finalResult?.success ?? registrationResult.success ?? true,
+                            message: detailedMessage,
+                            details: {
+                                ...resultDetails,
+                                programId: currentState.programId,
+                                timestamp: new Date().toISOString()
+                            },
+                            type: 'tracker_save_completed'
+                        };
+
+                        // Return the enhanced result
                         return {
                             ...currentState,
-                            finalResult: registrationResult.finalResult || registrationResult,
+                            finalResult: enhancedResult,
                             showReviewGrid: false,
                             userConfirmedSave: true
                         };

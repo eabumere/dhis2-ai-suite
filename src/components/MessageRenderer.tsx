@@ -136,6 +136,8 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                 <TrackerDataGrid
                                     extractedPatients={message.data.extractedPatients || []}
                                     mappedTrackerData={message.data.mappedTrackerData || []}
+                                    headerMappings={message.data.headerMappings || {}}
+                                    headerDisplayNames={message.data.headerDisplayNames || {}}
                                     reviewMode={true}
                                     onConfirmSave={() => {
                                         workflowOrchestrator.handleDataGridInteraction({

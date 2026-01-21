@@ -72,6 +72,16 @@ export interface WorkflowUIState {
     showConversation: boolean;
 }
 
+export interface TrackerWorkflowState {
+    extractedPatients: any[];
+    mappedTrackerData: any[];
+    programId: string;
+    processingStep: string;
+    processingProgress: number;
+    error: string;
+    reviewMode: boolean;
+}
+
 // Comprehensive UI orchestration callbacks
 export interface ComprehensiveWorkflowCallbacks {
     // UI state management
@@ -109,6 +119,17 @@ class WorkflowOrchestrator {
         showConversation: true
     };
 
+    // Tracker workflow state - moved from App.tsx
+    private trackerState: TrackerWorkflowState = {
+        extractedPatients: [],
+        mappedTrackerData: [],
+        programId: '',
+        processingStep: '',
+        processingProgress: 0,
+        error: '',
+        reviewMode: false
+    };
+
     // Initialize default UI state
     resetUIState() {
         this.currentUIState = {
@@ -123,6 +144,26 @@ class WorkflowOrchestrator {
             selectionMultiple: true,
             showError: false,
             conversation: [],
+            showConversation: true
+        };
+        this.uiCallbacks?.onUIStateChange(this.currentUIState);
+    }
+
+    // Initialize UI state for a new chat session (clear conversation history)
+    initializeNewChatSession() {
+        console.log('🔄 Initializing new chat session - clearing conversation history');
+        this.currentUIState = {
+            showQueryInput: true,
+            queryText: '',
+            queryEnabled: true,
+            showProcessing: false,
+            showResults: false,
+            showChart: false,
+            showSelection: false,
+            selectionOptions: [],
+            selectionMultiple: true,
+            showError: false,
+            conversation: [], // Clear conversation history for new session
             showConversation: true
         };
         this.uiCallbacks?.onUIStateChange(this.currentUIState);
@@ -190,9 +231,59 @@ class WorkflowOrchestrator {
                 const result = await agentFn(currentInput);
                 console.log(`📋 Workflow ${workflowId} iteration ${iterationCount} result:`, result);
 
-                // Check if selection is required
-                if (result?.requiresSelection && result?.selectionOptions?.length > 0) {
+                // Check if user selection is required
+                if (result?.type === 'user_selection_needed' && result?.selectionOptions?.length > 0) {
                     console.log(`⏸️ Workflow ${workflowId} requires user selection`);
+
+                    // Request user selection
+                    const selectedOption = await this.requestUserSelection(workflowId, result.selectionOptions, result.message);
+
+                    if (selectedOption) {
+                        console.log(`▶️ Workflow ${workflowId} received selection: ${selectedOption.id}, continuing with:`, selectedOption);
+
+                        // Route to the selected agent
+                        const selectedAgent = selectedOption.id;
+                        const selectedAgentFn = this.getAgentFunction(selectedAgent);
+
+                        if (selectedAgentFn) {
+                            // Update input with selected agent context
+                            currentInput = {
+                                ...currentInput,
+                                workflowType: selectedAgent,
+                                // Update the user message to include selected agent context
+                                input: {
+                                    ...currentInput.input,
+                                    messages: currentInput.input.messages.map((msg: any) => {
+                                        if (msg.role === 'user') {
+                                            return {
+                                                ...msg,
+                                                content: `Continue with ${selectedOption.name}: ${input.input.messages[0]?.content || msg.content}`
+                                            };
+                                        }
+                                        return msg;
+                                    })
+                                }
+                            };
+
+                            // Update UI for next iteration
+                            this.updateUIState({
+                                showProcessing: true,
+                                processingMessage: `Processing with ${selectedOption.name}...`
+                            });
+
+                            continue; // Continue the loop with selected agent
+                        } else {
+                            throw new Error(`Unknown agent: ${selectedAgent}`);
+                        }
+                    } else {
+                        // User cancelled selection
+                        throw new Error('Selection was cancelled by user');
+                    }
+                }
+
+                // Check if metadata selection is required (existing logic)
+                if (result?.requiresSelection && result?.selectionOptions?.length > 0) {
+                    console.log(`⏸️ Workflow ${workflowId} requires metadata selection`);
 
                     // Request user selection
                     const selectedItems = await this.requestSelection(workflowId, result.selectionOptions, result.allowMultiple || true);
@@ -416,6 +507,76 @@ class WorkflowOrchestrator {
                 resolve(selectedItems);
             });
         });
+    }
+
+    // Request user selection for agent choice
+    async requestUserSelection(workflowId: string, options: any[], message: string): Promise<any> {
+        console.log(`⏸️ Workflow ${workflowId} requesting user agent selection`);
+
+        return new Promise((resolve, reject) => {
+            if (!this.uiCallbacks?.onSelection) {
+                reject(new Error('No UI callbacks registered for workflow orchestration'));
+                return;
+            }
+
+            // Add selection prompt to conversation
+            this.addAssistantMessage(message, 'selection', {
+                selectionOptions: options,
+                allowMultiple: false,
+                workflowId
+            });
+
+            // Update UI to show selection
+            this.updateUIState({
+                showProcessing: false,
+                showSelection: true,
+                selectionOptions: options,
+                selectionMultiple: false
+            });
+
+            this.uiCallbacks.onSelection(options, (selectedItems) => {
+                console.log(`▶️ Workflow ${workflowId} received agent selection:`, selectedItems);
+
+                // Hide selection UI
+                this.updateUIState({
+                    showSelection: false,
+                    selectionOptions: []
+                });
+
+                // Return the first (and only) selected item
+                resolve(selectedItems[0]);
+            });
+        });
+    }
+
+    // Get agent function by name
+    private getAgentFunction(agentName: string): any {
+        // Import agents dynamically to avoid circular dependencies
+        switch (agentName) {
+            case 'direct_search':
+                return async (input: any) => {
+                    const { searchAgent } = await import('../agents/search-agent');
+                    return searchAgent.invoke(input);
+                };
+            case 'analytics_routing':
+                return async (input: any) => {
+                    const { analyticsGraphAgent } = await import('../agents/analytics-graph-agent');
+                    return analyticsGraphAgent.invoke(input);
+                };
+            case 'crud':
+                return async (input: any) => {
+                    const { crudAgent } = await import('../agents/crud-agent');
+                    return crudAgent.invoke(input);
+                };
+            case 'data_entry':
+                return async (input: any) => {
+                    const { createRoutedDataEntryAgent } = await import('../agents/routed-data-entry-agent');
+                    const dataEntryAgent = createRoutedDataEntryAgent(this);
+                    return dataEntryAgent.invoke(input);
+                };
+            default:
+                return null;
+        }
     }
 
     // Request chart rendering
@@ -1403,6 +1564,63 @@ class WorkflowOrchestrator {
             'json': 'application/json'
         };
         return mimeTypes[ext] || 'application/octet-stream';
+    }
+
+    // Tracker workflow handlers - moved from App.tsx
+    updateTrackerState(updates: Partial<TrackerWorkflowState>) {
+        this.trackerState = { ...this.trackerState, ...updates };
+    }
+
+    getTrackerState(): TrackerWorkflowState {
+        return this.trackerState;
+    }
+
+    handleConfigureProcessing(config: {
+        orgUnit: string;
+        programId: string;
+        attributeMappings: Record<string, string>;
+    }) {
+        console.log('🔧 Configure processing:', config);
+        // Update tracker state with configuration
+        this.updateTrackerState({
+            processingStep: 'Configuring processing...',
+            processingProgress: 10
+        });
+    }
+
+    handleUploadDocument(file: File) {
+        console.log('📁 Upload document:', file.name);
+        // Update tracker state for document upload
+        this.updateTrackerState({
+            processingStep: 'Uploading document...',
+            processingProgress: 20
+        });
+    }
+
+    handleRetryProcessing() {
+        console.log('🔄 Retry processing');
+        this.updateTrackerState({
+            error: '',
+            processingStep: 'Retrying processing...',
+            processingProgress: 0
+        });
+    }
+
+    handleConfirmSave() {
+        console.log('✅ Confirm save to DHIS2');
+        this.updateTrackerState({
+            reviewMode: false,
+            processingStep: 'Saving to DHIS2...',
+            processingProgress: 90
+        });
+    }
+
+    handleCancelSave() {
+        console.log('❌ Cancel save');
+        this.updateTrackerState({
+            reviewMode: false,
+            error: 'Save cancelled by user'
+        });
     }
 
     // Submit data to DHIS2

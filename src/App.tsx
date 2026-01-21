@@ -7,6 +7,7 @@ import MetadataSelector, { MetadataOption } from './components/MetadataSelector'
 
 import MessageContainer from './components/MessageContainer';
 import EnhancedInput, { FileAttachment } from './components/EnhancedInput';
+import TrackerDataGrid from './components/TrackerDataGrid';
 
 // Import the comprehensive workflow orchestrator
 import { workflowOrchestrator, WorkflowUIState, ConversationMessage } from './utils/workflow-orchestrator';
@@ -62,6 +63,9 @@ const MyApp: FC = () => {
         showConversation: true
     });
 
+    // Get tracker state from orchestrator
+    const trackerState = workflowOrchestrator.getTrackerState();
+
     // Selection complete callback for the orchestrator
     const pendingSelectionCallback = useRef<((selectedItems: any[]) => void) | null>(null);
 
@@ -109,11 +113,8 @@ const MyApp: FC = () => {
         const agent = createContextRouterAgent(workflowOrchestrator);
         setContextRouterAgent(agent);
 
-        // Load existing conversation history
-        workflowOrchestrator.loadConversationFromStorage();
-
-        // Reset UI to initial state on component mount (but preserve conversation)
-        workflowOrchestrator.resetUIState();
+        // Initialize new chat session (clear conversation history)
+        workflowOrchestrator.initializeNewChatSession();
     }, []);
 
     // Handle query submission - now adds to conversation
@@ -356,6 +357,31 @@ const MyApp: FC = () => {
         }
     };
 
+    // Tracker workflow handlers - now delegate to orchestrator
+    const handleConfigureProcessing = (config: {
+        orgUnit: string;
+        programId: string;
+        attributeMappings: Record<string, string>;
+    }) => {
+        workflowOrchestrator.handleConfigureProcessing(config);
+    };
+
+    const handleUploadDocument = (file: File) => {
+        workflowOrchestrator.handleUploadDocument(file);
+    };
+
+    const handleRetryProcessing = () => {
+        workflowOrchestrator.handleRetryProcessing();
+    };
+
+    const handleConfirmSave = () => {
+        workflowOrchestrator.handleConfirmSave();
+    };
+
+    const handleCancelSave = () => {
+        workflowOrchestrator.handleCancelSave();
+    };
+
     // Loading and error states for the main app
     if (error) {
         return <span>{i18n.t('ERROR')}</span>
@@ -482,9 +508,34 @@ const MyApp: FC = () => {
                     <strong>{i18n.t('Error')}:</strong> {uiState.errorMessage}
                 </div>
             )}
+
+            {/* Tracker Data Grid - Hidden by default, shown when tracker workflow is active */}
+            {trackerState.extractedPatients.length > 0 && (
+                <div style={{
+                    marginTop: '20px',
+                    border: '1px solid #e0e0e0',
+                    borderRadius: '8px',
+                    backgroundColor: '#ffffff'
+                }}>
+                    <TrackerDataGrid
+                        extractedPatients={trackerState.extractedPatients}
+                        mappedTrackerData={trackerState.mappedTrackerData}
+                        programId={trackerState.programId}
+                        onConfigureProcessing={handleConfigureProcessing}
+                        onUploadDocument={handleUploadDocument}
+                        onRetryProcessing={handleRetryProcessing}
+                        onConfirmSave={handleConfirmSave}
+                        onCancelSave={handleCancelSave}
+                        processingStep={trackerState.processingStep}
+                        processingProgress={trackerState.processingProgress}
+                        error={trackerState.error}
+                        reviewMode={trackerState.reviewMode}
+                    />
+                </div>
+            )}
         </div>
     )
-}
+};
 
 export default (props: any) => (
     <DataEngineProvider>

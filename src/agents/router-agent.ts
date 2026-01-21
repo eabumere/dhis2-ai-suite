@@ -127,31 +127,63 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 		};
 	}
 
-	// No clarification needed - check for follow-up first, then classify
+	// No clarification needed - FIRST: Classify intent properly (new task vs follow-up)
 	const fullConversationHistory = state.orchestrator?.currentUIState?.conversation || state.messages;
+	const intentClassification = await classifyIntentType(query, fullConversationHistory);
+	console.log(`🔍 Router: Intent classification: ${intentClassification.type} (${intentClassification.confidence})`, intentClassification);
 
-	// First check if this is a follow-up to a previous agent
-	const followUpInfo = await detectFollowUpIntent(query, fullConversationHistory);
-	console.log(`🔍 Router: Follow-up check: ${followUpInfo.isFollowUp ? 'YES' : 'NO'}`, followUpInfo);
+	// SECOND: Handle based on intent type
+	if (intentClassification.type === 'new_task') {
+		// This is a new task - classify which workflow type
+		const workflowType = await detectWorkflowTypeLLM(query, fullConversationHistory);
+		console.log(`🔄 Router: New task classified as "${workflowType}"`);
 
-		if (followUpInfo.isFollowUp && followUpInfo.targetAgent) {
-			console.log(`🔄 Router: Detected follow-up to ${followUpInfo.targetAgent}${followUpInfo.dataEntryType ? ` (${followUpInfo.dataEntryType})` : ''}, routing directly`);
-			return {
-				workflowType: followUpInfo.targetAgent,
-				originalQuery: query,
-				// Store data entry type context for the data entry router
-				dataEntryType: followUpInfo.dataEntryType
-			};
-		}
+		return {
+			workflowType,
+			originalQuery: query
+		};
+	} else if (intentClassification.type === 'follow_up') {
+		// This is a follow-up - determine which agent to route to
+		const followUpInfo = await determineFollowUpAgent(query, fullConversationHistory, intentClassification);
+		console.log(`🔄 Router: Follow-up detected, routing to ${followUpInfo.targetAgent}${followUpInfo.dataEntryType ? ` (${followUpInfo.dataEntryType})` : ''}`);
 
-	// Not a follow-up, proceed with normal classification
-	const workflowType = await detectWorkflowTypeLLM(query, fullConversationHistory);
-	console.log(`🔄 Router: Proceeding with "${workflowType}"`);
+		return {
+			workflowType: followUpInfo.targetAgent,
+			originalQuery: query,
+			// Store data entry type context for the data entry router
+			dataEntryType: followUpInfo.dataEntryType
+		};
+	} else if (intentClassification.type === 'ambiguous') {
+		// Intent is ambiguous - provide user selection options
+		console.log('🤔 Router: Intent is ambiguous, providing user selection options');
 
-	return {
-		workflowType,
-		originalQuery: query
-	};
+		const selectionOptions = [
+			{ name: "Search existing metadata", id: "direct_search", type: "search" },
+			{ name: "Create/update metadata", id: "crud", type: "crud" },
+			{ name: "Data analysis and visualization", id: "analytics_routing", type: "analytics" },
+			{ name: "Data entry and collection", id: "data_entry", type: "data_entry" }
+		];
+
+		return {
+			workflowType: 'user_selection_needed',
+			originalQuery: query,
+			finalResult: {
+				type: 'user_selection_needed',
+				message: 'I need to clarify what you want to do. Please select the most appropriate option:',
+				selectionOptions: selectionOptions,
+				reason: intentClassification.reason
+			}
+		};
+	} else {
+		// Fallback to normal classification
+		const workflowType = await detectWorkflowTypeLLM(query, fullConversationHistory);
+		console.log(`🔄 Router: Fallback classification as "${workflowType}"`);
+
+		return {
+			workflowType,
+			originalQuery: query
+		};
+	}
 }
 
 // 2. Direct search workflow - LLM-driven tool selection
@@ -448,6 +480,88 @@ Example output format:
 	}
 }
 
+// LLM-based intent type classification (new task vs follow-up vs ambiguous)
+async function classifyIntentType(query: string, conversationHistory: any[]): Promise<{
+	type: 'new_task' | 'follow_up' | 'ambiguous';
+	confidence: number;
+	reasoning: string;
+}> {
+	try {
+		console.log('🔍 Router: Classifying intent type for:', query);
+
+		// Extract recent conversation context (last 5 messages for better context)
+		const recentMessages = conversationHistory
+			.filter(msg => msg.role !== 'user' || msg.content !== query) // Exclude current query
+			.slice(-5) // Last 5 messages for context
+			.map(msg => {
+				let content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+				// Include data grid information if present
+				if (msg.type === 'data_grid' && msg.data) {
+					content += ` [DataGrid: reviewMode=${msg.data.reviewMode}, hasHeaders=${!!msg.data.headers}]`;
+				}
+				return `${msg.role}: ${content}`;
+			})
+			.join('\n');
+
+		const intentClassificationPrompt = `
+Analyze this user query and recent conversation context to determine the intent type.
+
+Recent conversation context:
+${recentMessages || 'No recent context'}
+
+Current user query: "${query}"
+
+Classify the intent type as ONE of the following:
+
+1. "new_task": This is a completely new task or request that doesn't reference previous work
+   - Examples: "Create tracked entity attributes", "Find indicators", "Show me data for 2024"
+
+2. "follow_up": This is a follow-up to a previous operation or request
+   - Examples: "Update the first value", "Submit the data", "Continue with the selected items"
+
+3. "ambiguous": The intent is unclear and could be interpreted multiple ways
+   - Examples: "Do this", "Handle it", "Process the data"
+
+Return JSON with:
+{
+  "type": "new_task|follow_up|ambiguous",
+  "confidence": 0-1,
+  "reasoning": "brief explanation"
+}
+
+Consider:
+- Does the query reference previous work or operations?
+- Are there pronouns like "this", "that", "it" without clear antecedents?
+- Are there ordinals like "first", "last", "previous"?
+- Is the query too vague or generic?
+- Does it clearly specify a new operation?
+
+Examples:
+- "Create the following tracked entity attributes" → {"type": "new_task", "confidence": 0.9, "reasoning": "Clear request to create new metadata"}
+- "Submit the patient data" → {"type": "follow_up", "confidence": 0.8, "reasoning": "References previous data processing operation"}
+- "Do this" → {"type": "ambiguous", "confidence": 0.9, "reasoning": "Vague reference without clear context"}
+`;
+
+		const result = await model.invoke([new HumanMessage(intentClassificationPrompt)]);
+		const intentInfo = JSON.parse(result.content as string);
+
+		console.log('🔍 Router: Intent classification result:', intentInfo);
+
+		return {
+			type: intentInfo.type || 'new_task',
+			confidence: intentInfo.confidence || 0.5,
+			reasoning: intentInfo.reasoning || 'No reasoning provided'
+		};
+	} catch (error) {
+		console.error('🔍 Router: Intent classification failed:', error);
+		return {
+			type: 'ambiguous',
+			confidence: 0.3,
+			reasoning: `Classification failed: ${error.message}`
+		};
+	}
+}
+
 // LLM-based follow-up detection
 async function detectFollowUpIntent(query: string, conversationHistory: any[]): Promise<{
 	isFollowUp: boolean;
@@ -540,6 +654,102 @@ Examples:
 		return {
 			isFollowUp: false,
 			reasoning: `Detection failed: ${error.message}`
+		};
+	}
+}
+
+// Determine which agent to route to for follow-up queries
+async function determineFollowUpAgent(query: string, conversationHistory: any[], intentClassification: any): Promise<{
+	targetAgent: string;
+	dataEntryType?: 'tracker' | 'aggregate';
+	reasoning: string;
+}> {
+	try {
+		console.log('🔄 Router: Determining follow-up agent for:', query);
+
+		// Extract recent conversation context (last 5 messages for better context)
+		const recentMessages = conversationHistory
+			.filter(msg => msg.role !== 'user' || msg.content !== query) // Exclude current query
+			.slice(-5) // Last 5 messages for context
+			.map(msg => {
+				let content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+				// Include data grid information if present
+				if (msg.type === 'data_grid' && msg.data) {
+					content += ` [DataGrid: reviewMode=${msg.data.reviewMode}, hasHeaders=${!!msg.data.headers}]`;
+				}
+				return `${msg.role}: ${content}`;
+			})
+			.join('\n');
+
+		// Check for recent data grid context to determine data entry type
+		let recentDataEntryType: 'tracker' | 'aggregate' | null = null;
+		const recentDataGrid = conversationHistory
+			.filter(msg => msg.type === 'data_grid')
+			.slice(-1)[0]; // Most recent data grid
+
+		if (recentDataGrid?.data) {
+			if (recentDataGrid.data.reviewMode === true) {
+				recentDataEntryType = 'tracker';
+			} else if (recentDataGrid.data.headers && Array.isArray(recentDataGrid.data.headers)) {
+				recentDataEntryType = 'aggregate';
+			}
+		}
+
+		const agentDeterminationPrompt = `
+Analyze this user query and recent conversation context to determine which agent should handle this follow-up.
+
+Recent conversation context:
+${recentMessages || 'No recent context'}
+
+Current user query: "${query}"
+
+Intent classification: ${intentClassification.type} (confidence: ${intentClassification.confidence})
+
+Available agents:
+- direct_search: For finding existing metadata
+- analytics_routing: For data analysis and visualization
+- crud: For creating/modifying/deleting metadata
+- data_entry: For data entry operations and data value updates
+
+Determine the most appropriate agent based on:
+1. The nature of the current query
+2. The recent conversation context
+3. The intent classification
+
+Return JSON with:
+{
+  "targetAgent": "agent_name",
+  "dataEntryType": "tracker|aggregate" (only if targetAgent is "data_entry"),
+  "reasoning": "brief explanation"
+}
+
+Examples:
+- Query: "Submit the patient data" after tracker review → {"targetAgent": "data_entry", "dataEntryType": "tracker", "reasoning": "Follow-up to tracker data review operation"}
+- Query: "Create the selected indicators" after search → {"targetAgent": "crud", "reasoning": "Follow-up to search operation, creating new metadata"}
+- Query: "Analyze the data" after data entry → {"targetAgent": "analytics_routing", "reasoning": "Follow-up to data entry, performing analysis"}
+`;
+
+		const result = await model.invoke([new HumanMessage(agentDeterminationPrompt)]);
+		const agentInfo = JSON.parse(result.content as string);
+
+		console.log('🔄 Router: Agent determination result:', agentInfo);
+
+		// If LLM didn't detect dataEntryType but we found it from context, use that
+		if (agentInfo.targetAgent === 'data_entry' && !agentInfo.dataEntryType && recentDataEntryType) {
+			agentInfo.dataEntryType = recentDataEntryType;
+			agentInfo.reasoning += ` (inferred ${recentDataEntryType} from recent data grid context)`;
+		}
+
+		return {
+			targetAgent: agentInfo.targetAgent || 'direct_search',
+			dataEntryType: agentInfo.dataEntryType,
+			reasoning: agentInfo.reasoning || 'No reasoning provided'
+		};
+	} catch (error) {
+		console.error('🔄 Router: Agent determination failed:', error);
+		return {
+			targetAgent: 'direct_search',
+			reasoning: `Agent determination failed: ${error.message}`
 		};
 	}
 }

@@ -66,6 +66,7 @@ export async function processDocumentWithAI(
         // Process structured table fields from custom model (e.g., TableDataHandVersionPG3)
         if (result.documents && result.documents[0]?.fields) {
             for (const [fieldName, field] of Object.entries(result.documents[0].fields)) {
+				console.log('Document analysis finished - ', field);
                 if (fieldName.startsWith('TableData') && Array.isArray(field['values'])) {
                     const tableData = processStructuredTableField(field['values']);
                     if (tableData && tableData.rows.length > 0) {

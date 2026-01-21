@@ -1,7 +1,8 @@
-import React, { useState, useCallback } from 'react';
-import { Button, Table, Input, Select, Modal, Alert, Progress } from 'antd';
-import { UploadOutlined, SettingOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons';
-import type { UploadFile } from 'antd/es/upload/interface';
+import React, {useCallback, useState} from 'react';
+import {Alert, Button, Input, Modal, Progress, Select, Spin, Table, Tag} from 'antd';
+import {ReloadOutlined, RobotOutlined, SettingOutlined, UploadOutlined} from '@ant-design/icons';
+import {matchPdfHeadersToMapping, validateHeaderMatchingResult} from '../utils/tools/metadata/header-matching';
+import {dhis2Config} from '../utils/env-config';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -37,6 +38,8 @@ interface TrackerDataValue {
 interface TrackerDataGridProps {
     extractedPatients: ExtractedPatientData[];
     mappedTrackerData: TrackerDataValue[];
+    headerMappings?: Record<string, string>; // PDF header -> DHIS2 attribute ID mapping
+    headerDisplayNames?: Record<string, string>; // PDF header -> DHIS2 display name mapping
     onConfigureProcessing?: (config: {
         orgUnit: string;
         programId: string;
@@ -55,6 +58,8 @@ interface TrackerDataGridProps {
 const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
     extractedPatients,
     mappedTrackerData,
+    headerMappings = {},
+    headerDisplayNames = {},
     onConfigureProcessing,
     onUploadDocument,
     onRetryProcessing,
@@ -68,11 +73,18 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
     const [configModalVisible, setConfigModalVisible] = useState(false);
     const [uploadModalVisible, setUploadModalVisible] = useState(false);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [llmMatchingModalVisible, setLlmMatchingModalVisible] = useState(false);
+    const [llmMatchingLoading, setLlmMatchingLoading] = useState(false);
+    const [llmMatchingResult, setLlmMatchingResult] = useState<any>(null);
+    const [llmMatchingError, setLlmMatchingError] = useState<string | null>(null);
 
     // Configuration state
     const [orgUnit, setOrgUnit] = useState('');
     const [programId, setProgramId] = useState('');
     const [attributeMappings, setAttributeMappings] = useState<Record<string, string>>({});
+
+    // Attribute display name mapping for column headers
+    const [attributeDisplayNames, setAttributeDisplayNames] = useState<Record<string, string>>({});
 
     // Get all available field names from extracted patients
     const availableFields = React.useMemo(() => {
@@ -114,23 +126,108 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
         }));
     }, []);
 
-    // Default DHIS2 attribute mappings
-    const defaultAttributeMappings: Record<string, string> = {
-        "Patient ID: National ID": "AuPLng5hLbE",
-        "Transfer: (in) From Date": "HwDGCdte3Ck",
-        "Surname and Given name": "TfdH5KvFmMy",
-        "DoB": "gHGyrwKPzej",
-        "Sex (m/f)": "CklPZdOd6H1",
-        "ART No Patient ID:": "CWVHZ3hPwKs",
-        "Physical Address": "VqEFza8wbwA",
-        "Patient's Phone No": "P2cwLGskgxn",
-        "ART Start Date": "saTeJuuVyBd"
-    };
+    // LLM Header Matching handler
+    const handleLlmHeaderMatching = useCallback(async () => {
+        if (!extractedPatients.length) return;
 
+        setLlmMatchingLoading(true);
+        setLlmMatchingError(null);
+        setLlmMatchingResult(null);
+
+        try {
+            // Get PDF headers from extracted patients
+            const pdfHeaders = availableFields;
+
+            // Common DHIS2 tracker field names for mapping
+            const mappingHeaders = [
+                "Patient ID: National ID",
+                "Transfer: (in) From Date",
+                "Surname and Given name",
+                "DoB",
+                "Sex (m/f)",
+                "ART No Patient ID:",
+                "Physical Address",
+                "Patient's Phone No",
+                "ART Start Date",
+                "Weight (kg)",
+                "Height (cm)",
+                "CD4 Count",
+                "WHO Stage (1,2,3,4)",
+                "TB Screen (n,p)",
+                "Functional Status (a,w,b)",
+                "CTX Prophylaxis (y,n)",
+                "Regimen Initial ART",
+                "MUAC (cm)",
+                "Pregnant (y,n)",
+                "FP method used",
+                "LMP",
+                "INH (IPT) Prophylaxis"
+            ];
+
+            console.log('🧠 Starting LLM header matching with:', {
+                pdfHeaders,
+                mappingHeaders,
+                confidenceThreshold: 0.7
+            });
+
+            // Call the LLM header matching tool
+            const result = await matchPdfHeadersToMapping.invoke({
+                pdfHeaders,
+                mappingHeaders,
+                confidenceThreshold: 0.7,
+                context: 'DHIS2 tracker data mapping for patient registers'
+            });
+
+            console.log('🧠 LLM header matching result:', result);
+
+            setLlmMatchingResult(result);
+
+            // Validate the result
+            const isValid = validateHeaderMatchingResult(result);
+            if (!isValid) {
+                setLlmMatchingError('Header matching validation failed. Please review the matches.');
+            }
+
+        } catch (error) {
+            console.error('❌ Error in LLM header matching:', error);
+            setLlmMatchingError(`LLM header matching failed: ${error.message}`);
+        } finally {
+            setLlmMatchingLoading(false);
+        }
+    }, [extractedPatients, availableFields]);
+
+    // Apply LLM matching results to attribute mappings
+    const applyLlmMatchingResults = useCallback(() => {
+        if (!llmMatchingResult || !llmMatchingResult.matches) return;
+
+        const newMappings: Record<string, string> = { ...attributeMappings };
+
+        // Apply the LLM matches
+        llmMatchingResult.matches.forEach((match: any) => {
+            if (match.isMatch && match.confidence >= 0.7) {
+                newMappings[match.pdfHeader] = match.mappingHeader;
+            }
+        });
+
+        setAttributeMappings(newMappings);
+        setLlmMatchingModalVisible(false);
+    }, [llmMatchingResult, attributeMappings]);
+
+    // Initialize attributeMappings from props
     React.useEffect(() => {
-        // Initialize with default mappings
-        setAttributeMappings(defaultAttributeMappings);
-    }, []);
+        if (Object.keys(headerMappings).length > 0) {
+            setAttributeMappings(headerMappings);
+            console.log(`📋 Initialized attributeMappings from props:`, headerMappings);
+        }
+    }, [headerMappings]);
+
+    // Initialize attributeDisplayNames from props
+    React.useEffect(() => {
+        if (Object.keys(headerDisplayNames).length > 0) {
+            setAttributeDisplayNames(headerDisplayNames);
+            console.log(`📋 Initialized attributeDisplayNames from props:`, headerDisplayNames);
+        }
+    }, [headerDisplayNames]);
 
     const patientColumns = [
         {
@@ -202,7 +299,7 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
         },
     ];
 
-    // Create dynamic columns from extracted field names
+    // Create dynamic columns from extracted field names with proper DHIS2 attribute display names
     const dynamicPatientColumns = React.useMemo(() => {
         if (extractedPatients.length === 0) return [];
 
@@ -210,29 +307,44 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
         const firstPatient = extractedPatients[0];
         const fieldNames = Object.keys(firstPatient);
 
-        // Create columns for each field
-        const columns = fieldNames.map(fieldName => ({
-            title: fieldName,
-            dataIndex: fieldName,
-            key: fieldName,
-            width: 150,
-            render: (value: { value: string; confidence: number }) => (
-                <span style={{
-                    color: value.confidence < 0.8 ? '#ff4d4f' : 'inherit',
-                    fontWeight: value.confidence < 0.8 ? 'bold' : 'normal'
-                }}>
-                    {value.value || '-'}
-                    {value.confidence < 0.8 && (
-                        <span style={{ fontSize: '12px', color: '#ff4d4f', marginLeft: '4px' }}>
-                            ({Math.round(value.confidence * 100)}%)
-                        </span>
-                    )}
-                </span>
-            ),
-        }));
+        // Create columns for each field with proper display names
+        const columns = fieldNames.map(fieldName => {
+            // Try to get display name from attribute mappings
+            let displayName = fieldName;
+
+            // Check if this field is mapped to a DHIS2 attribute ID
+            const attributeId = attributeMappings[fieldName];
+            if (attributeId && attributeDisplayNames[attributeId]) {
+                // Use the DHIS2 attribute display name instead of raw PDF header
+                displayName = attributeDisplayNames[attributeId];
+                console.log(`📋 Using display name "${displayName}" for PDF header "${fieldName}" (attribute ID: ${attributeId})`);
+            } else {
+                console.log(`📋 Using raw PDF header "${fieldName}" (no mapping found)`);
+            }
+
+            return {
+                title: displayName,
+                dataIndex: fieldName,
+                key: fieldName,
+                width: 150,
+                render: (value: { value: string; confidence: number }) => (
+                    <span style={{
+                        color: value.confidence < 0.8 ? '#ff4d4f' : 'inherit',
+                        fontWeight: value.confidence < 0.8 ? 'bold' : 'normal'
+                    }}>
+                        {value.value || '-'}
+                        {value.confidence < 0.8 && (
+                            <span style={{ fontSize: '12px', color: '#ff4d4f', marginLeft: '4px' }}>
+                                ({Math.round(value.confidence * 100)}%)
+                            </span>
+                        )}
+                    </span>
+                ),
+            };
+        });
 
         return columns;
-    }, [extractedPatients]);
+    }, [extractedPatients, attributeMappings, attributeDisplayNames]);
 
     // Transform extracted patients data for patient-by-patient display
     const patientTableData = React.useMemo(() => {
@@ -350,6 +462,16 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                     Retry Processing
                 </Button>
 
+                <Button
+                    type="default"
+                    icon={<RobotOutlined />}
+                    onClick={() => setLlmMatchingModalVisible(true)}
+                    disabled={!extractedPatients.length}
+                    style={{ backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }}
+                >
+                    🤖 LLM Header Matching
+                </Button>
+
                 {processingStep && (
                     <div style={{ marginLeft: '20px', flex: 1 }}>
                         <div style={{ marginBottom: '5px' }}>
@@ -413,7 +535,7 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                     <div>
                         <label>Organisation Unit ID:</label>
                         <Input
-                            placeholder="e.g., cYSowRjnmHE"
+                            placeholder={`e.g., ${dhis2Config.getDefaultOrgUnit()}`}
                             value={orgUnit}
                             onChange={(e) => setOrgUnit(e.target.value)}
                         />
@@ -422,7 +544,7 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                     <div>
                         <label>Program ID:</label>
                         <Input
-                            placeholder="e.g., o3jXXatOefs"
+                            placeholder="Enter program ID"
                             value={programId}
                             onChange={(e) => setProgramId(e.target.value)}
                         />
@@ -477,6 +599,200 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                         showIcon
                         style={{ marginTop: '16px' }}
                     />
+                </div>
+            </Modal>
+
+            {/* LLM Header Matching Modal */}
+            <Modal
+                title="🤖 LLM Header Matching"
+                open={llmMatchingModalVisible}
+                onCancel={() => setLlmMatchingModalVisible(false)}
+                width={1000}
+                footer={[
+                    <Button key="cancel" onClick={() => setLlmMatchingModalVisible(false)}>
+                        Cancel
+                    </Button>,
+                    <Button
+                        key="apply"
+                        type="primary"
+                        onClick={applyLlmMatchingResults}
+                        disabled={!llmMatchingResult || llmMatchingLoading}
+                    >
+                        Apply Matches
+                    </Button>
+                ]}
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* LLM Matching Controls */}
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <Button
+                            type="primary"
+                            icon={<RobotOutlined />}
+                            onClick={handleLlmHeaderMatching}
+                            disabled={llmMatchingLoading || !extractedPatients.length}
+                        >
+                            Run LLM Matching
+                        </Button>
+                        <span style={{ color: '#666' }}>
+                            {availableFields.length} PDF headers → {llmMatchingResult?.totalMappingHeaders || 21} DHIS2 fields
+                        </span>
+                    </div>
+
+                    {/* Loading State */}
+                    {llmMatchingLoading && (
+                        <div style={{ textAlign: 'center', padding: '20px' }}>
+                            <Spin size="large" />
+                            <div style={{ marginTop: '10px', color: '#666' }}>
+                                Analyzing headers with AI... This may take a moment.
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Error State */}
+                    {llmMatchingError && (
+                        <Alert
+                            message="LLM Matching Error"
+                            description={llmMatchingError}
+                            type="error"
+                            showIcon
+                            style={{ marginBottom: '16px' }}
+                        />
+                    )}
+
+                    {/* Results Display */}
+                    {llmMatchingResult && !llmMatchingLoading && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            {/* Summary */}
+                            <div style={{
+                                display: 'flex',
+                                gap: '20px',
+                                padding: '12px',
+                                backgroundColor: '#f6ffed',
+                                border: '1px solid #b7eb8f',
+                                borderRadius: '4px'
+                            }}>
+                                <div>
+                                    <strong>Matches Found:</strong> {llmMatchingResult.matchedCount}/{llmMatchingResult.totalPdfHeaders}
+                                </div>
+                                <div>
+                                    <strong>Unmatched PDF Headers:</strong> {llmMatchingResult.unmatchedPdfHeaders.length}
+                                </div>
+                                <div>
+                                    <strong>Unmatched Mapping Headers:</strong> {llmMatchingResult.unmatchedMappingHeaders.length}
+                                </div>
+                            </div>
+
+                            {/* Matches Table */}
+                            {llmMatchingResult.matches && llmMatchingResult.matches.length > 0 && (
+                                <div>
+                                    <h4>✅ Header Matches</h4>
+                                    <Table
+                                        columns={[
+                                            {
+                                                title: 'PDF Header',
+                                                dataIndex: 'pdfHeader',
+                                                key: 'pdfHeader',
+                                                width: 250,
+                                            },
+                                            {
+                                                title: 'Mapped To',
+                                                dataIndex: 'mappingHeader',
+                                                key: 'mappingHeader',
+                                                width: 250,
+                                            },
+                                            {
+                                                title: 'Confidence',
+                                                dataIndex: 'confidence',
+                                                key: 'confidence',
+                                                width: 120,
+                                                render: (confidence: number) => (
+                                                    <Tag color={confidence >= 0.8 ? 'green' : confidence >= 0.6 ? 'orange' : 'red'}>
+                                                        {Math.round(confidence * 100)}%
+                                                    </Tag>
+                                                ),
+                                            },
+                                            {
+                                                title: 'Reason',
+                                                dataIndex: 'reason',
+                                                key: 'reason',
+                                                width: 300,
+                                                ellipsis: true,
+                                            }
+                                        ]}
+                                        dataSource={llmMatchingResult.matches.map((match: any, index: number) => ({
+                                            key: index,
+                                            ...match
+                                        }))}
+                                        size="small"
+                                        pagination={false}
+                                        scroll={{ y: 200 }}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Unmatched Headers */}
+                            {(llmMatchingResult.unmatchedPdfHeaders.length > 0 || llmMatchingResult.unmatchedMappingHeaders.length > 0) && (
+                                <div style={{ display: 'flex', gap: '20px' }}>
+                                    {llmMatchingResult.unmatchedPdfHeaders.length > 0 && (
+                                        <div style={{ flex: 1 }}>
+                                            <h4>❓ Unmatched PDF Headers</h4>
+                                            <div style={{
+                                                maxHeight: '150px',
+                                                overflowY: 'auto',
+                                                border: '1px solid #d9d9d9',
+                                                borderRadius: '4px',
+                                                padding: '8px',
+                                                backgroundColor: '#fff2f0'
+                                            }}>
+                                                {llmMatchingResult.unmatchedPdfHeaders.map((header: string, index: number) => (
+                                                    <div key={index} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
+                                                        {header}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {llmMatchingResult.unmatchedMappingHeaders.length > 0 && (
+                                        <div style={{ flex: 1 }}>
+                                            <h4>❓ Unmatched Mapping Headers</h4>
+                                            <div style={{
+                                                maxHeight: '150px',
+                                                overflowY: 'auto',
+                                                border: '1px solid #d9d9d9',
+                                                borderRadius: '4px',
+                                                padding: '8px',
+                                                backgroundColor: '#f6ffed'
+                                            }}>
+                                                {llmMatchingResult.unmatchedMappingHeaders.map((header: string, index: number) => (
+                                                    <div key={index} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
+                                                        {header}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Instructions */}
+                    {!llmMatchingResult && !llmMatchingLoading && (
+                        <Alert
+                            message="How LLM Header Matching Works"
+                            description={
+                                <div>
+                                    <p>1. <strong>Run LLM Matching:</strong> Click the button to analyze your extracted headers using AI</p>
+                                    <p>2. <strong>Review Matches:</strong> The AI will match PDF headers to DHIS2 tracker fields with confidence scores</p>
+                                    <p>3. <strong>Apply Results:</strong> Click "Apply Matches" to update your attribute mappings automatically</p>
+                                    <p><strong>Benefits:</strong> Handles variations like "DoB" → "Date of Birth", "Sex (m/f)" → "Gender", etc.</p>
+                                </div>
+                            }
+                            type="info"
+                            showIcon
+                        />
+                    )}
                 </div>
             </Modal>
         </div>

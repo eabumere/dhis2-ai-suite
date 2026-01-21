@@ -1787,6 +1787,167 @@ async function createDhis2ReportingFormAggregated({
 }
 
 // =============================================================================
+// MAPPING CONFIGURATION SCHEMA
+// =============================================================================
+
+/**
+ * Enhanced mapping configuration schema with LLM header matching support
+ */
+export const mappingConfigurationSchema = z.object({
+    orgUnit: z.string().describe('Organisation unit ID for the tracker data'),
+    programId: z.string().describe('Program ID for the tracker data'),
+    attributeMappings: z.record(z.string(), z.string()).describe('Mapping from PDF field names to DHIS2 attribute IDs'),
+    eventMappings: z.record(z.string(), z.string()).optional().describe('Mapping from PDF field names to DHIS2 data element IDs for events'),
+    headerMatching: z.object({
+        strategy: z.enum(['exact', 'fuzzy', 'llm']).default('llm').describe('Header matching strategy'),
+        confidenceThreshold: z.number().min(0).max(1).default(0.7).describe('Minimum confidence for LLM matching'),
+        fallbackStrategy: z.enum(['exact', 'fuzzy']).default('exact').describe('Fallback strategy if LLM fails'),
+        customMappings: z.record(z.string(), z.string()).optional().describe('Custom header to attribute mappings'),
+        excludedHeaders: z.array(z.string()).optional().describe('Headers to exclude from matching')
+    }).optional().describe('LLM header matching configuration'),
+    metadata: z.object({
+        source: z.string().describe('Source of the mapping configuration'),
+        confidence: z.number().min(0).max(1).describe('Confidence score for the mapping'),
+        timestamp: z.string().describe('ISO timestamp when mapping was created'),
+        version: z.string().optional().describe('Version of the mapping configuration'),
+        llmModel: z.string().optional().describe('LLM model used for header matching'),
+        matchCount: z.number().int().optional().describe('Number of successful header matches'),
+        totalHeaders: z.number().int().optional().describe('Total number of headers processed')
+    }).optional()
+});
+
+// =============================================================================
+// PROGRAM ATTRIBUTE FETCHING
+// =============================================================================
+
+/**
+ * Cache for program attributes to avoid repeated API calls
+ */
+interface ProgramAttributeCache {
+    [programId: string]: {
+        attributes: Record<string, string>;
+        trackedEntityType: string;
+        timestamp: number;
+        ttl: number; // Time to live in milliseconds
+    };
+}
+
+const programAttributeCache: ProgramAttributeCache = {};
+
+/**
+ * Fetch program attributes from DHIS2 dynamically
+ * Returns an object with program attribute mappings and tracked entity type ID
+ * Note: This fetches program attributes (metadata about the program itself),
+ * not tracked entity attributes (data fields for tracker entities)
+ */
+export async function fetchProgramAttributes(programId: string): Promise<{
+    attributes: Record<string, string>;
+    trackedEntityType: string;
+}> {
+    try {
+        console.log(`Fetching program attributes for program ID: ${programId}`);
+
+        // Check cache first
+        const cached = programAttributeCache[programId];
+        const now = Date.now();
+        const cacheTTL = 10 * 60 * 1000; // 10 minutes
+
+        if (cached && (now - cached.timestamp) < cached.ttl) {
+            console.log(`Using cached program attributes for ${programId}`);
+            return {
+                attributes: cached.attributes,
+                trackedEntityType: cached.trackedEntityType
+            };
+        }
+
+        // Import DHIS2 API
+        const { Dhis2Api } = await import('../../app-runtime/dhis2-api');
+
+        // Query program details including program attributes and tracked entity type
+        const programResponse = await Dhis2Api.query({
+            program: {
+                resource: `programs/${programId}`,
+                params: {
+                    fields: 'id,name,programTrackedEntityAttributes[name,trackedEntityAttribute[id,name]],trackedEntityType[id,name]'
+                }
+            }
+        });
+
+        if (!programResponse.success || !programResponse.data?.program) {
+            console.warn(`Program ${programId} not found or API error:`, programResponse.error);
+            return {} as any;
+        }
+
+        const program = programResponse.data.program;
+        const programAttributes = (program.programTrackedEntityAttributes || []).map(a =>
+	        ({name: a.trackedEntityAttribute.name, id: a.trackedEntityAttribute.id}));
+
+        console.log(`Found ${programAttributes.length} program attributes for program: ${program.name} (${program.id})`);
+
+        // Extract attributes from program
+        const attributeMapping: Record<string, string> = {};
+
+        programAttributes.forEach((attr: any) => {
+            // Use multiple possible names for mapping
+            const names = [
+                attr.name
+            ].filter(name => name && name.trim());
+
+            // Map each name variant to the attribute ID
+            names.forEach(name => {
+                if (name && !attributeMapping[name]) {
+                    attributeMapping[name] = attr.id;
+                }
+            });
+
+            console.log(`Mapped program attribute: "${attr.name}" -> ${attr.id}`);
+        });
+
+        // Get tracked entity type ID - this might not be available in program attributes response
+        // We'll need to fetch it separately if needed
+        const trackedEntityTypeId = program.trackedEntityType?.id || '';
+
+        // Cache the results
+        programAttributeCache[programId] = {
+            attributes: attributeMapping,
+            trackedEntityType: trackedEntityTypeId,
+            timestamp: now,
+            ttl: cacheTTL
+        };
+
+        console.log(`Successfully fetched ${Object.keys(attributeMapping).length} attributes and tracked entity type ${trackedEntityTypeId} for program ${programId}`);
+        return {
+            attributes: attributeMapping,
+            trackedEntityType: trackedEntityTypeId
+        };
+
+    } catch (error) {
+        console.error(`Error fetching program attributes for ${programId}:`, error);
+        return {} as any;
+    }
+}
+
+/**
+ * Get program attribute cache info (for debugging)
+ */
+export function getProgramAttributeCacheInfo(): {
+    programs: string[];
+    totalAttributes: number;
+    cacheSize: number;
+} {
+    const programs = Object.keys(programAttributeCache);
+    const totalAttributes = programs.reduce((sum, programId) => {
+        return sum + Object.keys(programAttributeCache[programId].attributes).length;
+    }, 0);
+
+    return {
+        programs,
+        totalAttributes,
+        cacheSize: programs.length
+    };
+}
+
+// =============================================================================
 // TRACKER DATA PROCESSING TOOLS
 // =============================================================================
 
@@ -1881,61 +2042,47 @@ export const processScannedRegister = tool(
 
 /**
  * Map Extracted Data to DHIS2 Tracker Format
+ * Uses pure dynamic program attribute fetching from DHIS2 - no static fallbacks
  */
 export const mapToDhis2TrackerFormat = tool(
     async (input: {
         patients: Array<{ [key: string]: { value: string; confidence: number } }>;
         orgUnit: string;
-        programId: string;
-        attributeMappings?: Record<string, string>;
+        programId: string; // Required for dynamic fetching
+        attributeMappings?: Record<string, string>; // Optional custom overrides
     }) => {
         try {
-            console.log(`Mapping ${input.patients.length} patients to DHIS2 tracker format`);
+            console.log(`Mapping ${input.patients.length} patients to DHIS2 tracker format for program: ${input.programId}`);
 
-            // Default attribute mappings (based on the Python implementation)
-            const defaultMappings: Record<string, string> = {
-                "Patient ID: National ID": "AuPLng5hLbE",
-                "Transfer: (in) From Date": "HwDGCdte3Ck",
-                "Surname and Given name": "TfdH5KvFmMy",
-                "DoB": "gHGyrwKPzej",
-                "Sex (m/f)": "CklPZdOd6H1",
-                "≥ 15 yrs": "NHviewDKFN6",
-                "Transfer: (Out) From Date": "bLwiNONGPFF",
-                "<1 yr": "AgeLess001",
-                "1- 4 yrs": "yB8zzdlea4H",
-                "5 - 14 yrs": "gBFJy81Zeyi",
-                "ART No Patient ID:": "CWVHZ3hPwKs",
-                "Physical Address": "VqEFza8wbwA",
-                "Patient's Phone No": "P2cwLGskgxn",
-                "Rx Supporter's No": "a5KkX8OWppp",
-                "ART Start Date": "saTeJuuVyBd",
-                "Weight (kg)": "OvY4VVhSDeJ",
-                "Height (cm)": "lw1SqmMlnfh",
-                "BMI": "Jgvl6hDE2y8",
-                "wt/ht %": "W0ngIXKv9Iq",
-                "Malnourished (y/n)": "grQdOvGre90",
-                "CD4 Count": "gRbTBXfQpTf",
-                "WHO Stage (1,2,3,4)": "DbMJe0tX5Kn",
-                "TB Screen (n,p)": "aVU5Gi66OnU",
-                "Functional Status (a,w,b)": "Npj3tBUOsmY",
-                "CTX Prophylaxis (y,n)": "x7QnR5JE0I3",
-                "Regimen Initial ART": "emJlQvBQ5OG",
-                "TB RX ID": "GgQWHp6Buak",
-                "TB Rx Site": "Bxt6B4D7YBj",
-                "MUAC (cm)": "k1x8IyapRjf",
-                "Count (%)": "sAHvR3qSmuG",
-                "Pregnant (y,n)": "mDMkUmPySTZ",
-                "FP method used": "I6BRJNfETao",
-                "LMP": "w0QyOj6SFIw",
-                "INH (IPT) Prophylaxis": "c6wxhKuSPTt"
+            // Fetch program attributes dynamically
+            const programData = await fetchProgramAttributes(input.programId);
+            console.log(`Fetched ${Object.keys(programData.attributes).length} dynamic attribute mappings from program ${input.programId}`);
+
+            // Validate that we have dynamic mappings
+            if (Object.keys(programData.attributes).length === 0) {
+                return JSON.stringify({
+                    success: false,
+                    error: `No tracked entity attributes found for program ${input.programId}. Please verify the program exists and has a tracked entity type with attributes defined.`,
+                    programId: input.programId,
+                    message: "Dynamic mapping failed - program has no attributes",
+                    suggestion: "Check that the program exists in DHIS2 and has a tracked entity type with attributes configured."
+                });
+            }
+
+            // Combine mappings: custom overrides take precedence over dynamic mappings
+            const mappings = {
+                ...programData.attributes, // Primary source - dynamic program attributes
+                ...(input.attributeMappings || {}) // Custom overrides only
             };
 
-            const mappings = { ...defaultMappings, ...(input.attributeMappings || {}) };
+            console.log(`Using ${Object.keys(mappings).length} total attribute mappings`);
+            console.log(`Dynamic mappings: ${Object.keys(programData.attributes).length}`);
+            console.log(`Custom overrides: ${Object.keys(input.attributeMappings || {}).length}`);
 
             const trackedEntities = input.patients.map(patient => {
                 const tei = {
                     orgUnit: input.orgUnit,
-                    trackedEntityType: "o3jXXatOefs", // Default tracked entity type - should be configurable
+                    trackedEntityType: programData.trackedEntityType, // Use dynamically fetched tracked entity type
                     attributes: [] as Array<{ attribute: string; value: string }>,
                     enrollments: [{
                         program: input.programId,
@@ -1971,7 +2118,10 @@ export const mapToDhis2TrackerFormat = tool(
                 payload,
                 totalPatients: trackedEntities.length,
                 totalAttributes: trackedEntities.reduce((sum, tei) => sum + tei.attributes.length, 0),
-                message: `Successfully mapped ${trackedEntities.length} patients to DHIS2 tracker format`
+                programId: input.programId,
+                dynamicMappingsCount: Object.keys(programData.attributes).length,
+                customMappings: Object.keys(input.attributeMappings || {}).length,
+                message: `Successfully mapped ${trackedEntities.length} patients to DHIS2 tracker format using program ${input.programId}`
             });
 
         } catch (error) {
@@ -1979,21 +2129,23 @@ export const mapToDhis2TrackerFormat = tool(
             return JSON.stringify({
                 success: false,
                 error: `Failed to map data to DHIS2 tracker format: ${error.message}`,
-                payload: null
+                payload: null,
+                programId: input.programId,
+                message: "Dynamic mapping failed - check program configuration"
             });
         }
     },
     {
         name: "map_to_dhis2_tracker_format",
-        description: "Transform extracted patient data from documents into DHIS2 tracker API payload format with proper attribute mappings and enrollment structure.",
+        description: "Transform extracted patient data from documents into DHIS2 tracker API payload format using pure dynamic program attribute fetching. Fetches tracked entity attributes from DHIS2 program configuration, with optional custom overrides. No static fallbacks - requires valid program with attributes.",
         schema: z.object({
             patients: z.array(z.record(z.string(), z.object({
                 value: z.string(),
                 confidence: z.number()
             }))).describe("Array of patient records with field values and confidence scores"),
             orgUnit: z.string().describe("DHIS2 organisation unit ID"),
-            programId: z.string().describe("DHIS2 tracker program ID"),
-            attributeMappings: z.record(z.string(), z.string()).optional().describe("Custom attribute mappings (field name -> DHIS2 attribute ID)")
+            programId: z.string().describe("DHIS2 tracker program ID (required for dynamic attribute fetching)"),
+            attributeMappings: z.record(z.string(), z.string()).optional().describe("Custom attribute mappings (field name -> DHIS2 attribute ID) - overrides dynamic mappings")
         })
     }
 );
@@ -2019,9 +2171,12 @@ export const registerTrackerEntities = tool(
                 };
 
                 const response = await Dhis2Api.mutate({
-                    resource: 'trackedEntityInstances',
+                    resource: 'tracker',
                     type: 'create',
-                    data: payload
+                    data: payload,
+	                params: {
+						async: false
+	                }
                 });
 
                 // Process the response for all entities
@@ -3686,7 +3841,12 @@ export const createDhis2TrackedEntityAttribute = createLLMFirstTool({
         valueType: z.enum(['TEXT', 'NUMBER', 'INTEGER', 'BOOLEAN', 'DATE', 'DATETIME']).default('TEXT').describe("The data type of the attribute"),
         description: z.string().optional().describe("Description of what this attribute represents"),
         mandatory: z.boolean().default(false).describe("Whether this attribute is required"),
-        unique: z.boolean().default(false).describe("Whether values must be unique across all entities")
+        unique: z.boolean().default(false).describe("Whether values must be unique across all entities"),
+        inherit: z.boolean().default(false).describe("Whether this attribute value should be inherited from parent entities (default: false)"),
+        aggregationType: z.enum([
+            'SUM', 'AVERAGE', 'AVERAGE_SUM_ORG_UNIT', 'COUNT', 'STDDEV', 'VARIANCE',
+            'MIN', 'MAX', 'NONE', 'CUSTOM', 'DEFAULT'
+        ]).default('NONE').describe("Aggregation type for the attribute (defaults to NONE for tracked entity attributes)")
     }),
     metadataType: "trackedEntityAttributes",
     dhis2SchemaName: "TrackedEntityAttribute"

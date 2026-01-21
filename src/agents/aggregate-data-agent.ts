@@ -118,6 +118,30 @@ const AggregateDataAnnotation = Annotation.Root({
         default: () => null
     }),
 
+    // Progress tracking state
+    workflowProgress: Annotation<{
+        currentStep: number;
+        totalSteps: number;
+        stepName: string;
+        message: string;
+        isIndeterminate?: boolean;
+    }>({
+        reducer: (left, right) => right || left,
+        default: () => ({
+            currentStep: 0,
+            totalSteps: 10,
+            stepName: 'Initializing',
+            message: 'Preparing data entry workflow...',
+            isIndeterminate: true
+        }),
+    }),
+
+    // Orchestrator reference for UI communication
+    orchestrator: Annotation<any>({
+        reducer: (left, right) => right || left,
+        default: () => null,
+    }),
+
     // CSV processing state
     uploadedData: Annotation<any[][]>({
         reducer: (left, right) => right || left,
@@ -213,6 +237,10 @@ const model = ChatModels.createAgentModel();
 // 1. Parse CSV upload or initialize empty grid for data entry
 async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('📊 Aggregate Data Agent: Processing data entry request');
+
+    // Update progress
+    updateProgress(1, 'Parsing Request', 'Processing your data entry request...', false);
+    state.orchestrator?.addProgressMessage('Processing your data entry request...');
 
     // First, check if dataset is already resolved in the workflow state (from programmatic restart)
     if (state.dataSet?.resolved && state.uploadedData && state.uploadedData.length > 0) {

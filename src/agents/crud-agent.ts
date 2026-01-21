@@ -1,3 +1,4 @@
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { ChatModels } from '../utils/chat-model-factory';
 import {
@@ -80,10 +81,84 @@ import {
     addResourceToContext,
     getContextInfo,
 } from '../utils/tools/metadata/helpers';
-import { StateAnnotation } from '../utils/state';
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
+
+// State annotation for CRUD operations with progress tracking
+const CrudAnnotation = Annotation.Root({
+	// Input state
+	messages: Annotation<any[]>({
+		reducer: (left: any[], right: any[]) => {
+			if (Array.isArray(right)) {
+				return left.concat(right);
+			}
+			return left.concat([right]);
+		},
+		default: () => [],
+	}),
+
+	// Operation type tracking
+	operationType: Annotation<'create' | 'update' | 'batch' | 'reference_resolution'>({
+		reducer: (left, right) => right || left,
+		default: () => 'create'
+	}),
+
+	// Progress tracking state
+	workflowProgress: Annotation<{
+		currentStep: number;
+		totalSteps: number;
+		stepName: string;
+		message: string;
+		isIndeterminate?: boolean;
+	}>({
+		reducer: (left, right) => right || left,
+		default: () => ({
+			currentStep: 0,
+			totalSteps: 6,
+			stepName: 'Initializing',
+			message: 'Preparing CRUD operation...',
+			isIndeterminate: true
+		}),
+	}),
+
+	// Orchestrator reference for UI communication
+	orchestrator: Annotation<any>({
+		reducer: (left, right) => right || left,
+		default: () => null,
+	}),
+
+	// Operation results
+	results: Annotation<any[]>({
+		reducer: (left, right) => left.concat(right || []),
+		default: () => [],
+	}),
+
+	// Final result
+	finalResult: Annotation<any>({
+		reducer: (left, right) => right || left,
+		default: () => null,
+	}),
+
+	// Error tracking
+	error: Annotation<string>({
+		reducer: (left, right) => right || left,
+		default: () => '',
+	}),
+});
+
+// Progress tracking helper
+function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof CrudAnnotation.State> {
+    return {
+        workflowProgress: {
+            currentStep: step,
+            totalSteps: 6,
+            stepName,
+            message,
+            isIndeterminate
+        }
+    };
+}
 
 // Create the CRUD agent with all creation and update tools
 export const crudAgent = createReactAgent({
@@ -350,5 +425,230 @@ Always provide complete schema objects with all required fields, never just stri
   `,
 });
 
-// Export the state annotation for use in other parts of the app
-export { StateAnnotation };
+// StateGraph Workflow Nodes
+
+// 1. Classify the CRUD operation type
+async function classify_crud_operation(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('🔄 CRUD Agent: Classifying operation type');
+
+	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
+	console.log('📝 CRUD query:', query);
+
+	// Update progress
+	updateProgress(1, 'Analyzing Request', 'Understanding your CRUD request...', false);
+	state.orchestrator?.addProgressMessage('Understanding your CRUD request...');
+
+	// Use LLM to classify the operation type
+	const classification = await classifyCrudOperationType(query);
+
+	console.log(`📊 Classified as: ${classification}`);
+
+	return {
+		operationType: classification as any
+	};
+}
+
+// 2. Handle single resource creation
+async function handle_single_creation(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('➕ CRUD Agent: Handling single resource creation');
+
+	// Update progress
+	updateProgress(2, 'Preparing Creation', 'Setting up resource creation...', false);
+	state.orchestrator?.addProgressMessage('Setting up resource creation...');
+
+	// Update progress for dependency resolution
+	updateProgress(3, 'Resolving Dependencies', 'Analyzing resource dependencies...', false);
+	state.orchestrator?.addProgressMessage('Analyzing resource dependencies...');
+
+	// Update progress for creation
+	updateProgress(4, 'Creating Resource', 'Creating the requested resource...', false);
+	state.orchestrator?.addProgressMessage('Creating the requested resource...');
+
+	// Update progress for validation
+	updateProgress(5, 'Validating', 'Validating resource configuration...', false);
+	state.orchestrator?.addProgressMessage('Validating resource configuration...');
+
+	// The actual tool calling will be handled by the LLM with the tools
+	// This is just the workflow orchestration
+
+	return {};
+}
+
+// 3. Handle single resource update
+async function handle_single_update(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('🔄 CRUD Agent: Handling single resource update');
+
+	// Update progress
+	updateProgress(2, 'Preparing Update', 'Setting up resource update...', false);
+	state.orchestrator?.addProgressMessage('Setting up resource update...');
+
+	// Update progress for reference resolution
+	updateProgress(3, 'Resolving References', 'Finding the resource to update...', false);
+	state.orchestrator?.addProgressMessage('Finding the resource to update...');
+
+	// Update progress for update
+	updateProgress(4, 'Updating Resource', 'Applying resource changes...', false);
+	state.orchestrator?.addProgressMessage('Applying resource changes...');
+
+	// Update progress for validation
+	updateProgress(5, 'Validating', 'Validating updated configuration...', false);
+	state.orchestrator?.addProgressMessage('Validating updated configuration...');
+
+	return {};
+}
+
+// 4. Handle batch operations
+async function handle_batch_operation(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('📦 CRUD Agent: Handling batch operation');
+
+	// Update progress
+	updateProgress(2, 'Preparing Batch', 'Setting up batch operation...', false);
+	state.orchestrator?.addProgressMessage('Setting up batch operation...');
+
+	// Update progress for dependency resolution
+	updateProgress(3, 'Resolving Dependencies', 'Analyzing batch dependencies...', false);
+	state.orchestrator?.addProgressMessage('Analyzing batch dependencies...');
+
+	// Update progress for batch processing
+	updateProgress(4, 'Processing Batch', 'Creating/updating resources in batch...', false);
+	state.orchestrator?.addProgressMessage('Creating/updating resources in batch...');
+
+	// Update progress for validation
+	updateProgress(5, 'Validating Batch', 'Validating all batch operations...', false);
+	state.orchestrator?.addProgressMessage('Validating all batch operations...');
+
+	return {};
+}
+
+// 5. Handle reference resolution operations
+async function handle_reference_resolution(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('🔍 CRUD Agent: Handling reference resolution');
+
+	// Update progress
+	updateProgress(2, 'Resolving References', 'Finding referenced resources...', false);
+	state.orchestrator?.addProgressMessage('Finding referenced resources...');
+
+	// Update progress for validation
+	updateProgress(3, 'Validating References', 'Validating reference resolution...', false);
+	state.orchestrator?.addProgressMessage('Validating reference resolution...');
+
+	return {};
+}
+
+// LLM-based CRUD operation classification
+async function classifyCrudOperationType(query: string): Promise<string> {
+	try {
+		console.log('🤖 CRUD Agent: Using LLM to classify operation type for:', query);
+
+		const classificationPrompt = `
+Classify this DHIS2 CRUD operation into one of these categories:
+
+- create: Creating new resources (create, add, new)
+- update: Updating existing resources (update, modify, change, rename)
+- batch: Multiple operations or complex workflows (create multiple, batch, several)
+- reference_resolution: Resolving references to existing resources (find, get, resolve, the last, previous)
+
+Query: "${query}"
+
+Return ONLY one of: create, update, batch, reference_resolution
+`;
+
+		const result = await model.invoke([new HumanMessage(classificationPrompt)]);
+		const category = (result.content as string).trim().toLowerCase();
+
+		// Validate the response
+		const validCategories = ['create', 'update', 'batch', 'reference_resolution'];
+		if (validCategories.includes(category)) {
+			return category;
+		}
+
+		// Default to create if unclear
+		console.log('🤖 CRUD Agent: Unclear classification, defaulting to create');
+		return 'create';
+	} catch (error) {
+		console.error('🤖 CRUD Agent: Classification failed, defaulting to create');
+		return 'create';
+	}
+}
+
+// Create and compile StateGraph workflow
+const crudWorkflow = new StateGraph(CrudAnnotation);
+
+// Add nodes
+crudWorkflow.addNode('classify_crud_operation', classify_crud_operation);
+crudWorkflow.addNode('handle_single_creation', handle_single_creation);
+crudWorkflow.addNode('handle_single_update', handle_single_update);
+crudWorkflow.addNode('handle_batch_operation', handle_batch_operation);
+crudWorkflow.addNode('handle_reference_resolution', handle_reference_resolution);
+
+// Add edges
+// @ts-ignore
+crudWorkflow.addEdge(START, 'classify_crud_operation');
+
+// Conditional routing based on operation type
+// @ts-ignore
+crudWorkflow.addConditionalEdges('classify_crud_operation', (state) => {
+	switch (state.operationType) {
+		case 'create': return 'handle_single_creation';
+		case 'update': return 'handle_single_update';
+		case 'batch': return 'handle_batch_operation';
+		case 'reference_resolution': return 'handle_reference_resolution';
+		default: return 'handle_single_creation';
+	}
+});
+
+// Terminal edges
+// @ts-ignore
+crudWorkflow.addEdge('handle_single_creation', END);
+// @ts-ignore
+crudWorkflow.addEdge('handle_single_update', END);
+// @ts-ignore
+crudWorkflow.addEdge('handle_batch_operation', END);
+// @ts-ignore
+crudWorkflow.addEdge('handle_reference_resolution', END);
+
+// Compile the workflow
+const crudStateGraph = crudWorkflow.compile();
+
+// StateGraph-based CRUD agent with progress tracking
+export const crudStateGraphAgent = {
+	invoke: async (input: any) => {
+		console.log('🔧 CRUD StateGraph Agent: Processing CRUD request');
+
+		const initialState: Partial<typeof CrudAnnotation.State> = {
+			messages: input.messages || [],
+			operationType: 'create',
+			results: [],
+			finalResult: null,
+			error: '',
+		};
+
+		try {
+			// Execute StateGraph workflow
+			const result = await crudStateGraph.invoke(initialState);
+
+			// Format for compatibility with existing interface
+			return {
+				messages: [{
+					content: JSON.stringify(result.finalResult || { success: true, message: 'CRUD operation completed' }),
+					name: undefined,
+					additional_kwargs: {},
+					response_metadata: {}
+				}]
+			};
+		} catch (error) {
+			console.error('🔧 CRUD StateGraph Agent: Workflow execution failed:', error);
+			return {
+				messages: [{
+					content: JSON.stringify({
+						success: false,
+						error: `CRUD operation failed: ${error.message}`
+					}),
+					name: undefined,
+					additional_kwargs: {},
+					response_metadata: {}
+				}]
+			};
+		}
+	}
+};

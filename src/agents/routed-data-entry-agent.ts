@@ -11,6 +11,30 @@ import { addConversation, createMutationDataContext } from '../utils/conversatio
 
 // Define Router State - tracks workflow context and orchestrator reference
 const DataEntryRouterAnnotation = Annotation.Root({
+	// Progress tracking state
+	workflowProgress: Annotation<{
+		currentStep: number;
+		totalSteps: number;
+		stepName: string;
+		message: string;
+		isIndeterminate?: boolean;
+	}>({
+		reducer: (left, right) => right || left,
+		default: () => ({
+			currentStep: 0,
+			totalSteps: 4,
+			stepName: 'Initializing',
+			message: 'Preparing data entry workflow...',
+			isIndeterminate: true
+		}),
+	}),
+
+	// Orchestrator reference for UI communication
+	orchestrator: Annotation<any>({
+		reducer: (left, right) => right || left,
+		default: () => null,
+	}),
+
 	// Workflow context
 	dataEntryCategory: Annotation<string>({
 		reducer: (left, right) => right || left,
@@ -57,10 +81,27 @@ const model = ChatModels.createAgentModel();
 
 // StateGraph Workflow Nodes
 
+// Progress tracking helper
+function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof DataEntryRouterAnnotation.State> {
+    return {
+        workflowProgress: {
+            currentStep: step,
+            totalSteps: 4,
+            stepName,
+            message,
+            isIndeterminate
+        }
+    };
+}
+
 // 1. Check for data grid action intent (resolve/submit via natural language)
 async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
 	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🔍 Data Entry Router: Checking for data grid action intent:', query);
+
+	// Update progress
+	updateProgress(1, 'Analyzing Request', 'Checking for data grid actions...', false);
+	state.orchestrator?.addProgressMessage('Checking for data grid actions...');
 
 	// Check if there are recent data_grid messages in the conversation (for action intents)
 	const hasDataGridContext = state.orchestrator?.currentUIState?.conversation?.some((msg: any) =>
@@ -179,6 +220,10 @@ async function classify_data_entry_intent(state: typeof DataEntryRouterAnnotatio
 
 	console.log('🤖 Data Entry Router: Classifying data entry category for query:', query);
 
+	// Update progress
+	updateProgress(2, 'Classifying Category', 'Determining data entry type...', false);
+	state.orchestrator?.addProgressMessage('Determining data entry type...');
+
 	const category = await classifyDataEntryCategoryLLM(query);
 	console.log(`🔄 Data Entry Router: Classified as "${category}"`);
 
@@ -211,6 +256,10 @@ async function handle_unclear_classification(state: typeof DataEntryRouterAnnota
 // 3. Route to aggregate data agent
 async function invoke_aggregate_agent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
 	console.log('📊 Data Entry Router: Routing to aggregate data agent');
+
+	// Update progress
+	updateProgress(3, 'Processing Aggregate Data', 'Delegating to aggregate data agent...', false);
+	state.orchestrator?.addProgressMessage('Delegating to aggregate data agent...');
 
 	try {
 		// Use the StateGraph-based agent for data import workflows

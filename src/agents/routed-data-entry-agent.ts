@@ -6,6 +6,9 @@ import { eventsAgent } from './events-agent';
 import { createTrackerDataAgent } from './tracker-agent';
 import { addConversation, createMutationDataContext } from '../utils/conversation-context';
 
+// Import the data value update function directly for handling update_data_value actions
+// Note: This function is not exported from aggregate-data-agent.ts, so we need to handle this differently
+
 // Define Router State - tracks workflow context and orchestrator reference
 const DataEntryRouterAnnotation = Annotation.Root({
 	// Workflow context
@@ -22,6 +25,12 @@ const DataEntryRouterAnnotation = Annotation.Root({
 	dataEntryType: Annotation<'tracker' | 'aggregate' | null>({
 		reducer: (left, right) => right || left,
 		default: () => null
+	}),
+
+	// Flag to indicate this is a data value update request
+	isDataValueUpdate: Annotation<boolean>({
+		reducer: (left, right) => right || left,
+		default: () => false
 	}),
 
 	// Orchestrator reference for direct calls and rendering
@@ -129,10 +138,29 @@ async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnota
 					action: 'tracker_cancel_triggered'
 				}
 			};
+		} else if (actionIntent === 'update_data_value') {
+			console.log('🔄 Detected data value update request, routing to aggregate agent');
+			// For data value updates, set the flag and route to aggregate agent
+			return {
+				dataEntryCategory: 'aggregate_data',
+				originalQuery: query,
+				isDataValueUpdate: true
+			};
 		}
 	}
 
-	// No action intent detected, continue to normal classification
+	// No action intent detected
+	if (isFollowUp && followUpType) {
+		// For follow-ups with known type, set category directly to bypass LLM classification
+		const category = followUpType === 'aggregate' ? 'aggregate_data' : 'tracker';
+		console.log(`🔍 Follow-up detected with type ${followUpType}, setting category to ${category} and routing directly to agent`);
+		return {
+			dataEntryCategory: category,
+			originalQuery: query
+		};
+	}
+
+	// Continue to normal classification for non-follow-up requests
 	console.log('🔍 No data grid action intent detected, proceeding to category classification');
 	return {};
 }
@@ -140,6 +168,15 @@ async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnota
 // 2. LLM-based data entry category classification
 async function classify_data_entry_intent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
 	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
+
+	// If category was already set (e.g., for follow-ups), use it
+	if (state.dataEntryCategory && state.dataEntryCategory !== 'unknown') {
+		console.log(`🤖 Data Entry Router: Category already set to "${state.dataEntryCategory}", skipping LLM classification`);
+		return {
+			originalQuery: query
+		};
+	}
+
 	console.log('🤖 Data Entry Router: Classifying data entry category for query:', query);
 
 	const category = await classifyDataEntryCategoryLLM(query);
@@ -286,7 +323,7 @@ async function invoke_tracker_agent(state: typeof DataEntryRouterAnnotation.Stat
 }
 
 // Detect data grid action intent (resolve/submit via natural language)
-async function detectDataGridActionIntent(query: string, orchestrator: any, followUpType?: 'tracker' | 'aggregate' | null): Promise<'resolve_all' | 'submit_data' | 'confirm_save' | 'cancel_save' | null> {
+async function detectDataGridActionIntent(query: string, orchestrator: any, followUpType?: 'tracker' | 'aggregate' | null): Promise<'resolve_all' | 'submit_data' | 'confirm_save' | 'cancel_save' | 'update_data_value' | null> {
 	try {
 		console.log('🔍 Data Entry Router: Detecting data grid action intent for:', query);
 
@@ -323,7 +360,8 @@ ${isTrackerReviewGrid ? `
 - confirm_save: User wants to save/confirm the reviewed tracker data to DHIS2
 - cancel_save: User wants to cancel the tracker data save operation` : `
 - resolve_all: User wants to resolve/fix/complete all pending unresolved items
-- submit_data: User wants to submit/send the data to DHIS2`}
+- submit_data: User wants to submit/send the data to DHIS2
+- update_data_value: User wants to update/modify a specific data value`}
 
 ${isTrackerReviewGrid ? `
 Examples of confirm_save:
@@ -350,9 +388,17 @@ Examples of submit_data:
 - "send to DHIS2"
 - "confirm submission"
 - "upload the data"
-- "submit now"`}
+- "submit now"
 
-Return ONLY one of these values: ${isTrackerReviewGrid ? '"confirm_save", "cancel_save"' : '"resolve_all", "submit_data"'}, or null if neither matches.
+Examples of update_data_value:
+- "update the first value to 10"
+- "change row 3 to 25"
+- "modify the second entry"
+- "correct the last data point"
+- "fix value 5 to 8"
+- "update first row to 15"`}
+
+Return ONLY one of these values: ${isTrackerReviewGrid ? '"confirm_save", "cancel_save"' : '"resolve_all", "submit_data", "update_data_value"'}, or null if neither matches.
 
 Query: "${query}"
 
@@ -364,7 +410,7 @@ Response:`;
 		// Validate the response based on context
 		const validIntents = isTrackerReviewGrid
 			? ['confirm_save', 'cancel_save']
-			: ['resolve_all', 'submit_data'];
+			: ['resolve_all', 'submit_data', 'update_data_value'];
 
 		if (validIntents.includes(intent)) {
 			return intent as any;
@@ -467,6 +513,7 @@ export function createRoutedDataEntryAgent(orchestrator: any) {
 			const initialState: Partial<typeof DataEntryRouterAnnotation.State> = {
 				messages: input.messages || [],
 				dataEntryType: input.dataEntryType || null, // Use data entry type context from router
+				isDataValueUpdate: input.isDataValueUpdate || false,
 				orchestrator: orchestrator,
 				dataEntryCategory: 'unknown',
 				originalQuery: '',

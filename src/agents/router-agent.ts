@@ -171,7 +171,7 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 				type: 'user_selection_needed',
 				message: 'I need to clarify what you want to do. Please select the most appropriate option:',
 				selectionOptions: selectionOptions,
-				reason: intentClassification.reason
+				reason: intentClassification.reasoning
 			}
 		};
 	} else {
@@ -790,7 +790,12 @@ Consider context clues like:
 Category:`;
 
 		const result = await model.invoke([new HumanMessage(classificationPrompt)]);
-		const category = (result.content as string).trim().toLowerCase();
+
+		// Extract just the category from the response, ignoring reasoning
+		const responseText = (result.content as string).trim();
+		const responseLines = responseText.split('\n');
+		const categoryLine = responseLines[0]; // First line should be the category
+		const category = categoryLine.replace(/\*\*/g, '').trim().toLowerCase(); // Remove markdown formatting
 
 		console.log('🤖 Router: LLM classified as:', category);
 

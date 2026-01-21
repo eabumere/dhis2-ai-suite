@@ -246,21 +246,29 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
                 sampleRow: selectionMessage.data.uploadedData?.[1]
             });
 
-            if (hasExistingData) {
-                console.log('📊 Aggregate Data Agent: Dataset already resolved with existing data, continuing workflow');
-                return {
-                    uploadedData: selectionMessage.data.uploadedData,
-                    dataSet: {
-                        id: selectionMessage.data.selectedDataset.id,
-                        name: selectionMessage.data.selectedDataset.name,
-                        resolved: true
-                    },
-                    uiAction: 'map_headers'
-                };
-            } else {
-                console.log('📊 Aggregate Data Agent: Dataset resolved but no existing data, proceeding with current request parsing');
-                // Continue to parse the current request for new data
-            }
+        if (hasExistingData) {
+            console.log('📊 Aggregate Data Agent: Dataset already resolved with existing data, continuing workflow');
+            return {
+                uploadedData: selectionMessage.data.uploadedData,
+                dataSet: {
+                    id: selectionMessage.data.selectedDataset.id,
+                    name: selectionMessage.data.selectedDataset.name,
+                    resolved: true
+                },
+                uiAction: 'map_headers'
+            };
+        } else {
+            console.log('📊 Aggregate Data Agent: Dataset resolved but no existing data, setting dataset and showing grid');
+            // Set the dataset and show empty grid for manual entry
+            return {
+                dataSet: {
+                    id: selectionMessage.data.selectedDataset.id,
+                    name: selectionMessage.data.selectedDataset.name,
+                    resolved: true
+                },
+                uiAction: 'show_data_grid'
+            };
+        }
         }
     }
 
@@ -287,32 +295,68 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
     if (isDataValueUpdate) {
         console.log('📊 Aggregate Data Agent: Handling data value update request');
         const updateResult = await handleDataValueUpdate(userMessage.content, state.messages, state.orchestrator);
-        return {
-            finalResult: updateResult
-        };
+
+        if (updateResult.success && updateResult.targetIndex !== undefined) {
+            // Update the uploadedData with the new value
+            const updatedData = [...state.uploadedData];
+            if (updatedData.length > updateResult.targetIndex + 1) {
+                // Update the value column (assuming it's the last column)
+                const headers = updatedData[0];
+                const valueColumnIndex = headers.findIndex(h => h.toLowerCase().includes('value'));
+                if (valueColumnIndex >= 0) {
+                    updatedData[updateResult.targetIndex + 1][valueColumnIndex] = updateResult.updatedValue.value.toString();
+                }
+            }
+
+            return {
+                uploadedData: updatedData,
+                uiAction: 'show_data_grid'
+            };
+        } else {
+            return {
+                finalResult: updateResult
+            };
+        }
     }
 
     // Extract contextual information from all user messages
     const contextualInfo = await extractContextualInfo(messages);
     console.log('📊 Aggregate Data Agent: Extracted contextual info:', contextualInfo);
 
-    // Check for CSV file content in messages
+    // Check for CSV file content in messages or file registry
     let csvData: string[][] | null = null;
     let hasCSVFile = false;
 
-    // Look for file content in user messages
-    for (const message of messages) {
-        if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
-            // Extract file content from message
-            const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
-            if (contentMatch) {
-                try {
-                    csvData = parseCSV(contentMatch[1]);
-                    hasCSVFile = true;
-                    console.log('📊 Aggregate Data Agent: Found CSV file in message');
-                    break;
-                } catch (error) {
-                    console.warn('📊 Aggregate Data Agent: Failed to parse CSV from message:', error);
+    // First, check the orchestrator's file registry for uploaded CSV files
+    if (state.orchestrator && typeof state.orchestrator.getCurrentFile === 'function') {
+        const currentFile = state.orchestrator.getCurrentFile();
+        if (currentFile && !currentFile.isBinary && currentFile.type === 'text/csv') {
+            try {
+                console.log(`📊 Aggregate Data Agent: Found CSV file in registry: ${currentFile.name} (${currentFile.content.length} chars)`);
+                csvData = parseCSV(currentFile.content as string);
+                hasCSVFile = true;
+                console.log('📊 Aggregate Data Agent: Successfully parsed CSV from file registry');
+            } catch (error) {
+                console.warn('📊 Aggregate Data Agent: Failed to parse CSV from file registry:', error);
+            }
+        }
+    }
+
+    // Fallback: Look for file content in user messages (legacy support)
+    if (!hasCSVFile) {
+        for (const message of messages) {
+            if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
+                // Extract file content from message
+                const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
+                if (contentMatch) {
+                    try {
+                        csvData = parseCSV(contentMatch[1]);
+                        hasCSVFile = true;
+                        console.log('📊 Aggregate Data Agent: Found CSV file in message (fallback)');
+                        break;
+                    } catch (error) {
+                        console.warn('📊 Aggregate Data Agent: Failed to parse CSV from message:', error);
+                    }
                 }
             }
         }
@@ -1511,22 +1555,22 @@ async function handleDataValueUpdate(query: string, conversationHistory: any[], 
 						   msg.content?.type === 'data_submission_success';
 				});
 
-			if (recentSubmission) {
-				// Extract submitted data from the conversation message
-				const content = recentSubmission.content;
-				if (content && typeof content === 'object' && content !== null) {
-					const contentObj = content as any; // Type assertion for dynamic content
-					if ('submittedData' in contentObj && Array.isArray(contentObj.submittedData)) {
-						submittedData = contentObj.submittedData;
-					} else if ('data' in contentObj && contentObj.data && typeof contentObj.data === 'object' && contentObj.data !== null) {
-						const dataObj = contentObj.data as any;
-						if ('submittedData' in dataObj && Array.isArray(dataObj.submittedData)) {
-							submittedData = dataObj.submittedData;
+				if (recentSubmission) {
+					// Extract submitted data from the conversation message
+					const content = recentSubmission.content;
+					if (content && typeof content === 'object') {
+						const contentObj = content as any; // Type assertion for dynamic content
+						if ('submittedData' in contentObj && Array.isArray(contentObj.submittedData)) {
+							submittedData = contentObj.submittedData;
+						} else if ('data' in contentObj && contentObj.data && typeof contentObj.data === 'object') {
+							const dataObj = contentObj.data as any;
+							if ('submittedData' in dataObj && Array.isArray(dataObj.submittedData)) {
+								submittedData = dataObj.submittedData;
+							}
 						}
 					}
+					console.log('🔄 Aggregate Data Agent: Found submitted data in conversation:', Array.isArray(submittedData) ? submittedData.length : 0, 'values');
 				}
-				console.log('🔄 Aggregate Data Agent: Found submitted data in conversation:', submittedData.length, 'values');
-			}
 		}
 
 		// If still not found, try current data grid data
@@ -1643,6 +1687,7 @@ If you cannot determine which value to update, return:
 					value: newValue,
 					previousValue: targetDataValue.value
 				},
+				targetIndex: targetIndex,
 				reasoning: reasoning
 			};
 		} else {
@@ -1716,14 +1761,14 @@ async function load_and_display_data_set(state: typeof AggregateDataAnnotation.S
 
     // For now, we'll reconstruct the data from the stored information
     // In a real implementation, you'd query DHIS2 to get the current data
-    const rows = dataSetInfo.submittedData.map((dataValue: any, index: number) => [
+    const rows = (dataSetInfo as any).submittedData?.map((dataValue: any, index: number) => [
         dataValue.dataElement || '',
         dataValue.orgUnit || '',
         dataValue.period || '',
         dataValue.categoryOptionCombo || '',
         dataValue.attributeOptionCombo || '',
         dataValue.value?.toString() || ''
-    ]);
+    ]) || [];
 
     // Set up headers
     const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];

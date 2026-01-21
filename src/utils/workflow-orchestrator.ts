@@ -1097,6 +1097,9 @@ class WorkflowOrchestrator {
                     finalResult: null
                 };
 
+                console.log('📋 Restarting workflow with dataset:', initialState.dataSet);
+                console.log('📋 Uploaded data length:', initialState.uploadedData?.length);
+
                 // Execute the workflow starting from map_headers (skipping dataset resolution)
                 aggregateDataStateGraph.invoke(initialState).then((result: any) => {
                     console.log('📋 Workflow continuation completed:', result);

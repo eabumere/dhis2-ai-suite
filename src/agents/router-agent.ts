@@ -774,8 +774,20 @@ Classify this DHIS2 query into ONE category. Consider the recent conversation co
 Categories:
 - direct_search: User wants to find/browse/search existing metadata (indicators, dataElements, orgUnits, etc.)
 - analytics_routing: User wants analytics/data analysis/calculations/visualizations/reports
-- crud: User wants to create/modify/delete metadata objects (data elements, indicators, org units, etc.)
-- data_entry: User wants to create or configure data entry structures (programs, data sets, data elements for data collection), or update previously submitted data values
+- crud: User wants to CREATE NEW metadata objects or MODIFY/DELETE existing ones (data elements, indicators, org units, categories, data sets, programs, validation rules, etc.)
+- data_entry: User wants to ENTER DATA VALUES into existing data collection structures, or configure data collection for ALREADY EXISTING metadata structures
+
+Key distinctions:
+- CRUD: Focus on creating/modifying the metadata DEFINITIONS themselves
+- data_entry: Focus on the process of data collection and value entry into EXISTING structures
+
+Examples:
+- "Create a new data set called Monthly Report" → crud (creating new metadata)
+- "Create a data element for HIV testing" → crud (creating new metadata)
+- "Enter data for the HIV dataset" → data_entry (entering values into existing structure)
+- "Submit monthly numbers to the existing report" → data_entry (entering values)
+- "Set up data collection for the new program" → crud (creating metadata structures)
+- "Configure the reporting form for data entry" → data_entry (configuring existing structures)
 
 Recent conversation context:
 ${recentMessages || 'No recent context'}

@@ -373,6 +373,18 @@ class WorkflowOrchestrator {
                             } else if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {
                                 console.log('📊 Detected chart result, calling renderChart');
                                 this.renderChart(result);
+                            } else if (result?.success === true && result?.message) {
+                                // Handle general successful operation results (CRUD operations, etc.)
+                                console.log('✅ Detected general successful operation result, adding to conversation');
+                                console.log('📋 Result message:', result.message);
+                                this.addAssistantMessage(result.message, 'response', result);
+                                // Reset UI state for successful operations
+                                this.updateUIState({
+                                    showProcessing: false,
+                                    showQueryInput: true,
+                                    queryEnabled: true,
+                                    showError: false
+                                });
                             } else {
                                 // Default: update UI state for generic results
                                 console.log('📋 Using default UI state update for result');

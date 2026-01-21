@@ -105,6 +105,35 @@ const GraphAnnotation = Annotation.Root({
 		default: () => [],
 	}),
 
+	// Progress tracking state
+	workflowProgress: Annotation<{
+		currentStep: number;
+		totalSteps: number;
+		stepName: string;
+		message: string;
+		isIndeterminate?: boolean;
+	}>({
+		reducer: (left, right) => right || left,
+		default: () => ({
+			currentStep: 0,
+			totalSteps: 8,
+			stepName: 'Initializing',
+			message: 'Preparing analytics workflow...',
+			isIndeterminate: true
+		}),
+	}),
+
+	// UI action state for orchestrator communication
+	uiAction: Annotation<string>({
+		reducer: (left, right) => right || left,
+		default: () => '',
+	}),
+
+	recoveryAction: Annotation<string>({
+		reducer: (left, right) => right || left,
+		default: () => '',
+	}),
+
 	// Output state
 	finalResult: Annotation<any>({
 		reducer: (left, right) => right,
@@ -133,8 +162,25 @@ const GraphAnnotation = Annotation.Root({
 });
 
 // LLM-based intent classification with conversation context awareness
+// Progress tracking helper
+function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof GraphAnnotation.State> {
+    return {
+        workflowProgress: {
+            currentStep: step,
+            totalSteps: 8,
+            stepName,
+            message,
+            isIndeterminate
+        }
+    };
+}
+
 async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	console.log('🤖 Classifying intent with LLM for query:', state.query);
+
+	// Update progress
+	updateProgress(1, 'Analyzing Query', 'Understanding your analytics request...', false);
+	state.orchestrator?.addProgressMessage('Understanding your analytics request...');
 
 	// Extract query from messages if not set
 	const query = state.query || state.messages.filter(m => m.role === 'user').pop()?.content || '';
@@ -393,6 +439,10 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 	try {
 		console.log('📊 Searching for analytics metadata using LLM extraction and 2-level search');
 
+		// Update progress
+		updateProgress(2, 'Finding Indicators', 'Searching for relevant data indicators...', false);
+		state.orchestrator?.addProgressMessage('Searching for relevant data indicators...');
+
 		// First, extract indicator/data element keywords using LLM
 		const llmResult = await extractIndicatorKeywordsLLM.invoke({
 			query: state.query,
@@ -543,6 +593,14 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 	try {
 		console.log('📊 Querying analytics data');
 
+		// Update progress - show preparation step first
+		updateProgress(6, 'Preparing Data Query', 'Finalizing query parameters...', false);
+		state.orchestrator?.addProgressMessage('Finalizing query parameters...');
+
+		// Update progress for actual querying
+		updateProgress(7, 'Querying Data', 'Fetching analytics data from DHIS2...', false);
+		state.orchestrator?.addProgressMessage('Fetching analytics data from DHIS2...');
+
 		if (!state.metadata?.suggestions?.length) {
 			return {
 				step: 'completed',
@@ -671,6 +729,10 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
 		console.log('📊 Building analytics chart using pure DHIS2 data', state);
+
+		// Update progress
+		updateProgress(8, 'Creating Visualization', 'Building your analytics chart...', false);
+		state.orchestrator?.addProgressMessage('Building your analytics chart...');
 
 		// Check if we have analytics data to build chart from
 		if (!state.data || !state.data.data) {
@@ -862,6 +924,10 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
 		console.log('🏥 Searching for organisation units in query using LLM extraction');
+
+		// Update progress
+		updateProgress(4, 'Finding Locations', 'Searching for relevant organisation units...', false);
+		state.orchestrator?.addProgressMessage('Searching for relevant organisation units...');
 
 		// Extract organisation unit keywords using LLM-powered tool
 		const llmResult = await extractOrgUnitKeywordsLLM.invoke({
@@ -1059,6 +1125,10 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 async function searchDisaggregations(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
 		console.log('🔢 Searching for disaggregations in query using LLM extraction');
+
+		// Update progress
+		updateProgress(5, 'Finding Categories', 'Searching for data categories...', false);
+		state.orchestrator?.addProgressMessage('Searching for data categories...');
 
 		// Initialize cocMapping for the entire function scope
 		let cocMapping: Record<string, string[]> = state.cocMapping || {};
@@ -1554,7 +1624,8 @@ async function handle_query_parsing_recovery(state: typeof GraphAnnotation.State
             recoveryOptions,
             userGuidance: 'Query parsing failed. Try rephrasing with more specific terms:'
         },
-        uiAction: 'show_recovery_options'
+        uiAction: 'show_recovery_options',
+        recoveryAction: 'query_parsing_recovery'
     };
 }
 
@@ -1602,7 +1673,8 @@ async function handle_data_access_recovery(state: typeof GraphAnnotation.State):
             recoveryOptions,
             userGuidance: 'Data access failed. Choose how to resolve the issue:'
         },
-        uiAction: 'show_recovery_options'
+        uiAction: 'show_recovery_options',
+        recoveryAction: 'data_access_recovery'
     };
 }
 
@@ -1651,7 +1723,8 @@ async function handle_chart_generation_recovery(state: typeof GraphAnnotation.St
             recoveryOptions,
             userGuidance: 'Chart generation failed but data is available. Choose how to view your data:'
         },
-        uiAction: 'show_recovery_options'
+        uiAction: 'show_recovery_options',
+        recoveryAction: 'chart_generation_recovery'
     };
 }
 

@@ -27,6 +27,9 @@ export interface AggregateDataGridProps {
     onResolveItem: (rowIndex: number, colIndex: number) => void;
     onUpdateDataSet?: () => void; // For updating existing data sets
     onAddRow?: () => void; // For adding new rows to existing data sets
+    enableProgressiveLoading?: boolean; // Enable progressive loading for large datasets
+    initialLoadCount?: number; // Number of rows to load initially (default: 50)
+    loadMoreIncrement?: number; // Number of additional rows to load each time (default: 50)
 }
 
 const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
@@ -45,7 +48,10 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     onConfirmSubmit,
     onResolveItem,
     onUpdateDataSet,
-    onAddRow
+    onAddRow,
+    enableProgressiveLoading = false,
+    initialLoadCount = 50,
+    loadMoreIncrement = 50
 }) => {
     // Debug logging
     console.log('🧩 AggregateDataGrid received props:', {
@@ -56,6 +62,36 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
     });
     const [editingCell, setEditingCell] = useState<{row: number, col: number} | null>(null);
     const [editValue, setEditValue] = useState('');
+
+    // Progressive loading state
+    const [loadedRowCount, setLoadedRowCount] = useState(enableProgressiveLoading ? initialLoadCount : rows.length);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+    // Update loaded count when rows change
+    React.useEffect(() => {
+        if (enableProgressiveLoading) {
+            setLoadedRowCount(Math.min(initialLoadCount, rows.length));
+        } else {
+            setLoadedRowCount(rows.length);
+        }
+    }, [rows.length, enableProgressiveLoading, initialLoadCount]);
+
+    // Get visible rows based on progressive loading
+    const visibleRows = rows.slice(0, loadedRowCount);
+    const hasMoreRows = loadedRowCount < rows.length;
+
+    // Load more rows
+    const loadMoreRows = useCallback(() => {
+        if (!hasMoreRows || isLoadingMore) return;
+
+        setIsLoadingMore(true);
+
+        // Simulate loading delay for better UX
+        setTimeout(() => {
+            setLoadedRowCount(prev => Math.min(prev + loadMoreIncrement, rows.length));
+            setIsLoadingMore(false);
+        }, 300);
+    }, [hasMoreRows, isLoadingMore, loadMoreIncrement, rows.length]);
 
     // Create resolution state lookup map
     const resolutionMap = new Map(resolutionState);
@@ -230,7 +266,7 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                 marginBottom: '16px'
             }}>
                 <h3 style={{ margin: 0, color: '#495057' }}>
-                    {dataSetName ? `${dataSetName} (${rows.length} rows)` : `Aggregate Data Upload (${rows.length} rows)`}
+                    {dataSetName ? `${dataSetName} (${rows.length} rows${enableProgressiveLoading ? ` - ${loadedRowCount} loaded` : ''})` : `Aggregate Data Upload (${rows.length} rows${enableProgressiveLoading ? ` - ${loadedRowCount} loaded` : ''})`}
                 </h3>
                 <div style={{
                     display: 'flex',
@@ -412,7 +448,7 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                         </tr>
                     </thead>
                     <tbody>
-                        {rows.map((row, rowIndex) => (
+                        {visibleRows.map((row, rowIndex) => (
                             <tr key={rowIndex} style={{
                                 backgroundColor: rowIndex % 2 === 0 ? 'white' : '#f8f9fa'
                             }}>
@@ -541,6 +577,73 @@ const AggregateDataGrid: React.FC<AggregateDataGridProps> = ({
                     </tbody>
                 </table>
             </div>
+
+            {/* Progressive Loading UI */}
+            {enableProgressiveLoading && hasMoreRows && (
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    padding: '16px',
+                    borderTop: '1px solid #dee2e6',
+                    backgroundColor: '#f8f9fa'
+                }}>
+                    {isLoadingMore ? (
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            color: '#6c757d'
+                        }}>
+                            <div style={{
+                                width: '16px',
+                                height: '16px',
+                                border: '2px solid #e9ecef',
+                                borderTop: '2px solid #007bff',
+                                borderRadius: '50%',
+                                animation: 'spin 1s linear infinite'
+                            }} />
+                            <span>Loading more rows...</span>
+                        </div>
+                    ) : (
+                        <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '8px'
+                        }}>
+                            <span style={{
+                                fontSize: '14px',
+                                color: '#6c757d'
+                            }}>
+                                Showing {loadedRowCount} of {rows.length} rows
+                            </span>
+                            <button
+                                onClick={loadMoreRows}
+                                style={{
+                                    padding: '8px 16px',
+                                    backgroundColor: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                    fontWeight: '500',
+                                    transition: 'background-color 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.backgroundColor = '#0056b3';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.backgroundColor = '#007bff';
+                                }}
+                            >
+                                Load {Math.min(loadMoreIncrement, rows.length - loadedRowCount)} More Rows
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {rows.length === 0 && (
                 <div style={{

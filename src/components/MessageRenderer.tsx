@@ -7,6 +7,49 @@ import TrackerDataGrid from './TrackerDataGrid';
 import ResolutionSelector from './ResolutionSelector';
 import ActionButton from './ActionButton';
 
+// Expandable Text Component for handling overflow content
+interface ExpandableTextProps {
+    text: string;
+    maxLength?: number;
+    className?: string;
+}
+
+const ExpandableText: FC<ExpandableTextProps> = ({ text, maxLength = 500, className = '' }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    const shouldTruncate = text.length > maxLength;
+    const displayText = shouldTruncate && !isExpanded ? text.substring(0, maxLength) + '...' : text;
+
+    if (!shouldTruncate) {
+        return <span className={className}>{text}</span>;
+    }
+
+    return (
+        <span className={className}>
+            {displayText}
+            {shouldTruncate && (
+                <button
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    style={{
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        color: 'var(--color-primary)',
+                        cursor: 'pointer',
+                        fontSize: 'inherit',
+                        fontWeight: 'var(--font-weight-medium)',
+                        padding: '0 var(--space-1)',
+                        textDecoration: 'underline',
+                        marginLeft: 'var(--space-1)'
+                    }}
+                    className="hover-lift"
+                >
+                    {isExpanded ? 'Show less' : 'Read more'}
+                </button>
+            )}
+        </span>
+    );
+};
+
 interface ErrorMessageProps {
     message: ConversationMessage;
 }
@@ -312,7 +355,7 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
     );
 };
 
-const ThreadedMessageRenderer: FC<ThreadedMessageRendererProps> = ({ messages }) => {
+export const ThreadedMessageRenderer: FC<ThreadedMessageRendererProps> = ({ messages }) => {
     // Group messages by threadId
     const groupedMessages = messages.reduce((groups, message) => {
         const threadId = message.threadId || 'unthreaded';
@@ -340,64 +383,122 @@ const ThreadedMessageRenderer: FC<ThreadedMessageRendererProps> = ({ messages })
             ));
         }
 
-        // Render threaded messages with visual grouping
+        // Render threaded messages with enhanced visual indicators
         return (
             <div
                 key={threadId}
                 style={{
                     position: 'relative',
-                    marginBottom: '16px',
-                    paddingLeft: '20px'
+                    marginBottom: 'var(--space-6)',
+                    paddingLeft: 'var(--space-8)'
                 }}
             >
-                {/* Thread indicator line */}
+                {/* Enhanced thread indicator line with gradient */}
                 <div style={{
                     position: 'absolute',
-                    left: '8px',
-                    top: '12px',
-                    bottom: '12px',
-                    width: '2px',
-                    backgroundColor: isUserThread ? '#2c6693' : '#4CAF50',
-                    borderRadius: '1px',
-                    opacity: 0.6
+                    left: 'var(--space-3)',
+                    top: 'var(--space-4)',
+                    bottom: 'var(--space-4)',
+                    width: '3px',
+                    background: isUserThread
+                        ? 'linear-gradient(180deg, var(--color-primary-400), var(--color-primary-600))'
+                        : 'linear-gradient(180deg, var(--color-success-400), var(--color-success-600))',
+                    borderRadius: 'var(--radius-lg)',
+                    boxShadow: isUserThread
+                        ? '0 0 8px rgba(44, 102, 147, 0.4)'
+                        : '0 0 8px rgba(76, 175, 80, 0.4)',
+                    opacity: 0.8
                 }} />
 
-                {/* Thread header dot */}
+                {/* Enhanced thread header with icon and count */}
                 <div style={{
                     position: 'absolute',
-                    left: '4px',
-                    top: '8px',
-                    width: '12px',
-                    height: '12px',
+                    left: 'var(--space-1)',
+                    top: 'var(--space-2)',
+                    width: 'var(--space-6)',
+                    height: 'var(--space-6)',
                     borderRadius: '50%',
-                    backgroundColor: isUserThread ? '#2c6693' : '#4CAF50',
-                    border: '2px solid white',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-                    zIndex: 1
-                }} />
+                    backgroundColor: isUserThread ? 'var(--color-primary)' : 'var(--color-success)',
+                    border: '3px solid var(--color-bg-primary)',
+                    boxShadow: 'var(--shadow-md)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 'var(--font-size-sm)',
+                    color: 'var(--color-text-inverse)',
+                    fontWeight: 'var(--font-weight-bold)',
+                    zIndex: 2
+                }}>
+                    {isUserThread ? '👤' : '🤖'}
+                </div>
 
-                {/* Messages in thread */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {/* Thread info badge */}
+                <div style={{
+                    position: 'absolute',
+                    left: 'var(--space-8)',
+                    top: 'var(--space-1)',
+                    backgroundColor: 'var(--color-bg-primary)',
+                    border: '1px solid var(--color-border-light)',
+                    borderRadius: 'var(--radius-full)',
+                    padding: 'var(--space-1) var(--space-3)',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--color-text-secondary)',
+                    fontWeight: 'var(--font-weight-medium)',
+                    boxShadow: 'var(--shadow-sm)',
+                    zIndex: 1
+                }}>
+                    {threadMessages.length} message{threadMessages.length !== 1 ? 's' : ''}
+                </div>
+
+                {/* Messages in thread with enhanced spacing */}
+                <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 'var(--space-3)',
+                    marginTop: 'var(--space-6)'
+                }}>
                     {threadMessages.map((message, index) => (
                         <div
                             key={message.id}
                             style={{
                                 position: 'relative',
-                                marginLeft: index === 0 ? '0' : '16px'
+                                marginLeft: index === 0 ? '0' : 'var(--space-6)'
                             }}
                         >
-                            {/* Connection dot for subsequent messages */}
+                            {/* Enhanced connection indicator for subsequent messages */}
                             {index > 0 && (
                                 <div style={{
                                     position: 'absolute',
-                                    left: '-20px',
-                                    top: '16px',
-                                    width: '8px',
-                                    height: '8px',
+                                    left: 'calc(-1 * var(--space-8))',
+                                    top: 'var(--space-4)',
+                                    width: 'var(--space-4)',
+                                    height: 'var(--space-4)',
                                     borderRadius: '50%',
-                                    backgroundColor: isUserThread ? '#2c6693' : '#4CAF50',
-                                    border: '2px solid white',
-                                    opacity: 0.8
+                                    backgroundColor: isUserThread ? 'var(--color-primary)' : 'var(--color-success)',
+                                    border: '3px solid var(--color-bg-primary)',
+                                    boxShadow: 'var(--shadow-sm)',
+                                    opacity: 0.9,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: 'var(--font-size-xs)',
+                                    color: 'var(--color-text-inverse)',
+                                    fontWeight: 'var(--font-weight-bold)'
+                                }}>
+                                    {index + 1}
+                                </div>
+                            )}
+
+                            {/* Connection line for subsequent messages */}
+                            {index > 0 && (
+                                <div style={{
+                                    position: 'absolute',
+                                    left: 'calc(-1 * var(--space-6))',
+                                    top: 'var(--space-2)',
+                                    width: 'var(--space-4)',
+                                    height: '2px',
+                                    backgroundColor: isUserThread ? 'var(--color-primary-300)' : 'var(--color-success-300)',
+                                    opacity: 0.6
                                 }} />
                             )}
 
@@ -405,19 +506,6 @@ const ThreadedMessageRenderer: FC<ThreadedMessageRendererProps> = ({ messages })
                         </div>
                     ))}
                 </div>
-
-                {/* Thread summary for collapsed view (future enhancement) */}
-                {threadMessages.length > 3 && (
-                    <div style={{
-                        marginTop: '8px',
-                        marginLeft: '16px',
-                        fontSize: '11px',
-                        color: '#666',
-                        fontStyle: 'italic'
-                    }}>
-                        Thread: {threadMessages.length} messages
-                    </div>
-                )}
             </div>
         );
     };
@@ -471,7 +559,11 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
     const renderMessageContent = () => {
         switch (message.type) {
             case 'query':
-                return <div style={{ whiteSpace: 'pre-wrap' }}>{message.content}</div>;
+                return (
+                    <div style={{ whiteSpace: 'pre-wrap' }}>
+                        <ExpandableText text={message.content} maxLength={300} />
+                    </div>
+                );
 
             case 'response':
                 return (
@@ -479,7 +571,7 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                         {/* Text content */}
                         {message.content && (
                             <div style={{ marginBottom: message.data ? '16px' : '0' }}>
-                                {message.content}
+                                <ExpandableText text={message.content} maxLength={500} />
                             </div>
                         )}
 
@@ -758,6 +850,48 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                     </div>
                 );
 
+            case 'tracker_data_grid':
+                console.log('🏥 MessageRenderer tracker_data_grid props:', {
+                    extractedPatients: message.data?.extractedPatients,
+                    mappedTrackerData: message.data?.mappedTrackerData,
+                    headerMappings: message.data?.headerMappings,
+                    headerDisplayNames: message.data?.headerDisplayNames,
+                    reviewMode: message.data?.reviewMode
+                });
+
+                return (
+                    <div>
+                        <div style={{ marginBottom: '8px' }}>{message.content}</div>
+                        {message.data && (
+                            <TrackerDataGrid
+                                extractedPatients={message.data.extractedPatients || []}
+                                mappedTrackerData={message.data.mappedTrackerData || []}
+                                headerMappings={message.data.headerMappings || {}}
+                                headerDisplayNames={message.data.headerDisplayNames || {}}
+                                reviewMode={message.data.reviewMode || false}
+                                onConfigureProcessing={(config) => {
+                                    workflowOrchestrator.handleConfigureProcessing(config);
+                                }}
+                                onUploadDocument={(file) => {
+                                    workflowOrchestrator.handleUploadDocument(file);
+                                }}
+                                onRetryProcessing={() => {
+                                    workflowOrchestrator.handleRetryProcessing();
+                                }}
+                                onConfirmSave={() => {
+                                    workflowOrchestrator.handleConfirmSave();
+                                }}
+                                onCancelSave={() => {
+                                    workflowOrchestrator.handleCancelSave();
+                                }}
+                                processingStep={workflowOrchestrator.getTrackerState().processingStep}
+                                processingProgress={workflowOrchestrator.getTrackerState().processingProgress}
+                                error={workflowOrchestrator.getTrackerState().error}
+                            />
+                        )}
+                    </div>
+                );
+
             default:
                 return <div>{message.content}</div>;
         }
@@ -890,18 +1024,22 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
             );
         }
 
-        // Handle chart data
+        // Handle chart data - allow full width for better visualization
         if (data.data?.echarts_option || data.chart?.echarts_option || data.echarts_option) {
             const chartData = data.data || data.chart || data;
             // Use stable chart ID based on message ID to prevent re-rendering
             const stableChartId = chartData.chart_id || `chart_msg_${message.id}_${chartData.title || 'chart'}`.replace(/\s+/g, '_');
 
+            // Check if chart should show loading state
+            const isLoading = !chartData.echarts_option || chartData.isLoading;
+
             return (
-                <div style={{ marginTop: '16px', maxWidth: '600px' }}>
+                <div style={{ marginTop: '16px', width: '100%' }}>
                     <AnalyticsChart
                         chartData={chartData}
                         chartId={stableChartId}
                         title={chartData.title || 'Analytics Chart'}
+                        isLoading={isLoading}
                         onFilter={(filters) => console.log('Chart filtered:', filters)}
                         onExport={(format) => console.log('Chart exported as:', format)}
                     />
@@ -925,7 +1063,8 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
         <div style={{
             display: 'flex',
             justifyContent: isUser ? 'flex-end' : 'flex-start',
-            marginBottom: '8px'
+            marginBottom: '8px',
+            animation: 'animate-fade-in-up'
         }}>
             <div style={{
                 maxWidth: isUser ? '70%' : '85%',
@@ -949,16 +1088,124 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                     <span>{formatTime(message.timestamp)}</span>
                 </div>
 
-                {/* Message bubble */}
+                {/* Enhanced Message bubble with gradients and shadows */}
                 <div style={{
-                    backgroundColor: isUser ? '#2c6693' : 'white',
-                    color: isUser ? 'white' : '#333',
-                    borderRadius: '12px',
-                    padding: '12px 16px',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-                    border: isUser ? 'none' : '1px solid #e0e0e0'
+                    background: isUser
+                        ? 'linear-gradient(135deg, var(--color-primary-500), var(--color-primary-600))'
+                        : 'linear-gradient(135deg, var(--color-bg-primary), var(--color-gray-50))',
+                    color: isUser ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                    borderRadius: 'var(--radius-xl)',
+                    padding: 'var(--space-3) var(--space-4)',
+                    boxShadow: isUser
+                        ? 'var(--shadow-lg), 0 0 20px rgba(44, 102, 147, 0.3)'
+                        : 'var(--shadow-md), 0 0 15px rgba(0, 0, 0, 0.1)',
+                    border: isUser ? 'none' : '1px solid var(--color-border-light)',
+                    position: 'relative',
+                    transition: 'var(--transition-fast)',
+                    maxWidth: '85%'
                 }}>
+                    {/* Message status indicator */}
+                    <div style={{
+                        position: 'absolute',
+                        top: '-2px',
+                        right: isUser ? '-2px' : 'auto',
+                        left: isUser ? 'auto' : '-2px',
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        backgroundColor: isUser ? 'var(--color-success)' : 'var(--color-info)',
+                        border: '2px solid var(--color-bg-primary)',
+                        boxShadow: '0 0 4px rgba(0,0,0,0.2)'
+                    }}></div>
+
+                    {/* Message content */}
                     {renderMessageContent()}
+
+                    {/* Enhanced timestamp and status */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: isUser ? 'flex-start' : 'flex-end',
+                        gap: 'var(--space-3)',
+                        marginTop: 'var(--space-3)',
+                        paddingTop: 'var(--space-2)',
+                        borderTop: isUser
+                            ? '1px solid rgba(255, 255, 255, 0.2)'
+                            : '1px solid var(--color-border-light)',
+                        fontSize: 'var(--font-size-xs)',
+                        opacity: 0.8
+                    }}>
+                        {/* Message status indicators */}
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 'var(--space-1)'
+                        }}>
+                            {/* Processing indicator for assistant messages */}
+                            {message.type === 'progress' && (
+                                <div style={{
+                                    width: '6px',
+                                    height: '6px',
+                                    borderRadius: '50%',
+                                    backgroundColor: 'var(--color-warning)',
+                                    animation: 'pulse 2s infinite'
+                                }}></div>
+                            )}
+
+                            {/* Status badges */}
+                            {message.type === 'error' && (
+                                <span style={{
+                                    color: 'var(--color-error)',
+                                    fontSize: 'var(--font-size-xs)',
+                                    fontWeight: 'var(--font-weight-semibold)'
+                                }}>
+                                    ❌ Error
+                                </span>
+                            )}
+
+                            {message.type === 'success' && (
+                                <span style={{
+                                    color: 'var(--color-success)',
+                                    fontSize: 'var(--font-size-xs)',
+                                    fontWeight: 'var(--font-weight-semibold)'
+                                }}>
+                                    ✅ Success
+                                </span>
+                            )}
+
+                            {message.type === 'warning' && (
+                                <span style={{
+                                    color: 'var(--color-warning-dark)',
+                                    fontSize: 'var(--font-size-xs)',
+                                    fontWeight: 'var(--font-weight-semibold)'
+                                }}>
+                                    ⚠️ Warning
+                                </span>
+                            )}
+
+                            {/* Delivery status for user messages */}
+                            {isUser && (
+                                <span style={{
+                                    color: 'var(--color-success)',
+                                    fontSize: 'var(--font-size-xs)',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                }}>
+                                    ✓✓
+                                </span>
+                            )}
+                        </div>
+
+                        {/* Timestamp */}
+                        <span style={{
+                            color: isUser ? 'rgba(255, 255, 255, 0.8)' : 'var(--color-text-muted)',
+                            fontSize: 'var(--font-size-xs)',
+                            fontWeight: 'var(--font-weight-medium)',
+                            fontFamily: 'monospace'
+                        }}>
+                            {formatTime(message.timestamp)}
+                        </span>
+                    </div>
                 </div>
             </div>
         </div>

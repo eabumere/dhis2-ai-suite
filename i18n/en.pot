@@ -5,8 +5,8 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
-"POT-Creation-Date: 2026-01-09T08:30:35.874Z\n"
-"PO-Revision-Date: 2026-01-09T08:30:35.874Z\n"
+"POT-Creation-Date: 2026-01-21T21:40:18.550Z\n"
+"PO-Revision-Date: 2026-01-21T21:40:18.550Z\n"
 
 msgid "ERROR"
 msgstr "ERROR"
@@ -19,9 +19,6 @@ msgstr "Hello {{name}}"
 
 msgid "DHIS2 Orchestrated Multi-Agent Assistant"
 msgstr "DHIS2 Orchestrated Multi-Agent Assistant"
-
-msgid "Error"
-msgstr "Error"
 
 msgid "Ask me anything about DHIS2..."
 msgstr "Ask me anything about DHIS2..."

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
+import LoadingSkeleton from './LoadingSkeleton';
 
 interface AnalyticsChartProps {
     chartData: any;
@@ -7,6 +8,7 @@ interface AnalyticsChartProps {
     title?: string;
     onFilter?: (filters: any) => void;
     onExport?: (format: string) => void;
+    isLoading?: boolean;
 }
 
 interface ChartFilter {
@@ -30,7 +32,8 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     chartId,
     title,
     onFilter,
-    onExport
+    onExport,
+    isLoading = false
 }) => {
     const [echartsOption, setEchartsOption] = useState<any>(null);
     const [fullChartData, setFullChartData] = useState<any>(null);
@@ -439,50 +442,110 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         // For PNG/SVG, the data would be handled by ECharts component
     };
 
-    if (!echartsOption) {
-        return (
-            <div style={{
-                padding: '20px',
-                textAlign: 'center',
-                color: '#666',
-                border: '1px solid #ddd',
-                borderRadius: '4px'
-            }}>
-                No chart data available
-            </div>
-        );
+    // Show skeleton when loading or no chart data
+    if (isLoading || !echartsOption) {
+        return <LoadingSkeleton type="chart" />;
     }
 
     return (
-        <div style={{ marginBottom: '30px' }}>
+        <div style={{
+            marginBottom: 'var(--space-8)',
+            backgroundColor: 'var(--color-bg-primary)',
+            border: '1px solid var(--color-border-light)',
+            borderRadius: 'var(--radius-lg)',
+            boxShadow: 'var(--shadow-md)',
+            overflow: 'hidden',
+            position: 'relative',
+            animation: 'fade-in-up var(--transition-normal)',
+            opacity: 1,
+            transform: 'translateY(0)'
+        }}>
             {/* Title */}
-            <div style={{ marginBottom: '15px' }}>
-                <h3 style={{ margin: 0, color: '#2c6693' }}>
-                    {title || chartData.title || 'Analytics Chart'}
+            <div style={{
+                marginBottom: 'var(--space-4)',
+                padding: 'var(--space-4) var(--space-6)',
+                background: 'linear-gradient(135deg, var(--color-primary-50), var(--color-primary-100))',
+                borderBottom: '1px solid var(--color-border-light)'
+            }}>
+                <h3 style={{
+                    margin: 0,
+                    color: 'var(--color-primary-700)',
+                    fontSize: 'var(--font-size-xl)',
+                    fontWeight: 'var(--font-weight-semibold)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    <span>📊</span>
+                    <span
+                        style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: '500px',
+                            cursor: 'default'
+                        }}
+                        title={title || chartData.title || 'Analytics Chart'}
+                    >
+                        {title || chartData.title || 'Analytics Chart'}
+                    </span>
                 </h3>
+                {chartData.data_summary && (
+                    <div style={{
+                        marginTop: 'var(--space-2)',
+                        fontSize: 'var(--font-size-sm)',
+                        color: 'var(--color-text-secondary)'
+                    }}>
+                        {chartData.data_summary.total_points && (
+                            <span>📈 {chartData.data_summary.total_points} data points</span>
+                        )}
+                        {chartData.data_summary.indicators_count && (
+                            <span> • 🎯 {chartData.data_summary.indicators_count} indicators</span>
+                        )}
+                        {chartData.data_summary.periods_count && (
+                            <span> • 📅 {chartData.data_summary.periods_count} periods</span>
+                        )}
+                        {chartData.data_summary.org_units_count && (
+                            <span> • 🏢 {chartData.data_summary.org_units_count} org units</span>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Collapsed/Expanded Filter Controls */}
             {Object.keys(filterOptions).length > 0 && (
                 <div style={{
-                    marginBottom: '15px',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '4px',
-                    overflow: 'hidden'
+                    margin: 'var(--space-4) var(--space-6)',
+                    border: '1px solid var(--color-border-light)',
+                    borderRadius: 'var(--radius-lg)',
+                    overflow: 'hidden',
+                    backgroundColor: 'var(--color-bg-primary)',
+                    boxShadow: 'var(--shadow-sm)'
                 }}>
                     {/* Filter Header - Always Visible */}
                     <div style={{
-                        backgroundColor: '#f8f9fa',
-                        padding: '10px 15px',
+                        background: 'linear-gradient(135deg, var(--color-gray-50), var(--color-gray-100))',
+                        padding: 'var(--space-3) var(--space-4)',
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         cursor: 'pointer',
-                        borderBottom: filtersExpanded ? '1px solid #e0e0e0' : 'none'
-                    }} onClick={() => setFiltersExpanded(!filtersExpanded)}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#2c6693' }}>
-                                📊 Filters
+                        borderBottom: filtersExpanded ? '1px solid var(--color-border-light)' : 'none',
+                        transition: 'var(--transition-fast)'
+                    }}
+                    className="hover-lift"
+                    onClick={() => setFiltersExpanded(!filtersExpanded)}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                            <span style={{
+                                fontSize: 'var(--font-size-sm)',
+                                fontWeight: 'var(--font-weight-semibold)',
+                                color: 'var(--color-primary-700)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 'var(--space-2)'
+                            }}>
+                                <span>🔍</span>
+                                Filters & Controls
                             </span>
                             {/* Show active filter count */}
                             {Object.keys(filters).some(key => {
@@ -493,12 +556,13 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                                 return (filterValue as string[])?.length > 0;
                             }) && (
                                 <span style={{
-                                    backgroundColor: '#007bff',
-                                    color: 'white',
-                                    padding: '2px 6px',
-                                    borderRadius: '10px',
-                                    fontSize: '11px',
-                                    fontWeight: 'bold'
+                                    background: 'linear-gradient(135deg, var(--color-primary), var(--color-primary-600))',
+                                    color: 'var(--color-text-inverse)',
+                                    padding: 'var(--space-1) var(--space-2)',
+                                    borderRadius: 'var(--radius-full)',
+                                    fontSize: 'var(--font-size-xs)',
+                                    fontWeight: 'var(--font-weight-bold)',
+                                    boxShadow: 'var(--shadow-sm)'
                                 }}>
                                     {Object.keys(filters).reduce((count, key) => {
                                         const filterValue = filters[key as keyof ChartFilter];
@@ -511,333 +575,665 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                             )}
                         </div>
                         <span style={{
-                            fontSize: '12px',
-                            color: '#666',
+                            fontSize: 'var(--font-size-sm)',
+                            color: 'var(--color-text-secondary)',
                             transform: filtersExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                            transition: 'transform 0.2s'
+                            transition: 'var(--transition-fast)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '20px',
+                            height: '20px',
+                            backgroundColor: 'var(--color-gray-200)',
+                            borderRadius: 'var(--radius-full)'
                         }}>
                             ▼
                         </span>
                     </div>
 
-                    {/* Expandable Filter Body */}
+                    {/* Expandable Filter Body - Enhanced with card-based filters */}
                     {filtersExpanded && (
                         <div style={{
-                            backgroundColor: '#f8f9fa',
-                            padding: '15px',
-                            borderTop: '1px solid #e9ecef'
+                            background: 'linear-gradient(135deg, var(--color-gray-50), var(--color-gray-100))',
+                            padding: 'var(--space-4)',
+                            borderTop: '1px solid var(--color-border-light)'
                         }}>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                                gap: 'var(--space-4)',
+                                marginBottom: 'var(--space-4)'
+                            }}>
                                 {/* Indicators filter */}
                                 {filterOptions.indicators && filterOptions.indicators.length > 1 && (
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
-                                            Indicators:
-                                        </label>
-                                        <select
-                                            multiple
-                                            disabled={isFiltering}
-                                            onChange={(e) => {
-                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                                handleFilterChange('indicators', values);
-                                            }}
-                                            style={{
-                                                minWidth: '120px',
-                                                padding: '4px',
-                                                border: '1px solid #ccc',
-                                                borderRadius: '3px',
-                                                minHeight: '50px',
-                                                fontSize: '11px'
-                                            }}
-                                        >
-                                            {filterOptions.indicators.map((indicator: string) => (
-                                                <option key={indicator} value={indicator}>
-                                                    {indicator.length > 20 ? indicator.substring(0, 17) + '...' : indicator}
-                                                </option>
-                                            ))}
-                                        </select>
+                                    <div style={{
+                                        backgroundColor: 'var(--color-bg-primary)',
+                                        border: '1px solid var(--color-border-light)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        padding: 'var(--space-3)',
+                                        boxShadow: 'var(--shadow-sm)'
+                                    }}>
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 'var(--space-2)',
+                                            marginBottom: 'var(--space-2)'
+                                        }}>
+                                            <span style={{
+                                                fontSize: 'var(--font-size-sm)',
+                                                fontWeight: 'var(--font-weight-semibold)',
+                                                color: 'var(--color-primary-700)'
+                                            }}>
+                                                🎯 Indicators
+                                            </span>
+                                            {filters.indicators?.length > 0 && (
+                                                <span style={{
+                                                    backgroundColor: 'var(--color-primary)',
+                                                    color: 'var(--color-text-inverse)',
+                                                    padding: 'var(--space-1) var(--space-2)',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: 'var(--font-size-xs)',
+                                                    fontWeight: 'var(--font-weight-bold)'
+                                                }}>
+                                                    {filters.indicators.length}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 'var(--space-2)'
+                                        }}>
+                                            {filterOptions.indicators.map((indicator: string) => {
+                                                const isSelected = filters.indicators?.includes(indicator);
+                                                return (
+                                                    <button
+                                                        key={indicator}
+                                                        onClick={() => {
+                                                            const newValues = isSelected
+                                                                ? filters.indicators?.filter(i => i !== indicator) || []
+                                                                : [...(filters.indicators || []), indicator];
+                                                            handleFilterChange('indicators', newValues);
+                                                        }}
+                                                        disabled={isFiltering}
+                                                        style={{
+                                                            padding: 'var(--space-2) var(--space-3)',
+                                                            backgroundColor: isSelected ? 'var(--color-primary)' : 'var(--color-bg-secondary)',
+                                                            color: isSelected ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                                            border: `1px solid ${isSelected ? 'var(--color-primary)' : 'var(--color-border-light)'}`,
+                                                            borderRadius: 'var(--radius-lg)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 'var(--font-size-sm)',
+                                                            fontWeight: isSelected ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                                            transition: 'var(--transition-fast)',
+                                                            maxWidth: '200px',
+                                                            overflow: 'hidden',
+                                                            textOverflow: 'ellipsis',
+                                                            whiteSpace: 'nowrap'
+                                                        }}
+                                                        className="hover-lift"
+                                                        title={indicator}
+                                                    >
+                                                        {indicator.length > 15 ? indicator.substring(0, 12) + '...' : indicator}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 )}
 
                                 {/* Periods filter */}
                                 {filterOptions.periods && filterOptions.periods.length > 0 && (
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
-                                            Periods:
-                                        </label>
-                                        <select
-                                            multiple
-                                            disabled={isFiltering}
-                                            onChange={(e) => {
-                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                                handleFilterChange('periods', values);
-                                            }}
-                                            style={{
-                                                minWidth: '100px',
-                                                padding: '4px',
-                                                border: '1px solid #ccc',
-                                                borderRadius: '3px',
-                                                minHeight: '50px',
-                                                fontSize: '11px'
-                                            }}
-                                        >
-                                            {filterOptions.periods.map((period: string) => (
-                                                <option key={period} value={period}>
-                                                    {period}
-                                                </option>
-                                            ))}
-                                        </select>
+                                    <div style={{
+                                        backgroundColor: 'var(--color-bg-primary)',
+                                        border: '1px solid var(--color-border-light)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        padding: 'var(--space-3)',
+                                        boxShadow: 'var(--shadow-sm)'
+                                    }}>
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 'var(--space-2)',
+                                            marginBottom: 'var(--space-2)'
+                                        }}>
+                                            <span style={{
+                                                fontSize: 'var(--font-size-sm)',
+                                                fontWeight: 'var(--font-weight-semibold)',
+                                                color: 'var(--color-warning-700)'
+                                            }}>
+                                                📅 Periods
+                                            </span>
+                                            {filters.periods?.length > 0 && (
+                                                <span style={{
+                                                    backgroundColor: 'var(--color-warning)',
+                                                    color: 'var(--color-text-inverse)',
+                                                    padding: 'var(--space-1) var(--space-2)',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: 'var(--font-size-xs)',
+                                                    fontWeight: 'var(--font-weight-bold)'
+                                                }}>
+                                                    {filters.periods.length}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 'var(--space-2)'
+                                        }}>
+                                            {filterOptions.periods.map((period: string) => {
+                                                const isSelected = filters.periods?.includes(period);
+                                                return (
+                                                    <button
+                                                        key={period}
+                                                        onClick={() => {
+                                                            const newValues = isSelected
+                                                                ? filters.periods?.filter(p => p !== period) || []
+                                                                : [...(filters.periods || []), period];
+                                                            handleFilterChange('periods', newValues);
+                                                        }}
+                                                        disabled={isFiltering}
+                                                        style={{
+                                                            padding: 'var(--space-2) var(--space-3)',
+                                                            backgroundColor: isSelected ? 'var(--color-warning)' : 'var(--color-bg-secondary)',
+                                                            color: isSelected ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                                            border: `1px solid ${isSelected ? 'var(--color-warning)' : 'var(--color-border-light)'}`,
+                                                            borderRadius: 'var(--radius-lg)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 'var(--font-size-sm)',
+                                                            fontWeight: isSelected ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                                            transition: 'var(--transition-fast)'
+                                                        }}
+                                                        className="hover-lift"
+                                                    >
+                                                        {period}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 )}
 
                                 {/* Organization Units filter */}
                                 {filterOptions.orgUnits && filterOptions.orgUnits.length > 1 && (
-                                    <div>
-                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
-                                            Organization Units:
-                                        </label>
-                                        <select
-                                            multiple
-                                            disabled={isFiltering}
-                                            onChange={(e) => {
-                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                                handleFilterChange('orgUnits', values);
-                                            }}
-                                            style={{
-                                                minWidth: '120px',
-                                                padding: '4px',
-                                                border: '1px solid #ccc',
-                                                borderRadius: '3px',
-                                                minHeight: '50px',
-                                                fontSize: '11px'
-                                            }}
-                                        >
-                                            {filterOptions.orgUnits.map((orgUnit: string) => (
-                                                <option key={orgUnit} value={orgUnit}>
-                                                    {orgUnit.length > 20 ? orgUnit.substring(0, 17) + '...' : orgUnit}
-                                                </option>
-                                            ))}
-                                        </select>
+                                    <div style={{
+                                        backgroundColor: 'var(--color-bg-primary)',
+                                        border: '1px solid var(--color-border-light)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        padding: 'var(--space-3)',
+                                        boxShadow: 'var(--shadow-sm)'
+                                    }}>
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 'var(--space-2)',
+                                            marginBottom: 'var(--space-2)'
+                                        }}>
+                                            <span style={{
+                                                fontSize: 'var(--font-size-sm)',
+                                                fontWeight: 'var(--font-weight-semibold)',
+                                                color: 'var(--color-info-700)'
+                                            }}>
+                                                🏢 Org Units
+                                            </span>
+                                            {filters.orgUnits?.length > 0 && (
+                                                <span style={{
+                                                    backgroundColor: 'var(--color-info)',
+                                                    color: 'var(--color-text-inverse)',
+                                                    padding: 'var(--space-1) var(--space-2)',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: 'var(--font-size-xs)',
+                                                    fontWeight: 'var(--font-weight-bold)'
+                                                }}>
+                                                    {filters.orgUnits.length}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 'var(--space-2)'
+                                        }}>
+                                            {filterOptions.orgUnits.map((orgUnit: string) => {
+                                                const isSelected = filters.orgUnits?.includes(orgUnit);
+                                                return (
+                                                    <button
+                                                        key={orgUnit}
+                                                        onClick={() => {
+                                                            const newValues = isSelected
+                                                                ? filters.orgUnits?.filter(o => o !== orgUnit) || []
+                                                                : [...(filters.orgUnits || []), orgUnit];
+                                                            handleFilterChange('orgUnits', newValues);
+                                                        }}
+                                                        disabled={isFiltering}
+                                                        style={{
+                                                            padding: 'var(--space-2) var(--space-3)',
+                                                            backgroundColor: isSelected ? 'var(--color-info)' : 'var(--color-bg-secondary)',
+                                                            color: isSelected ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                                            border: `1px solid ${isSelected ? 'var(--color-info)' : 'var(--color-border-light)'}`,
+                                                            borderRadius: 'var(--radius-lg)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 'var(--font-size-sm)',
+                                                            fontWeight: isSelected ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                                            transition: 'var(--transition-fast)',
+                                                            maxWidth: '200px',
+                                                            overflow: 'hidden',
+                                                            textOverflow: 'ellipsis',
+                                                            whiteSpace: 'nowrap'
+                                                        }}
+                                                        className="hover-lift"
+                                                        title={orgUnit}
+                                                    >
+                                                        {orgUnit.length > 15 ? orgUnit.substring(0, 12) + '...' : orgUnit}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 )}
 
-                                {/* Disaggregation filter controls - shown independently like categories */}
+                                {/* Disaggregation filter controls */}
                                 {filterOptions.disaggregations && filterOptions.disaggregations.length > 0 && filterOptions.disaggregations.map((disaggGroup: any) => (
-                                    <div key={disaggGroup.categoryId}>
-                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
-                                            {disaggGroup.categoryName}:
-                                        </label>
-                                        <select
-                                            multiple
-                                            disabled={isFiltering}
-                                            onChange={(e) => {
-                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                                // Update the disaggregations filter with option IDs
-                                                const newFilters = { ...filters, disaggregations: values };
-                                                setFilters(newFilters);
-                                                handleFilterChange('disaggregations', values);
-                                            }}
-                                            style={{
-                                                minWidth: '120px',
-                                                padding: '4px',
-                                                border: '1px solid #ccc',
-                                                borderRadius: '3px',
-                                                minHeight: '50px',
-                                                fontSize: '11px'
-                                            }}
-                                        >
-                                            {disaggGroup.options.map((option: {name: string, id: string}) => (
-                                                <option key={option.id} value={option.id}>
-                                                    {option.name.length > 20 ? option.name.substring(0, 17) + '...' : option.name}
-                                                </option>
-                                            ))}
-                                        </select>
+                                    <div key={disaggGroup.categoryId} style={{
+                                        backgroundColor: 'var(--color-bg-primary)',
+                                        border: '1px solid var(--color-border-light)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        padding: 'var(--space-3)',
+                                        boxShadow: 'var(--shadow-sm)'
+                                    }}>
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 'var(--space-2)',
+                                            marginBottom: 'var(--space-2)'
+                                        }}>
+                                            <span style={{
+                                                fontSize: 'var(--font-size-sm)',
+                                                fontWeight: 'var(--font-weight-semibold)',
+                                                color: 'var(--color-secondary-700)'
+                                            }}>
+                                                📊 {disaggGroup.categoryName}
+                                            </span>
+                                            {filters.disaggregations?.length > 0 && (
+                                                <span style={{
+                                                    backgroundColor: 'var(--color-secondary)',
+                                                    color: 'var(--color-text-inverse)',
+                                                    padding: 'var(--space-1) var(--space-2)',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: 'var(--font-size-xs)',
+                                                    fontWeight: 'var(--font-weight-bold)'
+                                                }}>
+                                                    {filters.disaggregations.length}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 'var(--space-2)'
+                                        }}>
+                                            {disaggGroup.options.map((option: {name: string, id: string}) => {
+                                                const isSelected = filters.disaggregations?.includes(option.id);
+                                                return (
+                                                    <button
+                                                        key={option.id}
+                                                        onClick={() => {
+                                                            const newValues = isSelected
+                                                                ? filters.disaggregations?.filter(d => d !== option.id) || []
+                                                                : [...(filters.disaggregations || []), option.id];
+                                                            const newFilters = { ...filters, disaggregations: newValues };
+                                                            setFilters(newFilters);
+                                                            handleFilterChange('disaggregations', newValues);
+                                                        }}
+                                                        disabled={isFiltering}
+                                                        style={{
+                                                            padding: 'var(--space-2) var(--space-3)',
+                                                            backgroundColor: isSelected ? 'var(--color-secondary)' : 'var(--color-bg-secondary)',
+                                                            color: isSelected ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                                            border: `1px solid ${isSelected ? 'var(--color-secondary)' : 'var(--color-border-light)'}`,
+                                                            borderRadius: 'var(--radius-lg)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 'var(--font-size-sm)',
+                                                            fontWeight: isSelected ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                                            transition: 'var(--transition-fast)'
+                                                        }}
+                                                        className="hover-lift"
+                                                    >
+                                                        {option.name}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 ))}
 
-                                {/* Category-specific filter controls - shown independently */}
+                                {/* Category-specific filter controls */}
                                 {filterOptions.categories && filterOptions.categories.length > 0 && filterOptions.categories.map((categoryGroup: any) => (
-                                    <div key={categoryGroup.categoryId}>
-                                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '12px' }}>
-                                            {categoryGroup.name}:
-                                        </label>
-                                        <select
-                                            multiple
-                                            disabled={isFiltering}
-                                            onChange={(e) => {
-                                                const values = Array.from(e.target.selectedOptions, opt => opt.value);
-                                                // Update the categories filter
-                                                const newCategories = { ...filters.categories, [categoryGroup.categoryId]: values };
-                                                const newFilters = { ...filters, categories: newCategories };
-                                                setFilters(newFilters);
-                                                handleCategoryFilterChange(categoryGroup.categoryId, values, newFilters);
-                                            }}
-                                            style={{
-                                                minWidth: '120px',
-                                                padding: '4px',
-                                                border: '1px solid #ccc',
-                                                borderRadius: '3px',
-                                                minHeight: '50px',
-                                                fontSize: '11px'
-                                            }}
-                                        >
-                                            {categoryGroup.options.map((option: {name: string, id: string}) => (
-                                                <option key={option.id} value={option.name}>
-                                                    {option.name.length > 20 ? option.name.substring(0, 17) + '...' : option.name}
-                                                </option>
-                                            ))}
-                                        </select>
+                                    <div key={categoryGroup.categoryId} style={{
+                                        backgroundColor: 'var(--color-bg-primary)',
+                                        border: '1px solid var(--color-border-light)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        padding: 'var(--space-3)',
+                                        boxShadow: 'var(--shadow-sm)'
+                                    }}>
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 'var(--space-2)',
+                                            marginBottom: 'var(--space-2)'
+                                        }}>
+                                            <span style={{
+                                                fontSize: 'var(--font-size-sm)',
+                                                fontWeight: 'var(--font-weight-semibold)',
+                                                color: 'var(--color-success-700)'
+                                            }}>
+                                                🏷️ {categoryGroup.name}
+                                            </span>
+                                            {(filters.categories?.[categoryGroup.categoryId]?.length || 0) > 0 && (
+                                                <span style={{
+                                                    backgroundColor: 'var(--color-success)',
+                                                    color: 'var(--color-text-inverse)',
+                                                    padding: 'var(--space-1) var(--space-2)',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: 'var(--font-size-xs)',
+                                                    fontWeight: 'var(--font-weight-bold)'
+                                                }}>
+                                                    {filters.categories[categoryGroup.categoryId].length}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 'var(--space-2)'
+                                        }}>
+                                            {categoryGroup.options.map((option: {name: string, id: string}) => {
+                                                const isSelected = filters.categories?.[categoryGroup.categoryId]?.includes(option.name);
+                                                return (
+                                                    <button
+                                                        key={option.id}
+                                                        onClick={() => {
+                                                            const currentValues = filters.categories?.[categoryGroup.categoryId] || [];
+                                                            const newValues = isSelected
+                                                                ? currentValues.filter(v => v !== option.name)
+                                                                : [...currentValues, option.name];
+                                                            const newCategories = { ...filters.categories, [categoryGroup.categoryId]: newValues };
+                                                            const newFilters = { ...filters, categories: newCategories };
+                                                            setFilters(newFilters);
+                                                            handleCategoryFilterChange(categoryGroup.categoryId, newValues, newFilters);
+                                                        }}
+                                                        disabled={isFiltering}
+                                                        style={{
+                                                            padding: 'var(--space-2) var(--space-3)',
+                                                            backgroundColor: isSelected ? 'var(--color-success)' : 'var(--color-bg-secondary)',
+                                                            color: isSelected ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                                            border: `1px solid ${isSelected ? 'var(--color-success)' : 'var(--color-border-light)'}`,
+                                                            borderRadius: 'var(--radius-lg)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 'var(--font-size-sm)',
+                                                            fontWeight: isSelected ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                                            transition: 'var(--transition-fast)'
+                                                        }}
+                                                        className="hover-lift"
+                                                    >
+                                                        {option.name}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 ))}
+                            </div>
 
+                            {/* Action buttons */}
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}>
                                 {/* Reset Filters Button */}
                                 {(filters.indicators?.length || filters.periods?.length || filters.orgUnits?.length || filters.disaggregations?.length || (filters.categories && Object.values(filters.categories).some(arr => arr?.length > 0))) && (
+                                    <button
+                                        onClick={() => resetFilters()}
+                                        disabled={isFiltering}
+                                        style={{
+                                            padding: 'var(--space-2) var(--space-4)',
+                                            backgroundColor: 'var(--color-gray-600)',
+                                            color: 'var(--color-text-inverse)',
+                                            border: 'none',
+                                            borderRadius: 'var(--radius-lg)',
+                                            cursor: 'pointer',
+                                            fontSize: 'var(--font-size-sm)',
+                                            fontWeight: 'var(--font-weight-medium)',
+                                            transition: 'var(--transition-fast)',
+                                            boxShadow: 'var(--shadow-sm)'
+                                        }}
+                                        className="hover-lift"
+                                    >
+                                        🔄 Reset All Filters
+                                    </button>
+                                )}
+
+                                {/* Filter status */}
+                                {isFiltering && (
                                     <div style={{
                                         display: 'flex',
-                                        alignItems: 'flex-end',
-                                        marginBottom: '8px'
+                                        alignItems: 'center',
+                                        gap: 'var(--space-2)',
+                                        fontSize: 'var(--font-size-sm)',
+                                        color: 'var(--color-text-secondary)'
                                     }}>
-                                        <button
-                                            onClick={() => resetFilters()}
-                                            disabled={isFiltering}
-                                            style={{
-                                                padding: '6px 10px',
-                                                backgroundColor: '#6c757d',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '3px',
-                                                cursor: 'pointer',
-                                                fontSize: '11px'
-                                            }}
-                                        >
-                                            Reset Filters
-                                        </button>
+                                        <div style={{
+                                            width: '16px',
+                                            height: '16px',
+                                            border: '2px solid var(--color-primary)',
+                                            borderTop: '2px solid transparent',
+                                            borderRadius: '50%',
+                                            animation: 'spin 1s linear infinite'
+                                        }}></div>
+                                        <span>Applying filters...</span>
                                     </div>
                                 )}
                             </div>
-
-                            {isFiltering && (
-                                <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                                    Applying filters...
-                                </div>
-                            )}
                         </div>
                     )}
                 </div>
             )}
 
-            {/* Chart Type and Export Controls */}
+            {/* Enhanced Chart Type and Export Controls */}
             <div style={{
+                margin: 'var(--space-4) var(--space-6)',
+                background: 'linear-gradient(135deg, var(--color-gray-50), var(--color-gray-100))',
+                border: '1px solid var(--color-border-light)',
+                borderRadius: 'var(--radius-lg)',
+                padding: 'var(--space-4)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                marginBottom: '15px',
-                padding: '10px 15px',
-                backgroundColor: '#f8f9fa',
-                border: '1px solid #e0e0e0',
-                borderRadius: '4px'
+                gap: 'var(--space-4)',
+                flexWrap: 'wrap',
+                boxShadow: 'var(--shadow-sm)'
             }}>
-                {/* Chart Type Dropdown */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#2c6693' }}>
-                        Chart Type:
-                    </label>
-                    <select
-                        value={chartType}
-                        onChange={(e) => handleChartTypeChange(e.target.value)}
-                        disabled={isFiltering}
-                        style={{
-                            padding: '6px 8px',
-                            border: '1px solid #ccc',
-                            borderRadius: '3px',
-                            backgroundColor: 'white',
-                            fontSize: '12px',
-                            minWidth: '80px'
-                        }}
-                    >
-                        <option value="bar">Bar</option>
-                        <option value="line">Line</option>
-                        <option value="pie">Pie</option>
-                    </select>
+                {/* Chart Type Selector */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-3)',
+                    flexShrink: 0
+                }}>
+                    <span style={{
+                        fontSize: 'var(--font-size-sm)',
+                        fontWeight: 'var(--font-weight-semibold)',
+                        color: 'var(--color-primary-700)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)'
+                    }}>
+                        <span>📈</span>
+                        Chart Type
+                    </span>
+                    <div style={{
+                        position: 'relative',
+                        display: 'flex',
+                        gap: 'var(--space-1)'
+                    }}>
+                        {[
+                            { type: 'bar', icon: '📊', label: 'Bar' },
+                            { type: 'line', icon: '📈', label: 'Line' },
+                            { type: 'pie', icon: '🥧', label: 'Pie' }
+                        ].map(({ type, icon, label }) => (
+                            <button
+                                key={type}
+                                onClick={() => handleChartTypeChange(type)}
+                                disabled={isFiltering}
+                                style={{
+                                    padding: 'var(--space-2) var(--space-3)',
+                                    backgroundColor: chartType === type ? 'var(--color-primary)' : 'var(--color-bg-primary)',
+                                    color: chartType === type ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                    border: `1px solid ${chartType === type ? 'var(--color-primary)' : 'var(--color-border-light)'}`,
+                                    borderRadius: 'var(--radius-md)',
+                                    cursor: 'pointer',
+                                    fontSize: 'var(--font-size-sm)',
+                                    fontWeight: 'var(--font-weight-medium)',
+                                    transition: 'var(--transition-fast)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 'var(--space-2)',
+                                    minWidth: '70px',
+                                    justifyContent: 'center',
+                                    boxShadow: chartType === type ? 'var(--shadow-sm)' : 'none'
+                                }}
+                                className="hover-lift"
+                                title={`Switch to ${label} chart`}
+                            >
+                                <span>{icon}</span>
+                                <span>{label}</span>
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
-                {/* Export Buttons */}
-                <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                        onClick={() => handleExport('png')}
-                        disabled={isFiltering}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#4CAF50',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        PNG
-                    </button>
-                    <button
-                        onClick={() => handleExport('svg')}
-                        disabled={isFiltering}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#2196F3',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        SVG
-                    </button>
-                    <button
-                        onClick={() => handleExport('csv')}
-                        disabled={isFiltering}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#FF9800',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        CSV
-                    </button>
-                    <button
-                        onClick={() => handleExport('json')}
-                        disabled={isFiltering}
-                        style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            backgroundColor: '#9C27B0',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '3px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        JSON
-                    </button>
+                {/* Export Controls */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-3)',
+                    flexShrink: 0
+                }}>
+                    <span style={{
+                        fontSize: 'var(--font-size-sm)',
+                        fontWeight: 'var(--font-weight-semibold)',
+                        color: 'var(--color-primary-700)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)'
+                    }}>
+                        <span>💾</span>
+                        Export
+                    </span>
+                    <div style={{
+                        display: 'flex',
+                        gap: 'var(--space-2)',
+                        flexWrap: 'wrap'
+                    }}>
+                        {[
+                            { format: 'png', icon: '🖼️', label: 'PNG', color: 'var(--color-success)' },
+                            { format: 'svg', icon: '🎨', label: 'SVG', color: 'var(--color-info)' },
+                            { format: 'csv', icon: '📊', label: 'CSV', color: 'var(--color-warning)' },
+                            { format: 'json', icon: '📋', label: 'JSON', color: 'var(--color-secondary)' }
+                        ].map(({ format, icon, label, color }) => (
+                            <button
+                                key={format}
+                                onClick={() => handleExport(format)}
+                                disabled={isFiltering}
+                                style={{
+                                    padding: 'var(--space-2) var(--space-3)',
+                                    backgroundColor: color,
+                                    color: 'var(--color-text-inverse)',
+                                    border: 'none',
+                                    borderRadius: 'var(--radius-md)',
+                                    cursor: 'pointer',
+                                    fontSize: 'var(--font-size-sm)',
+                                    fontWeight: 'var(--font-weight-medium)',
+                                    transition: 'var(--transition-fast)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 'var(--space-2)',
+                                    minWidth: '65px',
+                                    justifyContent: 'center',
+                                    boxShadow: 'var(--shadow-sm)'
+                                }}
+                                className="hover-lift"
+                                title={`Export as ${label.toUpperCase()}`}
+                            >
+                                <span>{icon}</span>
+                                <span>{label}</span>
+                            </button>
+                        ))}
+                    </div>
                 </div>
+
+                {/* Loading Indicator */}
+                {isFiltering && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '50%',
+                        left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        backgroundColor: 'var(--color-bg-primary)',
+                        padding: 'var(--space-2) var(--space-4)',
+                        borderRadius: 'var(--radius-md)',
+                        boxShadow: 'var(--shadow-lg)',
+                        border: '1px solid var(--color-border-light)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)',
+                        zIndex: 10
+                    }}>
+                        <div style={{
+                            width: '16px',
+                            height: '16px',
+                            border: '2px solid var(--color-primary)',
+                            borderTop: '2px solid transparent',
+                            borderRadius: '50%',
+                            animation: 'spin 1s linear infinite'
+                        }}></div>
+                        <span style={{
+                            fontSize: 'var(--font-size-sm)',
+                            color: 'var(--color-text-primary)',
+                            fontWeight: 'var(--font-weight-medium)'
+                        }}>
+                            Updating chart...
+                        </span>
+                    </div>
+                )}
             </div>
 
-            {/* Chart Display */}
+            {/* Chart Display - Responsive height using available screen space */}
             <div style={{
-                border: '1px solid #e0e0e0',
-                borderRadius: '4px',
+                border: '1px solid var(--color-border-light)',
+                borderRadius: 'var(--radius-lg)',
                 overflow: 'hidden',
-                backgroundColor: 'white'
+                backgroundColor: 'var(--color-bg-primary)',
+                minHeight: '300px',
+                maxHeight: '60vh', // Use up to 60% of viewport height
+                display: 'flex',
+                flexDirection: 'column'
             }}>
                 <ReactECharts
                     ref={echartsRef}
                     option={echartsOption}
-                    style={{ height: '400px', width: '100%' }}
-                    opts={{ renderer: 'canvas' }}
+                    style={{
+                        height: '100%',
+                        width: '100%',
+                        minHeight: '300px',
+                        flex: 1
+                    }}
+                    opts={{
+                        renderer: 'canvas',
+                        devicePixelRatio: window.devicePixelRatio || 1
+                    }}
                 />
             </div>
 

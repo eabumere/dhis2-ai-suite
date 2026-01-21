@@ -1,4 +1,4 @@
-import React, { FC } from 'react';
+import React, { FC, useEffect, useState } from 'react';
 
 export interface ProgressStep {
     id: string;
@@ -23,6 +23,64 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
     messages = [],
     compact = false
 }) => {
+    const [persistedState, setPersistedState] = useState<{
+        steps: ProgressStep[];
+        currentStep?: string;
+        overallProgress: number;
+        messages: string[];
+        timestamp: number;
+    } | null>(null);
+
+    // Generate a unique key for this progress indicator instance
+    const persistenceKey = `progress_indicator_${steps.length}_${steps.map(s => s.id).join('_')}`;
+
+    // Load persisted state on mount
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem(persistenceKey);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                // Only restore if data is less than 24 hours old
+                const age = Date.now() - parsed.timestamp;
+                if (age < 24 * 60 * 60 * 1000) { // 24 hours
+                    setPersistedState(parsed);
+                } else {
+                    // Clear expired data
+                    localStorage.removeItem(persistenceKey);
+                }
+            }
+        } catch (error) {
+            console.warn('Failed to load persisted progress state:', error);
+        }
+    }, [persistenceKey]);
+
+    // Save state whenever props change (but not too frequently)
+    useEffect(() => {
+        const stateToSave = {
+            steps,
+            currentStep,
+            overallProgress,
+            messages,
+            timestamp: Date.now()
+        };
+
+        // Debounce saves to avoid excessive localStorage writes
+        const timeoutId = setTimeout(() => {
+            try {
+                localStorage.setItem(persistenceKey, JSON.stringify(stateToSave));
+            } catch (error) {
+                console.warn('Failed to save progress state:', error);
+            }
+        }, 500); // 500ms debounce
+
+        return () => clearTimeout(timeoutId);
+    }, [steps, currentStep, overallProgress, messages, persistenceKey]);
+
+    // Merge props with persisted state (props take precedence for active data)
+    const effectiveSteps = steps.length > 0 ? steps : (persistedState?.steps || []);
+    const effectiveCurrentStep = currentStep || persistedState?.currentStep;
+    const effectiveOverallProgress = overallProgress > 0 ? overallProgress : (persistedState?.overallProgress || 0);
+    const effectiveMessages = messages.length > 0 ? messages : (persistedState?.messages || []);
     const getStepIcon = (status: ProgressStep['status']) => {
         switch (status) {
             case 'completed':
@@ -80,7 +138,7 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
                             Overall Progress
                         </span>
                         <span style={{ fontSize: '12px', color: '#666' }}>
-                            {Math.round(overallProgress)}%
+                            {Math.round(effectiveOverallProgress)}%
                         </span>
                     </div>
                     <div style={{
@@ -91,7 +149,7 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
                         overflow: 'hidden'
                     }}>
                         <div style={{
-                            width: `${overallProgress}%`,
+                            width: `${effectiveOverallProgress}%`,
                             height: '100%',
                             backgroundColor: '#2196f3',
                             transition: 'width 0.3s ease'
@@ -100,7 +158,7 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
                 </div>
 
                 {/* Current Step Info */}
-                {currentStep && (
+                {effectiveCurrentStep && (
                     <div style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -110,20 +168,20 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
                     }}>
                         <span>🔄</span>
                         <span>
-                            {steps.find(s => s.id === currentStep)?.label || currentStep}
+                            {effectiveSteps.find(s => s.id === effectiveCurrentStep)?.label || effectiveCurrentStep}
                         </span>
                     </div>
                 )}
 
                 {/* Latest Message */}
-                {messages.length > 0 && (
+                {effectiveMessages.length > 0 && (
                     <div style={{
                         marginTop: '8px',
                         fontSize: '13px',
                         color: '#666',
                         fontStyle: 'italic'
                     }}>
-                        {messages[messages.length - 1]}
+                        {effectiveMessages[effectiveMessages.length - 1]}
                     </div>
                 )}
             </div>
@@ -158,7 +216,7 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
                     marginBottom: '8px'
                 }}>
                     <span style={{ fontSize: '14px', color: '#666' }}>Overall Progress</span>
-                    <span style={{ fontSize: '12px', color: '#666' }}>{Math.round(overallProgress)}%</span>
+                    <span style={{ fontSize: '12px', color: '#666' }}>{Math.round(effectiveOverallProgress)}%</span>
                 </div>
                 <div style={{
                     width: '100%',
@@ -168,7 +226,7 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
                     overflow: 'hidden'
                 }}>
                     <div style={{
-                        width: `${overallProgress}%`,
+                        width: `${effectiveOverallProgress}%`,
                         height: '100%',
                         backgroundColor: '#2196f3',
                         transition: 'width 0.5s ease'
@@ -178,8 +236,8 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
 
             {/* Steps */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {steps.map((step, index) => {
-                    const isLast = index === steps.length - 1;
+                {effectiveSteps.map((step, index) => {
+                    const isLast = index === effectiveSteps.length - 1;
                     const stepColor = getStepColor(step.status);
 
                     return (
@@ -260,7 +318,7 @@ const ProgressIndicator: FC<ProgressIndicatorProps> = ({
             </div>
 
             {/* Current Messages */}
-            {messages.length > 0 && (
+            {effectiveMessages.length > 0 && (
                 <div style={{
                     marginTop: '20px',
                     padding: '12px',

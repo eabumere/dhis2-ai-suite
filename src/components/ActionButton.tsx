@@ -1,4 +1,5 @@
 import React, { FC, ButtonHTMLAttributes } from 'react';
+import LoadingSpinner from './LoadingSpinner';
 
 export type ActionButtonVariant = 'retry' | 'skip' | 'manual' | 'alternative' | 'cancel' | 'primary' | 'secondary';
 export type ActionButtonSize = 'small' | 'medium' | 'large';
@@ -8,6 +9,7 @@ interface ActionButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>
     size?: ActionButtonSize;
     loading?: boolean;
     fullWidth?: boolean;
+    className?: string;
 }
 
 const ActionButton: FC<ActionButtonProps> = ({
@@ -18,64 +20,76 @@ const ActionButton: FC<ActionButtonProps> = ({
     children,
     disabled,
     style,
+    className = '',
     ...props
 }) => {
     const getVariantStyles = (variant: ActionButtonVariant, disabled: boolean, loading: boolean) => {
         const baseStyles = {
             border: 'none',
-            borderRadius: '6px',
-            fontWeight: '500',
+            borderRadius: 'var(--radius-md)',
+            fontWeight: 'var(--font-weight-medium)',
             cursor: disabled || loading ? 'not-allowed' : 'pointer',
-            transition: 'all 0.2s ease',
+            transition: 'all var(--transition-fast)',
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '6px',
+            gap: 'var(--space-2)',
             fontFamily: 'inherit',
             textDecoration: 'none',
-            outline: 'none'
+            outline: 'none',
+            position: 'relative' as const,
+            overflow: 'hidden'
         };
+
+        if (disabled || loading) {
+            return {
+                ...baseStyles,
+                backgroundColor: 'var(--color-gray-200)',
+                color: 'var(--color-text-disabled)',
+                cursor: 'not-allowed'
+            };
+        }
 
         const variantConfigs = {
             retry: {
-                backgroundColor: disabled || loading ? '#cccccc' : '#2196f3',
-                color: 'white',
-                border: '1px solid #1976d2',
+                backgroundColor: 'var(--color-info)',
+                color: 'var(--color-text-inverse)',
+                boxShadow: 'var(--shadow-sm)',
                 icon: '🔄'
             },
             skip: {
-                backgroundColor: disabled || loading ? '#f5f5f5' : '#f5f5f5',
-                color: disabled || loading ? '#999' : '#666',
-                border: '1px solid #ddd',
+                backgroundColor: 'var(--color-bg-secondary)',
+                color: 'var(--color-text-secondary)',
+                border: '1px solid var(--color-border-light)',
                 icon: '⏭️'
             },
             manual: {
-                backgroundColor: disabled || loading ? '#cccccc' : '#ff9800',
-                color: 'white',
-                border: '1px solid #f57c00',
+                backgroundColor: 'var(--color-warning)',
+                color: 'var(--color-text-inverse)',
+                boxShadow: 'var(--shadow-sm)',
                 icon: '✏️'
             },
             alternative: {
-                backgroundColor: disabled || loading ? '#cccccc' : '#9c27b0',
-                color: 'white',
-                border: '1px solid #7b1fa2',
+                backgroundColor: 'var(--color-primary-600)',
+                color: 'var(--color-text-inverse)',
+                boxShadow: 'var(--shadow-sm)',
                 icon: '🔀'
             },
             cancel: {
-                backgroundColor: disabled || loading ? '#f5f5f5' : '#f5f5f5',
-                color: disabled || loading ? '#999' : '#666',
-                border: '1px solid #ddd',
+                backgroundColor: 'var(--color-bg-secondary)',
+                color: 'var(--color-text-secondary)',
+                border: '1px solid var(--color-border-light)',
                 icon: '❌'
             },
             primary: {
-                backgroundColor: disabled || loading ? '#cccccc' : '#2196f3',
-                color: 'white',
-                border: '1px solid #1976d2',
+                backgroundColor: 'var(--color-primary)',
+                color: 'var(--color-text-inverse)',
+                boxShadow: 'var(--shadow-sm)',
                 icon: null
             },
             secondary: {
-                backgroundColor: disabled || loading ? '#f5f5f5' : '#f5f5f5',
-                color: disabled || loading ? '#999' : '#666',
-                border: '1px solid #ddd',
+                backgroundColor: 'var(--color-bg-secondary)',
+                color: 'var(--color-text-secondary)',
+                border: '1px solid var(--color-border-light)',
                 icon: null
             }
         };
@@ -89,23 +103,65 @@ const ActionButton: FC<ActionButtonProps> = ({
     const getSizeStyles = (size: ActionButtonSize) => {
         const sizeConfigs = {
             small: {
-                padding: '6px 12px',
-                fontSize: '12px',
-                minHeight: '28px'
+                padding: 'var(--space-2) var(--space-3)',
+                fontSize: 'var(--font-size-sm)',
+                height: '32px',
+                minWidth: '32px'
             },
             medium: {
-                padding: '8px 16px',
-                fontSize: '14px',
-                minHeight: '36px'
+                padding: 'var(--space-2) var(--space-4)',
+                fontSize: 'var(--font-size-sm)',
+                height: '36px',
+                minWidth: '36px'
             },
             large: {
-                padding: '12px 24px',
-                fontSize: '16px',
-                minHeight: '44px'
+                padding: 'var(--space-3) var(--space-6)',
+                fontSize: 'var(--font-size-md)',
+                height: '44px',
+                minWidth: '44px'
             }
         };
 
         return sizeConfigs[size];
+    };
+
+    const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+        if (disabled || loading) return;
+
+        const target = e.currentTarget;
+        const variantStyles = getVariantStyles(variant, false, false);
+
+        // Apply hover effects based on variant
+        switch (variant) {
+            case 'primary':
+            case 'retry':
+            case 'manual':
+            case 'alternative':
+                target.style.backgroundColor = variant === 'primary' ? 'var(--color-primary-600)' :
+                                            variant === 'retry' ? 'var(--color-info-dark)' :
+                                            variant === 'manual' ? 'var(--color-warning-dark)' :
+                                            'var(--color-primary-700)';
+                target.style.transform = 'translateY(-1px)';
+                target.style.boxShadow = 'var(--shadow-md)';
+                break;
+            case 'skip':
+            case 'cancel':
+            case 'secondary':
+                target.style.backgroundColor = 'var(--color-gray-100)';
+                break;
+        }
+    };
+
+    const handleMouseLeave = (e: React.MouseEvent<HTMLButtonElement>) => {
+        if (disabled || loading) return;
+
+        const target = e.currentTarget;
+        const variantStyles = getVariantStyles(variant, false, false);
+
+        // Reset to original styles
+        target.style.backgroundColor = (variantStyles as any).backgroundColor;
+        target.style.transform = 'translateY(0)';
+        target.style.boxShadow = (variantStyles as any).boxShadow || 'none';
     };
 
     const variantStyles = getVariantStyles(variant, !!disabled, loading);
@@ -136,10 +192,11 @@ const ActionButton: FC<ActionButtonProps> = ({
     return (
         <button
             style={finalStyles}
+            className={`btn-hover-scale ${className}`}
             disabled={disabled || loading}
             {...props}
         >
-            {loading && <span style={{ fontSize: '12px' }}>⏳</span>}
+            {loading && <LoadingSpinner size="small" variant="secondary" />}
             {icon && !loading && <span style={{ fontSize: '12px' }}>{icon}</span>}
             {children}
         </button>

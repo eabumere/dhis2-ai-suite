@@ -3,6 +3,7 @@ import {Alert, Button, Input, Modal, Progress, Select, Spin, Table, Tag} from 'a
 import {ReloadOutlined, RobotOutlined, SettingOutlined, UploadOutlined} from '@ant-design/icons';
 import {matchPdfHeadersToMapping, validateHeaderMatchingResult} from '../utils/tools/metadata/header-matching';
 import {dhis2Config} from '../utils/env-config';
+import LoadingSkeleton from './LoadingSkeleton';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -265,37 +266,243 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
 
     const trackerColumns = [
         {
-            title: 'Patient ID',
+            title: (
+                <div style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 'var(--font-size-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    👤 Patient ID
+                </div>
+            ),
             dataIndex: 'trackedEntityInstance',
             key: 'trackedEntityInstance',
-            width: 200,
+            width: 220,
+            onCell: (record: any) => ({
+                style: {
+                    transition: 'var(--transition-fast)',
+                },
+                onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = 'var(--color-primary-50)';
+                    target.style.transform = 'scale(1.01)';
+                },
+                onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = '';
+                    target.style.transform = '';
+                }
+            }),
+            render: (id: string) => (
+                <div style={{
+                    fontFamily: 'monospace',
+                    fontSize: 'var(--font-size-sm)',
+                    color: 'var(--color-primary-700)',
+                    fontWeight: 'var(--font-weight-medium)',
+                    backgroundColor: 'var(--color-primary-50)',
+                    padding: 'var(--space-1) var(--space-2)',
+                    borderRadius: 'var(--radius-md)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                }}>
+                    {id}
+                </div>
+            ),
         },
         {
-            title: 'Program',
+            title: (
+                <div style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 'var(--font-size-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    🏥 Program
+                </div>
+            ),
             dataIndex: 'program',
             key: 'program',
-            width: 150,
+            width: 180,
+            onCell: (record: any) => ({
+                style: {
+                    transition: 'var(--transition-fast)',
+                },
+                onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = 'var(--color-success-50)';
+                    target.style.transform = 'scale(1.01)';
+                },
+                onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = '';
+                    target.style.transform = '';
+                }
+            }),
+            render: (program: string) => (
+                <div style={{
+                    color: 'var(--color-success-700)',
+                    fontWeight: 'var(--font-weight-medium)',
+                    backgroundColor: 'var(--color-success-50)',
+                    padding: 'var(--space-1) var(--space-2)',
+                    borderRadius: 'var(--radius-md)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                }}>
+                    {program}
+                </div>
+            ),
         },
         {
-            title: 'Org Unit',
+            title: (
+                <div style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 'var(--font-size-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    📍 Org Unit
+                </div>
+            ),
             dataIndex: 'orgUnit',
             key: 'orgUnit',
-            width: 150,
+            width: 180,
+            onCell: (record: any) => ({
+                style: {
+                    transition: 'var(--transition-fast)',
+                },
+                onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = 'var(--color-info-50)';
+                    target.style.transform = 'scale(1.01)';
+                },
+                onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = '';
+                    target.style.transform = '';
+                }
+            }),
+            render: (orgUnit: string) => (
+                <div style={{
+                    color: 'var(--color-info-700)',
+                    fontWeight: 'var(--font-weight-medium)',
+                    backgroundColor: 'var(--color-info-50)',
+                    padding: 'var(--space-1) var(--space-2)',
+                    borderRadius: 'var(--radius-md)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                }}>
+                    {orgUnit}
+                </div>
+            ),
         },
         {
-            title: 'Enrollment Date',
+            title: (
+                <div style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 'var(--font-size-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    📅 Enrollment Date
+                </div>
+            ),
             dataIndex: 'enrollmentDate',
             key: 'enrollmentDate',
-            render: (date: string) => new Date(date).toLocaleDateString(),
-            width: 120,
+            width: 140,
+            onCell: (record: any) => ({
+                style: {
+                    transition: 'var(--transition-fast)',
+                },
+                onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = 'var(--color-warning-50)';
+                    target.style.transform = 'scale(1.01)';
+                },
+                onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = '';
+                    target.style.transform = '';
+                }
+            }),
+            render: (date: string) => {
+                const formattedDate = new Date(date).toLocaleDateString();
+                return (
+                    <div style={{
+                        color: 'var(--color-warning-700)',
+                        fontWeight: 'var(--font-weight-medium)',
+                        backgroundColor: 'var(--color-warning-50)',
+                        padding: 'var(--space-1) var(--space-2)',
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: 'var(--font-size-sm)',
+                        textAlign: 'center'
+                    }}>
+                        {formattedDate}
+                    </div>
+                );
+            },
         },
         {
-            title: 'Attributes',
+            title: (
+                <div style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 'var(--font-size-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    📊 Attributes
+                </div>
+            ),
             dataIndex: 'attributes',
             key: 'attributes',
-            render: (attributes: Array<{attribute: string, value: string}>) =>
-                `${attributes.length} attributes`,
-            width: 120,
+            width: 140,
+            onCell: (record: any) => ({
+                style: {
+                    transition: 'var(--transition-fast)',
+                },
+                onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = 'var(--color-gray-50)';
+                    target.style.transform = 'scale(1.01)';
+                },
+                onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    const target = e.currentTarget as HTMLTableCellElement;
+                    target.style.backgroundColor = '';
+                    target.style.transform = '';
+                }
+            }),
+            render: (attributes: Array<{attribute: string, value: string}>) => {
+                const count = attributes?.length || 0;
+                return (
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)',
+                        padding: 'var(--space-1) var(--space-2)',
+                        backgroundColor: count > 0 ? 'var(--color-gray-100)' : 'var(--color-gray-50)',
+                        borderRadius: 'var(--radius-lg)',
+                        fontSize: 'var(--font-size-sm)',
+                        fontWeight: 'var(--font-weight-medium)',
+                        color: count > 0 ? 'var(--color-text-primary)' : 'var(--color-text-muted)'
+                    }}>
+                        <span>📋</span>
+                        <span>{count} {count === 1 ? 'attribute' : 'attributes'}</span>
+                    </div>
+                );
+            },
         },
     ];
 
@@ -323,23 +530,76 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
             }
 
             return {
-                title: displayName,
+                title: (
+                    <div style={{
+                        fontWeight: 'var(--font-weight-semibold)',
+                        color: 'var(--color-text-primary)',
+                        fontSize: 'var(--font-size-sm)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)'
+                    }}>
+                        {displayName}
+                    </div>
+                ),
                 dataIndex: fieldName,
                 key: fieldName,
-                width: 150,
-                render: (value: { value: string; confidence: number }) => (
-                    <span style={{
-                        color: value.confidence < 0.8 ? '#ff4d4f' : 'inherit',
-                        fontWeight: value.confidence < 0.8 ? 'bold' : 'normal'
-                    }}>
-                        {value.value || '-'}
-                        {value.confidence < 0.8 && (
-                            <span style={{ fontSize: '12px', color: '#ff4d4f', marginLeft: '4px' }}>
-                                ({Math.round(value.confidence * 100)}%)
+                width: 180,
+                onCell: (record: any) => ({
+                    style: {
+                        transition: 'var(--transition-fast)',
+                    },
+                    onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                        const target = e.currentTarget as HTMLTableCellElement;
+                        target.style.backgroundColor = 'var(--color-gray-50)';
+                        target.style.transform = 'scale(1.01)';
+                    },
+                    onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+                        const target = e.currentTarget as HTMLTableCellElement;
+                        target.style.backgroundColor = '';
+                        target.style.transform = '';
+                    }
+                }),
+                render: (value: { value: string; confidence: number }) => {
+                    const confidence = value.confidence || 0;
+                    const isLowConfidence = confidence < 0.8;
+
+                    return (
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 'var(--space-2)',
+                            padding: 'var(--space-2)'
+                        }}>
+                            <span style={{
+                                color: isLowConfidence ? 'var(--color-error)' : 'var(--color-text-primary)',
+                                fontWeight: isLowConfidence ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                flex: 1,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                            }}>
+                                {value.value || '-'}
                             </span>
-                        )}
-                    </span>
-                ),
+                            {isLowConfidence && (
+                                <span style={{
+                                    backgroundColor: 'var(--color-error)',
+                                    color: 'var(--color-text-inverse)',
+                                    padding: 'var(--space-1) var(--space-2)',
+                                    borderRadius: 'var(--radius-lg)',
+                                    fontSize: 'var(--font-size-xs)',
+                                    fontWeight: 'var(--font-weight-bold)',
+                                    animation: 'pulse 2s infinite',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 'var(--space-1)'
+                                }}>
+                                    ⚠️ {Math.round(confidence * 100)}%
+                                </span>
+                            )}
+                        </div>
+                    );
+                },
             };
         });
 
@@ -495,31 +755,53 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
             )}
 
             {/* Extracted Patients Table */}
-            {extractedPatients.length > 0 && (
+            {(extractedPatients.length > 0 || processingStep) && (
                 <div style={{ marginBottom: '30px' }}>
-                    <h3>📋 Extracted Patient Data ({extractedPatients.length} patients)</h3>
-                    <Table
-                        columns={dynamicPatientColumns}
-                        dataSource={patientTableData}
-                        size="small"
-                        pagination={false}
-                        scroll={{ x: 'max-content', y: 300 }}
-                        bordered
-                    />
+                    <h3>📋 Extracted Patient Data {extractedPatients.length > 0 ? `(${extractedPatients.length} patients)` : '(Processing...)'}</h3>
+                    {extractedPatients.length > 0 ? (
+                        <Table
+                            columns={dynamicPatientColumns}
+                            dataSource={patientTableData}
+                            size="small"
+                            pagination={false}
+                            scroll={{ x: 'max-content', y: 300 }}
+                            bordered
+                        />
+                    ) : processingStep ? (
+                        <LoadingSkeleton type="table" rows={5} />
+                    ) : null}
                 </div>
             )}
 
             {/* Mapped Tracker Data Table */}
-            {mappedTrackerData.length > 0 && (
+            {(mappedTrackerData.length > 0 || processingStep) && (
                 <div>
-                    <h3>🏥 Mapped Tracker Data ({mappedTrackerData.length} entities)</h3>
-                    <Table
-                        columns={trackerColumns}
-                        dataSource={trackerTableData}
-                        size="small"
-                        pagination={false}
-                        scroll={{ y: 300 }}
-                    />
+                    <h3>🏥 Mapped Tracker Data {mappedTrackerData.length > 0 ? `(${mappedTrackerData.length} entities)` : '(Processing...)'}</h3>
+                    {mappedTrackerData.length > 0 ? (
+                        <Table
+                            columns={trackerColumns}
+                            dataSource={trackerTableData}
+                            size="small"
+                            pagination={false}
+                            scroll={{ y: 300 }}
+                        />
+                    ) : processingStep ? (
+                        <LoadingSkeleton type="table" rows={5} />
+                    ) : null}
+                </div>
+            )}
+
+            {/* Show skeleton when processing but no data yet */}
+            {processingStep && extractedPatients.length === 0 && mappedTrackerData.length === 0 && (
+                <div style={{ marginTop: '20px' }}>
+                    <div style={{ marginBottom: '30px' }}>
+                        <h3>📋 Extracted Patient Data (Processing...)</h3>
+                        <LoadingSkeleton type="table" rows={5} />
+                    </div>
+                    <div>
+                        <h3>🏥 Mapped Tracker Data (Processing...)</h3>
+                        <LoadingSkeleton type="table" rows={5} />
+                    </div>
                 </div>
             )}
 

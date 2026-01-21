@@ -1,558 +1,743 @@
-import { useDataQuery } from '@dhis2/app-runtime'
+import {useDataQuery} from '@dhis2/app-runtime'
 import i18n from '@dhis2/d2-i18n'
-import React, { FC, useEffect, useState, useRef } from 'react'
+import React, {FC, useEffect, useState, useRef} from 'react'
 import classes from './App.module.css'
-import { DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
-import MetadataSelector, { MetadataOption } from './components/MetadataSelector';
+import './styles/utilities.css'
+import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
+import MetadataSelector, {MetadataOption} from './components/MetadataSelector';
 
 import MessageContainer from './components/MessageContainer';
-import EnhancedInput, { FileAttachment } from './components/EnhancedInput';
+import EnhancedInput, {FileAttachment} from './components/EnhancedInput';
 import TrackerDataGrid from './components/TrackerDataGrid';
 
 // Import the comprehensive workflow orchestrator
-import { workflowOrchestrator, WorkflowUIState, ConversationMessage } from './utils/workflow-orchestrator';
-import { createContextRouterAgent } from './agents/router-agent'
+import {workflowOrchestrator, WorkflowUIState, ConversationMessage} from './utils/workflow-orchestrator';
+import {createContextRouterAgent} from './agents/router-agent'
 
 interface QueryResults {
-    me: {
-        name: string
-    }
+	me: {
+		name: string
+	}
 }
 
 const query = {
-    me: {
-        resource: 'me',
+	me: {
+		resource: 'me',
 
-    },
+	},
 }
 
 const MyApp: FC = () => {
-    const {error, loading, data} = useDataQuery<QueryResults>(query)
+	const {error, loading, data} = useDataQuery<QueryResults>(query)
 
-    // Add spin animation CSS for loading indicator
-    const spinKeyframes = `
+	// Add spin animation CSS for loading indicator
+	const spinKeyframes = `
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
     `;
 
-    // Inject the keyframes into the document head
-    React.useEffect(() => {
-        const style = document.createElement('style');
-        style.textContent = spinKeyframes;
-        document.head.appendChild(style);
-        return () => {
-            document.head.removeChild(style);
-        };
-    }, []);
+	// Inject the keyframes into the document head
+	React.useEffect(() => {
+		const style = document.createElement('style');
+		style.textContent = spinKeyframes;
+		document.head.appendChild(style);
+		return () => {
+			document.head.removeChild(style);
+		};
+	}, []);
 
-    // Complete UI state is now managed by the orchestrator
-    const [uiState, setUiState] = useState<WorkflowUIState>({
-        showQueryInput: true,
-        queryText: '',
-        queryEnabled: true,
-        showProcessing: false,
-        showResults: false,
-        showChart: false,
-        showSelection: false,
-        selectionOptions: [],
-        selectionMultiple: true,
-        conversation: [],
-        showConversation: true
-    });
+	// Complete UI state is now managed by the orchestrator
+	const [uiState, setUiState] = useState<WorkflowUIState>({
+		showQueryInput: true,
+		queryText: '',
+		queryEnabled: true,
+		showProcessing: false,
+		showResults: false,
+		showChart: false,
+		showSelection: false,
+		selectionOptions: [],
+		selectionMultiple: true,
+		conversation: [],
+		showConversation: true
+	});
 
-    // Get tracker state from orchestrator
-    const trackerState = workflowOrchestrator.getTrackerState();
+	// Get tracker state from orchestrator
+	const trackerState = workflowOrchestrator.getTrackerState();
 
-    // Selection complete callback for the orchestrator
-    const pendingSelectionCallback = useRef<((selectedItems: any[]) => void) | null>(null);
+	// Selection complete callback for the orchestrator
+	const pendingSelectionCallback = useRef<((selectedItems: any[]) => void) | null>(null);
 
-    // Context router agent instance with orchestrator reference
-    const [contextRouterAgent, setContextRouterAgent] = useState<any>(null);
+	// Context router agent instance with orchestrator reference
+	const [contextRouterAgent, setContextRouterAgent] = useState<any>(null);
 
-    // Register comprehensive callbacks with the orchestrator
-    useEffect(() => {
-        workflowOrchestrator.registerCallbacks({
-            // UI state management - orchestrator fully controls what user sees
-            onUIStateChange: (newState) => {
-                setUiState(prevState => ({ ...prevState, ...newState }));
-            },
+	// UI state for collapsible sections
+	const [headerCollapsed, setHeaderCollapsed] = useState(false);
+	const [sidePanelOpen, setSidePanelOpen] = useState(false);
 
-            // Selection handling during workflows
-            onSelection: (options, callback) => {
-                // Store callback for when user completes selection
-                pendingSelectionCallback.current = callback;
-            },
+	// Register comprehensive callbacks with the orchestrator
+	useEffect(() => {
+		workflowOrchestrator.registerCallbacks({
+			// UI state management - orchestrator fully controls what user sees
+			onUIStateChange: (newState) => {
+				setUiState(prevState => ({...prevState, ...newState}));
+			},
 
-            // Chart rendering
-            onChartRender: (chartData) => {
-                console.log('📊 Chart render callback called:', chartData);
-                // Store the chart data and show the chart
-                setUiState(prevState => ({
-                    ...prevState,
-                    showChart: true,
-                    chartData: chartData
-                }));
-            },
+			// Selection handling during workflows
+			onSelection: (options, callback) => {
+				// Store callback for when user completes selection
+				pendingSelectionCallback.current = callback;
+			},
 
-            // Workflow lifecycle events
-            onWorkflowStart: (workflowId, flowType) => {
-                console.log(`🎬 Workflow ${workflowId} started: ${flowType}`);
-            },
-            onWorkflowComplete: (workflowId, result) => {
-                console.log(`✅ Workflow ${workflowId} completed`);
-            },
-            onWorkflowError: (workflowId, error) => {
-                console.error(`❌ Workflow ${workflowId} error:`, error);
-            }
-        });
+			// Chart rendering
+			onChartRender: (chartData) => {
+				console.log('📊 Chart render callback called:', chartData);
+				// Store the chart data and show the chart
+				setUiState(prevState => ({
+					...prevState,
+					showChart: true,
+					chartData: chartData
+				}));
+			},
 
-        // Create context router agent with orchestrator reference
-        const agent = createContextRouterAgent(workflowOrchestrator);
-        setContextRouterAgent(agent);
+			// Workflow lifecycle events
+			onWorkflowStart: (workflowId, flowType) => {
+				console.log(`🎬 Workflow ${workflowId} started: ${flowType}`);
+			},
+			onWorkflowComplete: (workflowId, result) => {
+				console.log(`✅ Workflow ${workflowId} completed`);
+			},
+			onWorkflowError: (workflowId, error) => {
+				console.error(`❌ Workflow ${workflowId} error:`, error);
+			}
+		});
 
-        // Initialize new chat session (clear conversation history)
-        workflowOrchestrator.initializeNewChatSession();
-    }, []);
+		// Create context router agent with orchestrator reference
+		const agent = createContextRouterAgent(workflowOrchestrator);
+		setContextRouterAgent(agent);
 
-    // Handle query submission - now adds to conversation
-    const handleQuerySubmit = async () => {
-        if (!uiState.queryText.trim()) {
-            workflowOrchestrator.addAssistantMessage(
-                'Empty query detected. Please enter a question or request before submitting. For example: "Show me HIV data" or "Upload CSV file".',
-                'error'
-            );
-            return;
-        }
+		// Initialize new chat session (clear conversation history)
+		workflowOrchestrator.initializeNewChatSession();
+	}, []);
 
-        const queryText = uiState.queryText.trim();
+	// Handle query submission - now adds to conversation
+	const handleQuerySubmit = async () => {
+		if (!uiState.queryText.trim()) {
+			workflowOrchestrator.addAssistantMessage(
+				'Empty query detected. Please enter a question or request before submitting. For example: "Show me HIV data" or "Upload CSV file".',
+				'error'
+			);
+			return;
+		}
 
-        try {
-            // Add user message to conversation
-            workflowOrchestrator.addUserMessage(queryText, 'query');
+		const queryText = uiState.queryText.trim();
 
-            // Clear the query input
-            setUiState(prevState => ({ ...prevState, queryText: '' }));
+		try {
+			// Add user message to conversation
+			workflowOrchestrator.addUserMessage(queryText, 'query');
 
-            // Start analytics workflow through orchestrator
-            const result = await workflowOrchestrator.startWorkflow(
-                'analytics',
-                {
-                    flow: 'analytics_query',
-                    input: { messages: [{ role: 'user', content: queryText }] },
-                    orchestrator: workflowOrchestrator // Pass orchestrator reference for selection interrupts
-                },
-                async (input) => {
-                    // Router agent routes to state graph for analytics
-                    // Extract user messages and pass them properly to the agent
-                    const userMessages = input.input?.messages || [{ role: 'user', content: input.query || '' }];
-                    console.log('🚀 Invoking context-aware router agent with messages:', userMessages);
-                    const agentResult = await contextRouterAgent?.invoke({ messages: userMessages });
-                    console.log('📦 Router agent result:', agentResult);
+			// Clear the query input
+			setUiState(prevState => ({...prevState, queryText: ''}));
 
-                    const lastMessage = agentResult.messages[agentResult.messages.length - 1];
-                    const responseContent = lastMessage.content as string;
+			// Start analytics workflow through orchestrator
+			const result = await workflowOrchestrator.startWorkflow(
+				'analytics',
+				{
+					flow: 'analytics_query',
+					input: {messages: [{role: 'user', content: queryText}]},
+					orchestrator: workflowOrchestrator // Pass orchestrator reference for selection interrupts
+				},
+				async (input) => {
+					// Router agent routes to state graph for analytics
+					// Extract user messages and pass them properly to the agent
+					const userMessages = input.input?.messages || [{role: 'user', content: input.query || ''}];
+					console.log('🚀 Invoking context-aware router agent with messages:', userMessages);
+					const agentResult = await contextRouterAgent?.invoke({messages: userMessages});
+					console.log('📦 Router agent result:', agentResult);
 
-                    // Debug the raw response
-                    console.log('🔍 Last message:', lastMessage);
-                    console.log('🔍 Raw response content:', responseContent);
-                    console.log('🔍 Response content length:', responseContent.length);
+					const lastMessage = agentResult.messages[agentResult.messages.length - 1];
+					const responseContent = lastMessage.content as string;
 
-                    try {
-                        console.log('🔄 Parsing JSON response...');
-                        const parsed = JSON.parse(responseContent);
-                        console.log('✅ JSON parse successful:', parsed);
-                        return parsed;
-                    } catch (parseError) {
-                        console.error('❌ JSON parse error:', parseError);
-                        console.error('❌ Failed to parse response:', responseContent);
+					// Debug the raw response
+					console.log('🔍 Last message:', lastMessage);
+					console.log('🔍 Raw response content:', responseContent);
+					console.log('🔍 Response content length:', responseContent.length);
 
-                        // Return a result that won't crash the workflow
-                        return {
-                            success: false,
-                            error: `JSON parse error: ${parseError.message}`,
-                            rawResponse: responseContent,
-                            debug: {
-                                responseLength: responseContent.length,
-                                responseType: typeof responseContent,
-                                first100: responseContent.substring(0, 100)
-                            },
-                            type: 'parse_error'
-                        };
-                    }
-                }
-            );
+					try {
+						console.log('🔄 Parsing JSON response...');
+						const parsed = JSON.parse(responseContent);
+						console.log('✅ JSON parse successful:', parsed);
+						return parsed;
+					} catch (parseError) {
+						console.error('❌ JSON parse error:', parseError);
+						console.error('❌ Failed to parse response:', responseContent);
 
-            // Add assistant response to conversation (only for non-specialized cases)
-            if (result?.success === false) {
-                // Only add error messages to conversation
-                workflowOrchestrator.addAssistantMessage(
-                    result.error || 'Operation failed',
-                    'error',
-                    result
-                );
-            }
-            // For successful operations, router agent handles specialized rendering (search, analytics, etc.)
+						// Return a result that won't crash the workflow
+						return {
+							success: false,
+							error: `JSON parse error: ${parseError.message}`,
+							rawResponse: responseContent,
+							debug: {
+								responseLength: responseContent.length,
+								responseType: typeof responseContent,
+								first100: responseContent.substring(0, 100)
+							},
+							type: 'parse_error'
+						};
+					}
+				}
+			);
 
-        } catch (error) {
-            console.error('Query submission error:', error);
-            workflowOrchestrator.addAssistantMessage(
-                `Request processing failed: ${error.message}. This may be due to network issues, invalid input format, or system constraints. Please try rephrasing your query or check your connection. If the problem persists, contact support with the error details.`,
-                'error',
-                { error: error.message, errorType: 'query_processing', timestamp: new Date().toISOString() }
-            );
-        }
-    };
+			// Add assistant response to conversation (only for non-specialized cases)
+			if (result?.success === false) {
+				// Only add error messages to conversation
+				workflowOrchestrator.addAssistantMessage(
+					result.error || 'Operation failed',
+					'error',
+					result
+				);
+			}
+			// For successful operations, router agent handles specialized rendering (search, analytics, etc.)
 
-    // Handle query text changes - update local state and keep orchestrator in sync
-    const handleQueryChange = (newText: string) => {
-        setUiState(prevState => ({ ...prevState, queryText: newText }));
-    };
+		} catch (error) {
+			console.error('Query submission error:', error);
+			workflowOrchestrator.addAssistantMessage(
+				`Request processing failed: ${error.message}. This may be due to network issues, invalid input format, or system constraints. Please try rephrasing your query or check your connection. If the problem persists, contact support with the error details.`,
+				'error',
+				{error: error.message, errorType: 'query_processing', timestamp: new Date().toISOString()}
+			);
+		}
+	};
 
-    // Handle enhanced query submission with file attachments
-    const handleEnhancedQuerySubmit = async (text: string, attachments: FileAttachment[]) => {
-        if (!text.trim() && attachments.length === 0) {
-            workflowOrchestrator.addAssistantMessage(
-                'No input provided. Please either type a question or attach a file for processing. Supported file types: CSV, PDF, images. Try: "Upload my data file" or "Process this document".',
-                'error'
-            );
-            return;
-        }
+	// Handle query text changes - update local state and keep orchestrator in sync
+	const handleQueryChange = (newText: string) => {
+		setUiState(prevState => ({...prevState, queryText: newText}));
+	};
 
-        const queryText = text.trim();
+	// Handle enhanced query submission with file attachments
+	const handleEnhancedQuerySubmit = async (text: string, attachments: FileAttachment[]) => {
+		if (!text.trim() && attachments.length === 0) {
+			workflowOrchestrator.addAssistantMessage(
+				'No input provided. Please either type a question or attach a file for processing. Supported file types: CSV, PDF, images. Try: "Upload my data file" or "Process this document".',
+				'error'
+			);
+			return;
+		}
 
-        try {
-            // Add user message to conversation with attachments
-            workflowOrchestrator.addUserMessage(queryText, 'query', { attachments });
+		const queryText = text.trim();
 
-            // Clear the query input
-            setUiState(prevState => ({ ...prevState, queryText: '' }));
+		try {
+			// Add user message to conversation with attachments
+			workflowOrchestrator.addUserMessage(queryText, 'query', {attachments});
 
-            // Prepare messages with file content for agents that need it
-            const messages = [{ role: 'user', content: queryText }];
+			// Clear the query input
+			setUiState(prevState => ({...prevState, queryText: ''}));
 
-            // Add file content to messages for agents that can process files
-            if (attachments.length > 0) {
-                for (const attachment of attachments) {
-                    try {
-                        // Determine if file is binary or text based on MIME type
-                        const isBinary = attachment.type.startsWith('application/') ||
-                                       attachment.type.startsWith('image/') ||
-                                       attachment.name.toLowerCase().endsWith('.pdf');
+			// Prepare messages with file content for agents that need it
+			const messages = [{role: 'user', content: queryText}];
 
-                        let fileContent: Uint8Array | string;
+			// Add file content to messages for agents that can process files
+			if (attachments.length > 0) {
+				for (const attachment of attachments) {
+					try {
+						// Determine if file is binary or text based on MIME type
+						const isBinary = attachment.type.startsWith('application/') ||
+							attachment.type.startsWith('image/') ||
+							attachment.name.toLowerCase().endsWith('.pdf');
 
-                        if (isBinary) {
-                            // For binary files, read as ArrayBuffer and convert to Uint8Array
-                            const arrayBuffer = await attachment.file.arrayBuffer();
-                            fileContent = new Uint8Array(arrayBuffer);
-                            console.log(`📁 Read binary file: ${attachment.name} (${fileContent.length} bytes)`);
-                        } else {
-                            // For text files, read as text
-                            fileContent = await attachment.file.text();
-                            console.log(`📄 Read text file: ${attachment.name} (${fileContent.length} characters)`);
-                        }
+						let fileContent: Uint8Array | string;
 
-                        // Add file content to messages with proper typing
-                        const fileMessage: any = {
-                            role: 'user',
-                            content: `File: ${attachment.name}`,
-                            attachments: [{
-                                id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                                name: attachment.name,
-                                type: attachment.type,
-                                size: attachment.size
-                            }]
-                        };
+						if (isBinary) {
+							// For binary files, read as ArrayBuffer and convert to Uint8Array
+							const arrayBuffer = await attachment.file.arrayBuffer();
+							fileContent = new Uint8Array(arrayBuffer);
+							console.log(`📁 Read binary file: ${attachment.name} (${fileContent.length} bytes)`);
+						} else {
+							// For text files, read as text
+							fileContent = await attachment.file.text();
+							console.log(`📄 Read text file: ${attachment.name} (${fileContent.length} characters)`);
+						}
 
-                        // Store binary content separately to preserve it
-                        if (isBinary) {
-                            fileMessage.binaryContent = fileContent;
-                        } else {
-                            fileMessage.content += `\nContent:\n${fileContent}`;
-                        }
+						// Add file content to messages with proper typing
+						const fileMessage: any = {
+							role: 'user',
+							content: `File: ${attachment.name}`,
+							attachments: [{
+								id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+								name: attachment.name,
+								type: attachment.type,
+								size: attachment.size
+							}]
+						};
 
-                        messages.push(fileMessage);
-                    } catch (fileError) {
-                        console.warn(`Could not read file ${attachment.name}:`, fileError);
-                        // Still include the message but without file content
-                        messages.push({
-                            role: 'user',
-                            content: `File attached: ${attachment.name} (${attachment.type}, ${attachment.size} bytes)`
-                        });
-                    }
-                }
-            }
+						// Store binary content separately to preserve it
+						if (isBinary) {
+							fileMessage.binaryContent = fileContent;
+						} else {
+							fileMessage.content += `\nContent:\n${fileContent}`;
+						}
 
-            // Start workflow with enhanced input
-            const result = await workflowOrchestrator.startWorkflow(
-                'analytics',
-                {
-                    flow: 'analytics_query',
-                    input: { messages },
-                    orchestrator: workflowOrchestrator
-                },
-                async (input) => {
-                    // Router agent routes to appropriate agent based on content + files
-                    console.log('🚀 Invoking context-aware router agent with messages and attachments:', input.input?.messages);
-                    const agentResult = await contextRouterAgent?.invoke({ messages: input.input?.messages });
-                    console.log('📦 Router agent result:', agentResult);
+						messages.push(fileMessage);
+					} catch (fileError) {
+						console.warn(`Could not read file ${attachment.name}:`, fileError);
+						// Still include the message but without file content
+						messages.push({
+							role: 'user',
+							content: `File attached: ${attachment.name} (${attachment.type}, ${attachment.size} bytes)`
+						});
+					}
+				}
+			}
 
-                    const lastMessage = agentResult.messages[agentResult.messages.length - 1];
-                    const responseContent = lastMessage.content as string;
+			// Start workflow with enhanced input
+			const result = await workflowOrchestrator.startWorkflow(
+				'analytics',
+				{
+					flow: 'analytics_query',
+					input: {messages},
+					orchestrator: workflowOrchestrator
+				},
+				async (input) => {
+					// Router agent routes to appropriate agent based on content + files
+					console.log('🚀 Invoking context-aware router agent with messages and attachments:', input.input?.messages);
+					const agentResult = await contextRouterAgent?.invoke({messages: input.input?.messages});
+					console.log('📦 Router agent result:', agentResult);
 
-                    try {
-                        const parsed = JSON.parse(responseContent);
-                        console.log('✅ JSON parse successful:', parsed);
-                        return parsed;
-                    } catch (parseError) {
-                        console.error('❌ JSON parse error:', parseError);
-                        return {
-                            success: false,
-                            error: `JSON parse error: ${parseError.message}`,
-                            rawResponse: responseContent,
-                            type: 'parse_error'
-                        };
-                    }
-                }
-            );
+					const lastMessage = agentResult.messages[agentResult.messages.length - 1];
+					const responseContent = lastMessage.content as string;
 
-            // Handle response
-            if (result?.success === false) {
-                workflowOrchestrator.addAssistantMessage(
-                    result.error || 'Operation failed',
-                    'error',
-                    result
-                );
-            }
+					try {
+						const parsed = JSON.parse(responseContent);
+						console.log('✅ JSON parse successful:', parsed);
+						return parsed;
+					} catch (parseError) {
+						console.error('❌ JSON parse error:', parseError);
+						return {
+							success: false,
+							error: `JSON parse error: ${parseError.message}`,
+							rawResponse: responseContent,
+							type: 'parse_error'
+						};
+					}
+				}
+			);
 
-        } catch (error) {
-            console.error('Enhanced query submission error:', error);
-            workflowOrchestrator.addAssistantMessage(
-                `File processing failed: ${error.message}. This may be due to unsupported file format, corrupted file content, or processing limits. Please check your file type (supported: CSV, PDF, images) and size (max 10MB). Try re-uploading or contact support if the issue persists.`,
-                'error',
-                { error: error.message, errorType: 'file_processing', supportedFormats: ['CSV', 'PDF', 'PNG', 'JPG', 'JPEG'], maxSize: '10MB' }
-            );
-        }
-    };
+			// Handle response
+			if (result?.success === false) {
+				workflowOrchestrator.addAssistantMessage(
+					result.error || 'Operation failed',
+					'error',
+					result
+				);
+			}
 
-    // Handle selection completion - call stored callback and add to conversation
-    const handleSelectionComplete = (selectedItems: MetadataOption[]) => {
-        if (pendingSelectionCallback.current) {
-            // Add user selection to conversation
-            const selectionText = `Selected ${selectedItems.length} item(s): ${selectedItems.map(item => item.name).join(', ')}`;
-            workflowOrchestrator.addUserMessage(selectionText, 'selection_response', { selectedItems });
+		} catch (error) {
+			console.error('Enhanced query submission error:', error);
+			workflowOrchestrator.addAssistantMessage(
+				`File processing failed: ${error.message}. This may be due to unsupported file format, corrupted file content, or processing limits. Please check your file type (supported: CSV, PDF, images) and size (max 10MB). Try re-uploading or contact support if the issue persists.`,
+				'error',
+				{
+					error: error.message,
+					errorType: 'file_processing',
+					supportedFormats: ['CSV', 'PDF', 'PNG', 'JPG', 'JPEG'],
+					maxSize: '10MB'
+				}
+			);
+		}
+	};
 
-            // Call the stored callback
-            const transformedItems = selectedItems.map(item => ({
-                name: item.name,
-                id: item.id,
-                type: item.type
-            }));
+	// Handle selection completion - call stored callback and add to conversation
+	const handleSelectionComplete = (selectedItems: MetadataOption[]) => {
+		if (pendingSelectionCallback.current) {
+			// Add user selection to conversation
+			const selectionText = `Selected ${selectedItems.length} item(s): ${selectedItems.map(item => item.name).join(', ')}`;
+			workflowOrchestrator.addUserMessage(selectionText, 'selection_response', {selectedItems});
 
-            pendingSelectionCallback.current(transformedItems);
-            pendingSelectionCallback.current = null;
-        }
-    };
+			// Call the stored callback
+			const transformedItems = selectedItems.map(item => ({
+				name: item.name,
+				id: item.id,
+				type: item.type
+			}));
 
-    // Tracker workflow handlers - now delegate to orchestrator
-    const handleConfigureProcessing = (config: {
-        orgUnit: string;
-        programId: string;
-        attributeMappings: Record<string, string>;
-    }) => {
-        workflowOrchestrator.handleConfigureProcessing(config);
-    };
+			pendingSelectionCallback.current(transformedItems);
+			pendingSelectionCallback.current = null;
+		}
+	};
 
-    const handleUploadDocument = (file: File) => {
-        workflowOrchestrator.handleUploadDocument(file);
-    };
+	// Tracker workflow handlers - now delegate to orchestrator
+	const handleConfigureProcessing = (config: {
+		orgUnit: string;
+		programId: string;
+		attributeMappings: Record<string, string>;
+	}) => {
+		workflowOrchestrator.handleConfigureProcessing(config);
+	};
 
-    const handleRetryProcessing = () => {
-        workflowOrchestrator.handleRetryProcessing();
-    };
+	const handleUploadDocument = (file: File) => {
+		workflowOrchestrator.handleUploadDocument(file);
+	};
 
-    const handleConfirmSave = () => {
-        workflowOrchestrator.handleConfirmSave();
-    };
+	const handleRetryProcessing = () => {
+		workflowOrchestrator.handleRetryProcessing();
+	};
 
-    const handleCancelSave = () => {
-        workflowOrchestrator.handleCancelSave();
-    };
+	const handleConfirmSave = () => {
+		workflowOrchestrator.handleConfirmSave();
+	};
 
-    // Loading and error states for the main app
-    if (error) {
-        return <span>{i18n.t('ERROR')}</span>
-    }
+	const handleCancelSave = () => {
+		workflowOrchestrator.handleCancelSave();
+	};
 
-    if (loading) {
-        return <span>{i18n.t('Loading...')}</span>
-    }
+	// Loading and error states for the main app
+	if (error) {
+		return <span>{i18n.t('ERROR')}</span>
+	}
 
-    return (
-        <div className={classes.container}>
-            <h1>{i18n.t('Hello {{name}}', {name: data?.me?.name})}</h1>
-            <h3>{i18n.t('DHIS2 Orchestrated Multi-Agent Assistant')}</h3>
+	if (loading) {
+		return <span>{i18n.t('Loading...')}</span>
+	}
 
-            {/* Main Chat Interface */}
-            <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                height: '600px', // Fixed height to prevent wobbling
-                marginTop: '20px',
-                border: '1px solid #e0e0e0',
-                borderRadius: '8px',
-                overflow: 'hidden',
-                backgroundColor: '#ffffff'
-            }}>
-                {/* Conversation Display Area */}
-                {uiState.showConversation && (
-                    <div style={{
-                        flex: 1,
-                        position: 'relative',
-                        overflow: 'hidden'
-                    }}>
-                        <MessageContainer messages={uiState.conversation} />
+	return (
+		<div className={classes.container}>
+			{/* Collapsible Header Section */}
+			<div style={{
+				position: 'relative',
+				marginBottom: headerCollapsed ? 'var(--space-2)' : 'var(--space-6)',
+				transition: 'margin-bottom var(--transition-normal)'
+			}}>
+				{/* Header Toggle Button */}
+				<button
+					onClick={() => setHeaderCollapsed(!headerCollapsed)}
+					style={{
+						position: 'absolute',
+						top: 'var(--space-2)',
+						right: 'var(--space-2)',
+						backgroundColor: 'var(--color-bg-primary)',
+						border: '1px solid var(--color-border-light)',
+						borderRadius: 'var(--radius-full)',
+						width: '32px',
+						height: '32px',
+						cursor: 'pointer',
+						display: 'flex',
+						alignItems: 'center',
+						justifyContent: 'center',
+						boxShadow: 'var(--shadow-sm)',
+						transition: 'var(--transition-fast)',
+						zIndex: 10
+					}}
+					className="hover-lift"
+					title={headerCollapsed ? "Expand header" : "Collapse header"}
+				>
+					{headerCollapsed ? "↓" : "↑"}
+				</button>
 
-                        {/* Processing overlay - shows progress messages */}
-                        {uiState.showProcessing && (
-                            <div style={{
-                                position: 'absolute',
-                                bottom: '80px', // Above input area
-                                right: '20px',
-                                zIndex: 10,
-                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                borderRadius: '12px',
-                                padding: '16px',
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                border: '1px solid #e0e0e0',
-                                minWidth: '200px',
-                                maxWidth: '300px'
-                            }}>
-                                <div style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '12px'
-                                }}>
-                                    <div style={{
-                                        fontSize: '20px',
-                                        animation: 'spin 1s linear infinite'
-                                    }}>
-                                        🔄
-                                    </div>
-                                    <div style={{
-                                        flex: 1,
-                                        fontSize: '14px',
-                                        color: '#333',
-                                        lineHeight: '1.4'
-                                    }}>
-                                        <div style={{
-                                            fontWeight: 'bold',
-                                            marginBottom: '4px',
-                                            color: '#2c6693'
-                                        }}>
-                                            Processing...
-                                        </div>
-                                        <div style={{
-                                            fontSize: '13px',
-                                            color: '#666'
-                                        }}>
-                                            {uiState.processingMessage || 'Please wait while we process your request'}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
+				{/* Header Content */}
+				<div style={{
+					textAlign: 'center',
+					padding: headerCollapsed ? 'var(--space-2) var(--space-8)' : 'var(--space-4) var(--space-8)',
+					backgroundColor: headerCollapsed ? 'var(--color-bg-secondary)' : 'transparent',
+					borderRadius: headerCollapsed ? 'var(--radius-lg)' : '0',
+					border: headerCollapsed ? '1px solid var(--color-border-light)' : 'none',
+					transition: 'all var(--transition-normal)',
+					overflow: 'hidden'
+				}}>
+					<div style={{
+						opacity: headerCollapsed ? 0.7 : 1,
+						transform: headerCollapsed ? 'scale(0.95)' : 'scale(1)',
+						transition: 'opacity var(--transition-normal), transform var(--transition-normal)'
+					}}>
+						<h1 style={{
+							margin: '0 0 var(--space-2) 0',
+							color: 'var(--color-text-primary)',
+							fontSize: headerCollapsed ? 'var(--font-size-lg)' : 'var(--font-size-3xl)',
+							fontWeight: 'var(--font-weight-bold)',
+							lineHeight: 'var(--line-height-tight)',
+							transition: 'font-size var(--transition-normal)'
+						}}>
+							{headerCollapsed ? 'DHIS2 Assistant' : i18n.t('Hello {{name}}', {name: data?.me?.name})}
+						</h1>
+						{!headerCollapsed && (
+							<h3 style={{
+								margin: 0,
+								color: 'var(--color-text-secondary)',
+								fontSize: 'var(--font-size-lg)',
+								fontWeight: 'var(--font-weight-normal)',
+								lineHeight: 'var(--line-height-snug)',
+								opacity: headerCollapsed ? 0 : 1,
+								transition: 'opacity var(--transition-normal)'
+							}}>
+								{i18n.t('DHIS2 Orchestrated Multi-Agent Assistant')}
+							</h3>
+						)}
+					</div>
+				</div>
+			</div>
 
-                {/* Selection overlay (when selection is active) */}
-                {uiState.showSelection && uiState.selectionOptions.length > 0 && (
-                    <div style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        zIndex: 20
-                    }}>
-                        <div style={{
-                            backgroundColor: 'white',
-                            borderRadius: '8px',
-                            padding: '20px',
-                            border: '1px solid #e0e0e0',
-                            maxWidth: '600px',
-                            maxHeight: '80vh',
-                            overflow: 'auto'
-                        }}>
-                            <MetadataSelector
-                                selectionOptions={uiState.selectionOptions.map(opt => ({
-                                    ...opt,
-                                    type: opt.type
-                                }))}
-                                originalQuery={uiState.queryText}
-                                onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
-                                allowMultiple={uiState.selectionMultiple}
-                            />
-                        </div>
-                    </div>
-                )}
+			{/* Main Chat Interface with Side Panel */}
+			<div style={{
+				display: 'flex',
+				position: 'relative',
+				width: '95%',
+				maxWidth: '1400px',
+				margin: 'var(--space-6) auto'
+			}}>
+				{/* Side Panel for Metadata Selection */}
+				<div style={{
+					width: sidePanelOpen ? '300px' : '0',
+					transition: 'width var(--transition-normal)',
+					overflow: 'hidden',
+					backgroundColor: 'var(--color-bg-primary)',
+					border: '1px solid var(--color-border-light)',
+					borderRadius: 'var(--radius-lg)',
+					boxShadow: 'var(--shadow-md)',
+					marginRight: sidePanelOpen ? 'var(--space-4)' : '0'
+				}}>
+					{sidePanelOpen && (
+						<div style={{
+							padding: 'var(--space-4)',
+							height: '100%',
+							overflowY: 'auto'
+						}}>
+							<div style={{
+								display: 'flex',
+								justifyContent: 'space-between',
+								alignItems: 'center',
+								marginBottom: 'var(--space-4)',
+								paddingBottom: 'var(--space-2)',
+								borderBottom: '1px solid var(--color-border-light)'
+							}}>
+								<h4 style={{
+									margin: 0,
+									color: 'var(--color-text-primary)',
+									fontSize: 'var(--font-size-lg)',
+									fontWeight: 'var(--font-weight-semibold)'
+								}}>
+									Metadata Selection
+								</h4>
+								<button
+									onClick={() => setSidePanelOpen(false)}
+									style={{
+										backgroundColor: 'var(--color-bg-secondary)',
+										border: '1px solid var(--color-border-light)',
+										borderRadius: 'var(--radius-md)',
+										width: '28px',
+										height: '28px',
+										cursor: 'pointer',
+										display: 'flex',
+										alignItems: 'center',
+										justifyContent: 'center',
+										fontSize: 'var(--font-size-sm)',
+										transition: 'var(--transition-fast)'
+									}}
+									className="hover-lift"
+									title="Close panel"
+								>
+									×
+								</button>
+							</div>
 
-                {/* Enhanced Input Section - Always at the bottom */}
-                <div style={{
-                    borderTop: '1px solid #e0e0e0',
-                    padding: '16px',
-                    backgroundColor: '#f8f9fa'
-                }}>
-                    <div style={{maxWidth: '1200px', margin: '0 auto'}}>
-                        <EnhancedInput
-                            value={uiState.queryText}
-                            onChange={handleQueryChange}
-                            onSubmit={(text, attachments) => handleEnhancedQuerySubmit(text, attachments)}
-                            disabled={!uiState.queryEnabled}
-                            isProcessing={uiState.showProcessing}
-                        />
-                    </div>
-                </div>
-            </div>
+							<div style={{
+								color: 'var(--color-text-secondary)',
+								fontSize: 'var(--font-size-sm)',
+								marginBottom: 'var(--space-4)',
+								lineHeight: 'var(--line-height-relaxed)'
+							}}>
+								Select metadata items for your analysis. You can search, filter, and select multiple
+								items as needed.
+							</div>
 
+							{/* Metadata selector would go here when selection is active */}
+							{uiState.showSelection && uiState.selectionOptions.length > 0 ? (
+								<MetadataSelector
+									selectionOptions={uiState.selectionOptions.map(opt => ({
+										...opt,
+										type: opt.type
+									}))}
+									originalQuery={uiState.queryText}
+									onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
+									allowMultiple={uiState.selectionMultiple}
+								/>
+							) : (
+								<div style={{
+									textAlign: 'center',
+									color: 'var(--color-text-muted)',
+									padding: 'var(--space-8)',
+									fontSize: 'var(--font-size-sm)'
+								}}>
+									No selection required at this time
+								</div>
+							)}
+						</div>
+					)}
+				</div>
 
+				{/* Main Chat Container */}
+				<div style={{
+					flex: 1,
+					display: 'flex',
+					flexDirection: 'column',
+					minHeight: '400px',
+					maxHeight: '80vh',
+					border: '1px solid var(--color-border-light)',
+					borderRadius: 'var(--radius-lg)',
+					overflow: 'hidden',
+					backgroundColor: 'var(--color-bg-primary)',
+					boxShadow: 'var(--shadow-md)',
+					transition: 'all var(--transition-normal)',
+					position: 'relative'
+				}}>
+					{/* Side Panel Toggle Button */}
+					<button
+						onClick={() => setSidePanelOpen(!sidePanelOpen)}
+						style={{
+							position: 'absolute',
+							top: 'var(--space-4)',
+							right: 'var(--space-4)',
+							backgroundColor: 'var(--color-primary)',
+							color: 'var(--color-text-inverse)',
+							border: 'none',
+							borderRadius: 'var(--radius-full)',
+							width: '40px',
+							height: '40px',
+							cursor: 'pointer',
+							display: 'flex',
+							alignItems: 'center',
+							justifyContent: 'center',
+							boxShadow: 'var(--shadow-md)',
+							transition: 'var(--transition-fast)',
+							zIndex: 15,
+							fontSize: 'var(--font-size-lg)',
+							fontWeight: 'var(--font-weight-bold)'
+						}}
+						className="hover-lift"
+						title={sidePanelOpen ? "Close selection panel" : "Open selection panel"}
+					>
+						{sidePanelOpen ? "✕" : "⚙️"}
+					</button>
+					{/* Conversation Display Area */}
+					{uiState.showConversation && (
+						<div style={{
+							flex: 1,
+							position: 'relative',
+							overflow: 'hidden'
+						}}>
+							<MessageContainer messages={uiState.conversation}/>
 
-            {/* Tracker Data Grid - Hidden by default, shown when tracker workflow is active */}
-            {trackerState.extractedPatients.length > 0 && (
-                <div style={{
-                    marginTop: '20px',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '8px',
-                    backgroundColor: '#ffffff'
-                }}>
-                    <TrackerDataGrid
-                        extractedPatients={trackerState.extractedPatients}
-                        mappedTrackerData={trackerState.mappedTrackerData}
-                        programId={trackerState.programId}
-                        onConfigureProcessing={handleConfigureProcessing}
-                        onUploadDocument={handleUploadDocument}
-                        onRetryProcessing={handleRetryProcessing}
-                        onConfirmSave={handleConfirmSave}
-                        onCancelSave={handleCancelSave}
-                        processingStep={trackerState.processingStep}
-                        processingProgress={trackerState.processingProgress}
-                        error={trackerState.error}
-                        reviewMode={trackerState.reviewMode}
-                    />
-                </div>
-            )}
-        </div>
-    )
+							{/* Processing overlay - shows progress messages */}
+							{uiState.showProcessing && (
+								<div style={{
+									position: 'absolute',
+									bottom: '80px', // Above input area
+									right: '20px',
+									zIndex: 10,
+									backgroundColor: 'rgba(255, 255, 255, 0.95)',
+									borderRadius: '12px',
+									padding: '16px',
+									boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+									border: '1px solid #e0e0e0',
+									minWidth: '200px',
+									maxWidth: '300px'
+								}}>
+									<div style={{
+										display: 'flex',
+										alignItems: 'center',
+										gap: '12px'
+									}}>
+										<div style={{
+											fontSize: '20px',
+											animation: 'spin 1s linear infinite'
+										}}>
+											🔄
+										</div>
+										<div style={{
+											flex: 1,
+											fontSize: '14px',
+											color: '#333',
+											lineHeight: '1.4'
+										}}>
+											<div style={{
+												fontWeight: 'bold',
+												marginBottom: '4px',
+												color: '#2c6693'
+											}}>
+												Processing...
+											</div>
+											<div style={{
+												fontSize: '13px',
+												color: '#666'
+											}}>
+												{uiState.processingMessage || 'Please wait while we process your request'}
+											</div>
+										</div>
+									</div>
+								</div>
+							)}
+						</div>
+					)}
+
+					{/* Selection overlay (when selection is active) */}
+					{uiState.showSelection && uiState.selectionOptions.length > 0 && (
+						<div style={{
+							position: 'absolute',
+							top: 0,
+							left: 0,
+							right: 0,
+							bottom: 0,
+							backgroundColor: 'rgba(255, 255, 255, 0.95)',
+							display: 'flex',
+							alignItems: 'center',
+							justifyContent: 'center',
+							zIndex: 20
+						}}>
+							<div style={{
+								backgroundColor: 'white',
+								borderRadius: '8px',
+								padding: '20px',
+								border: '1px solid #e0e0e0',
+								maxWidth: '600px',
+								maxHeight: '80vh',
+								overflow: 'auto'
+							}}>
+								<MetadataSelector
+									selectionOptions={uiState.selectionOptions.map(opt => ({
+										...opt,
+										type: opt.type
+									}))}
+									originalQuery={uiState.queryText}
+									onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
+									allowMultiple={uiState.selectionMultiple}
+								/>
+							</div>
+						</div>
+					)}
+
+					{/* Enhanced Input Section - Always at the bottom */}
+					<div style={{
+						borderTop: '1px solid #e0e0e0',
+						padding: '16px',
+						backgroundColor: '#f8f9fa'
+					}}>
+						<div style={{maxWidth: '1200px', margin: '0 auto'}}>
+							<EnhancedInput
+								value={uiState.queryText}
+								onChange={handleQueryChange}
+								onSubmit={(text, attachments) => handleEnhancedQuerySubmit(text, attachments)}
+								disabled={!uiState.queryEnabled}
+								isProcessing={uiState.showProcessing}
+							/>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	)
 };
 
 export default (props: any) => (
-    <DataEngineProvider>
-        <MyApp {...props} />
-    </DataEngineProvider>
+	<DataEngineProvider>
+		<MyApp {...props} />
+	</DataEngineProvider>
 )

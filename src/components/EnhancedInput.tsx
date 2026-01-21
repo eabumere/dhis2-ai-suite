@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import i18n from '@dhis2/d2-i18n';
 
 export interface FileAttachment {
@@ -91,7 +91,10 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
     const [attachments, setAttachments] = useState<FileAttachment[]>([]);
     const [dragOver, setDragOver] = useState(false);
     const [validation, setValidation] = useState<ValidationState | null>(null);
+    const [isFocused, setIsFocused] = useState(false);
+    const [fileProcessing, setFileProcessing] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     // Validation logic
     const validateInput = useCallback((input: string, files: FileAttachment[]): ValidationState | null => {
@@ -171,11 +174,21 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
         return null;
     }, [showValidation]);
 
-    // Real-time validation
+    // Debounced validation
+    const debouncedValidation = useMemo(() => {
+        let timeoutId: NodeJS.Timeout;
+        return (input: string, files: FileAttachment[]) => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                const validationResult = validateInput(input, files);
+                setValidation(validationResult);
+            }, 300);
+        };
+    }, [validateInput]);
+
     useEffect(() => {
-        const validationResult = validateInput(value, attachments);
-        setValidation(validationResult);
-    }, [value, attachments, validateInput]);
+        debouncedValidation(value, attachments);
+    }, [value, attachments, debouncedValidation]);
 
     const formatFileSize = (bytes: number): string => {
         if (bytes === 0) return '0 Bytes';
@@ -185,18 +198,54 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    const createFileAttachment = (file: File): FileAttachment => ({
-        file,
-        id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type
-    });
+    const getFileIcon = (fileName: string): string => {
+        const ext = fileName.toLowerCase().split('.').pop() || '';
+        switch (ext) {
+            case 'csv': return '📊';
+            case 'xlsx':
+            case 'xls': return '📈';
+            case 'json': return '🔧';
+            case 'txt': return '📄';
+            case 'pdf': return '📕';
+            case 'png':
+            case 'jpg':
+            case 'jpeg': return '🖼️';
+            default: return '📎';
+        }
+    };
 
-    const handleFileSelect = useCallback((files: FileList | null) => {
+    const createFileAttachment = useCallback(async (file: File): Promise<FileAttachment> => {
+        const attachment: FileAttachment = {
+            file,
+            id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            name: file.name,
+            size: file.size,
+            type: file.type
+        };
+
+        // Generate preview for images
+        if (file.type.startsWith('image/') && file.size < 1024 * 1024) { // Only for images < 1MB
+            try {
+                const preview = await new Promise<string>((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve(e.target?.result as string);
+                    reader.readAsDataURL(file);
+                });
+                attachment.preview = preview;
+            } catch (error) {
+                console.warn('Failed to generate file preview:', error);
+            }
+        }
+
+        return attachment;
+    }, []);
+
+    const handleFileSelect = useCallback(async (files: FileList | null) => {
         if (!files) return;
 
         const newAttachments: FileAttachment[] = [];
+        const processingIds = new Set<string>();
+
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             // Basic validation - could be enhanced
@@ -204,11 +253,28 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
                 console.warn(`File ${file.name} is too large (${formatFileSize(file.size)})`);
                 continue;
             }
-            newAttachments.push(createFileAttachment(file));
+
+            const tempId = `temp_${Date.now()}_${i}`;
+            processingIds.add(tempId);
+
+            try {
+                setFileProcessing(prev => new Set([...prev, tempId]));
+                const attachment = await createFileAttachment(file);
+                newAttachments.push(attachment);
+            } catch (error) {
+                console.error(`Failed to process file ${file.name}:`, error);
+            } finally {
+                processingIds.delete(tempId);
+                setFileProcessing(prev => {
+                    const newSet = new Set(prev);
+                    newSet.delete(tempId);
+                    return newSet;
+                });
+            }
         }
 
         setAttachments(prev => [...prev, ...newAttachments]);
-    }, []);
+    }, [createFileAttachment, formatFileSize]);
 
     const handleDragOver = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -271,58 +337,148 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
             {/* File Attachments Display */}
             {attachments.length > 0 && (
                 <div style={{
-                    marginBottom: '8px',
-                    padding: '8px',
-                    backgroundColor: '#f8f9fa',
-                    borderRadius: '4px',
-                    border: '1px solid #e9ecef'
+                    marginBottom: '12px',
+                    padding: '12px',
+                    background: 'linear-gradient(135deg, var(--color-gray-50), var(--color-gray-100))',
+                    borderRadius: '8px',
+                    border: '1px solid var(--color-border-light)',
+                    boxShadow: 'var(--shadow-sm)'
                 }}>
                     <div style={{
-                        fontSize: '12px',
-                        color: '#6c757d',
-                        marginBottom: '4px',
-                        fontWeight: 'bold'
+                        fontSize: '14px',
+                        color: 'var(--color-primary-700)',
+                        marginBottom: '8px',
+                        fontWeight: '600',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
                     }}>
-                        📎 {attachments.length} file{attachments.length !== 1 ? 's' : ''} attached
+                        <span>📎</span>
+                        <span>{attachments.length} file{attachments.length !== 1 ? 's' : ''} attached</span>
+                        <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)', fontWeight: 'normal' }}>
+                            ({formatFileSize(attachments.reduce((sum, f) => sum + f.size, 0))} total)
+                        </span>
                     </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                         {attachments.map((attachment) => (
                             <div
                                 key={attachment.id}
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
-                                    gap: '6px',
-                                    padding: '4px 8px',
-                                    backgroundColor: '#ffffff',
-                                    border: '1px solid #dee2e6',
-                                    borderRadius: '4px',
-                                    fontSize: '12px'
+                                    gap: '8px',
+                                    padding: '8px 12px',
+                                    backgroundColor: 'var(--color-bg-primary)',
+                                    border: '1px solid var(--color-border-light)',
+                                    borderRadius: '6px',
+                                    fontSize: '13px',
+                                    boxShadow: 'var(--shadow-sm)',
+                                    transition: 'all var(--transition-fast)',
+                                    maxWidth: '280px'
                                 }}
+                                className="hover-lift"
                             >
-                                <span style={{ color: '#495057' }}>
-                                    📄 {attachment.name}
-                                </span>
-                                <span style={{ color: '#6c757d' }}>
-                                    ({formatFileSize(attachment.size)})
-                                </span>
-                                <button
-                                    onClick={() => removeAttachment(attachment.id)}
-                                    style={{
-                                        background: 'none',
-                                        border: 'none',
-                                        color: '#dc3545',
-                                        cursor: 'pointer',
-                                        padding: '0',
-                                        fontSize: '14px',
-                                        lineHeight: 1
+                                {/* File Preview for Images */}
+                                {attachment.preview ? (
+                                    <img
+                                        src={attachment.preview}
+                                        alt={attachment.name}
+                                        style={{
+                                            width: '32px',
+                                            height: '32px',
+                                            borderRadius: '4px',
+                                            objectFit: 'cover',
+                                            border: '1px solid var(--color-border-light)'
+                                        }}
+                                    />
+                                ) : (
+                                    <span style={{ fontSize: '16px' }}>
+                                        {getFileIcon(attachment.name)}
+                                    </span>
+                                )}
+
+                                {/* File Info */}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{
+                                        fontWeight: '500',
+                                        color: 'var(--color-text-primary)',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
                                     }}
-                                    title="Remove file"
-                                >
-                                    ✕
-                                </button>
+                                    title={attachment.name}>
+                                        {attachment.name}
+                                    </div>
+                                    <div style={{
+                                        fontSize: '11px',
+                                        color: 'var(--color-text-secondary)',
+                                        marginTop: '2px'
+                                    }}>
+                                        {formatFileSize(attachment.size)}
+                                    </div>
+                                </div>
+
+                                {/* Remove Button */}
+                                <Tooltip content="Remove file">
+                                    <button
+                                        onClick={() => removeAttachment(attachment.id)}
+                                        style={{
+                                            background: 'none',
+                                            border: 'none',
+                                            color: 'var(--color-error)',
+                                            cursor: 'pointer',
+                                            padding: '4px',
+                                            borderRadius: '50%',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            width: '20px',
+                                            height: '20px',
+                                            transition: 'all var(--transition-fast)',
+                                            fontSize: '14px'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'var(--color-error-light)';
+                                            e.currentTarget.style.color = 'var(--color-bg-primary)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                            e.currentTarget.style.color = 'var(--color-error)';
+                                        }}
+                                        title="Remove file"
+                                        aria-label={`Remove ${attachment.name}`}
+                                    >
+                                        ✕
+                                    </button>
+                                </Tooltip>
                             </div>
                         ))}
+
+                        {/* Processing Files Indicator */}
+                        {fileProcessing.size > 0 && (
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                padding: '8px 12px',
+                                backgroundColor: 'var(--color-bg-secondary)',
+                                border: '1px solid var(--color-border-light)',
+                                borderRadius: '6px',
+                                fontSize: '13px',
+                                color: 'var(--color-text-secondary)',
+                                animation: 'pulse 2s infinite'
+                            }}>
+                                <div style={{
+                                    width: '16px',
+                                    height: '16px',
+                                    border: '2px solid var(--color-primary)',
+                                    borderTop: '2px solid transparent',
+                                    borderRadius: '50%',
+                                    animation: 'spin 1s linear infinite'
+                                }} />
+                                <span>Processing {fileProcessing.size} file{fileProcessing.size !== 1 ? 's' : ''}...</span>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -331,10 +487,13 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
             <div
                 style={{
                     position: 'relative',
-                    border: dragOver ? '2px dashed #007bff' : '1px solid #ccc',
-                    borderRadius: '8px',
-                    backgroundColor: dragOver ? '#f8f9ff' : '#ffffff',
-                    transition: 'all 0.2s ease'
+                    border: dragOver ? '2px dashed var(--color-primary)' :
+                           isFocused ? '2px solid var(--color-primary)' : '1px solid var(--color-border-light)',
+                    borderRadius: '12px',
+                    backgroundColor: dragOver ? 'var(--color-primary-50)' : 'var(--color-bg-primary)',
+                    transition: 'all var(--transition-fast)',
+                    boxShadow: dragOver ? 'var(--shadow-lg)' :
+                             isFocused ? 'var(--shadow-md)' : 'var(--shadow-sm)'
                 }}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -348,43 +507,63 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                        background: 'linear-gradient(135deg, var(--color-primary-50), var(--color-primary-100))',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        borderRadius: '6px',
+                        borderRadius: '10px',
                         zIndex: 10,
-                        pointerEvents: 'none'
+                        pointerEvents: 'none',
+                        animation: 'pulse 2s infinite'
                     }}>
                         <div style={{
                             textAlign: 'center',
-                            color: '#007bff',
-                            fontWeight: 'bold'
+                            color: 'var(--color-primary)',
+                            fontWeight: '600',
+                            fontSize: '18px'
                         }}>
-                            📂 Drop files here
+                            📂 Drop files here to attach
                         </div>
                     </div>
                 )}
 
-                <div style={{ display: 'flex', gap: '8px', padding: '12px' }}>
+                <div style={{ display: 'flex', gap: '12px', padding: '16px', alignItems: 'flex-end' }}>
                     {/* File Upload Button */}
                     <Tooltip content="Attach CSV, Excel, JSON, PDF, or image files. Max 50MB total.">
                         <button
                             onClick={() => fileInputRef.current?.click()}
                             disabled={disabled || isProcessing}
                             style={{
-                                padding: '8px',
-                                backgroundColor: '#f8f9fa',
-                                border: '1px solid #dee2e6',
-                                borderRadius: '4px',
+                                padding: '12px',
+                                backgroundColor: 'var(--color-bg-secondary)',
+                                border: '1px solid var(--color-border-light)',
+                                borderRadius: '8px',
                                 cursor: disabled || isProcessing ? 'not-allowed' : 'pointer',
-                                color: '#495057',
-                                fontSize: '14px',
+                                color: disabled || isProcessing ? 'var(--color-text-disabled)' : 'var(--color-text-primary)',
+                                fontSize: '16px',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '4px'
+                                justifyContent: 'center',
+                                transition: 'all var(--transition-fast)',
+                                width: '48px',
+                                height: '48px'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (!(disabled || isProcessing)) {
+                                    e.currentTarget.style.backgroundColor = 'var(--color-primary-50)';
+                                    e.currentTarget.style.borderColor = 'var(--color-primary)';
+                                    e.currentTarget.style.color = 'var(--color-primary)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (!(disabled || isProcessing)) {
+                                    e.currentTarget.style.backgroundColor = 'var(--color-bg-secondary)';
+                                    e.currentTarget.style.borderColor = 'var(--color-border-light)';
+                                    e.currentTarget.style.color = 'var(--color-text-primary)';
+                                }
                             }}
                             title="Attach files"
+                            aria-label="Attach files"
                         >
                             📎
                         </button>
@@ -395,78 +574,153 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
                         ref={fileInputRef}
                         type="file"
                         multiple
-                        accept=".csv,.xlsx,.xls,.json,.txt"
+                        accept=".csv,.xlsx,.xls,.json,.txt,.pdf,.png,.jpg,.jpeg"
                         onChange={(e) => handleFileSelect(e.target.files)}
                         style={{ display: 'none' }}
+                        aria-label="File upload"
                     />
 
-                    {/* Text Input */}
-                    <textarea
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        onKeyPress={handleKeyPress}
-                        placeholder={placeholder}
-                        disabled={disabled || isProcessing}
-                        rows={value.split('\n').length > 3 ? Math.min(value.split('\n').length, 5) : 1}
-                        style={{
-                            flex: 1,
-                            padding: '8px 12px',
-                            fontSize: '16px',
-                            border: 'none',
-                            outline: 'none',
-                            resize: 'vertical',
-                            minHeight: '20px',
-                            maxHeight: '120px',
-                            fontFamily: 'inherit'
-                        }}
-                    />
+                    {/* Text Input Container */}
+                    <div style={{ flex: 1, position: 'relative' }}>
+                        <textarea
+                            ref={textareaRef}
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            onFocus={() => setIsFocused(true)}
+                            onBlur={() => setIsFocused(false)}
+                            onKeyPress={handleKeyPress}
+                            placeholder={placeholder}
+                            disabled={disabled || isProcessing}
+                            rows={value.split('\n').length > 3 ? Math.min(value.split('\n').length, 6) : 1}
+                            style={{
+                                width: '100%',
+                                padding: '12px 16px',
+                                fontSize: '16px',
+                                border: 'none',
+                                outline: 'none',
+                                resize: 'vertical',
+                                minHeight: '48px',
+                                maxHeight: '200px',
+                                fontFamily: 'inherit',
+                                lineHeight: '1.5',
+                                color: disabled || isProcessing ? 'var(--color-text-disabled)' : 'var(--color-text-primary)',
+                                backgroundColor: 'transparent'
+                            }}
+                            aria-label="Message input"
+                            aria-describedby={value.length > 900 ? "char-counter" : undefined}
+                        />
+
+                        {/* Character Counter */}
+                        {value.length > 800 && (
+                            <div
+                                id="char-counter"
+                                style={{
+                                    position: 'absolute',
+                                    bottom: '8px',
+                                    right: '12px',
+                                    fontSize: '11px',
+                                    color: value.length > 1000 ? 'var(--color-error)' :
+                                           value.length > 950 ? 'var(--color-warning)' : 'var(--color-text-secondary)',
+                                    backgroundColor: 'var(--color-bg-primary)',
+                                    padding: '2px 6px',
+                                    borderRadius: '10px',
+                                    border: value.length > 1000 ? '1px solid var(--color-error)' : 'none'
+                                }}
+                            >
+                                {value.length}/1000
+                            </div>
+                        )}
+                    </div>
 
                     {/* Send Button */}
-                    <button
-                        onClick={handleSubmit}
-                        disabled={disabled || isProcessing || (!value.trim() && attachments.length === 0)}
-                        style={{
-                            padding: '8px 16px',
-                            fontSize: '14px',
-                            backgroundColor: (disabled || isProcessing || (!value.trim() && attachments.length === 0))
-                                ? '#cccccc'
-                                : '#2c6693',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: (disabled || isProcessing || (!value.trim() && attachments.length === 0))
-                                ? 'not-allowed'
-                                : 'pointer',
-                            whiteSpace: 'nowrap',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px'
-                        }}
-                    >
-                        {isProcessing ? (
-                            <>
-                                <span style={{ fontSize: '12px' }}>⏳</span>
-                                {i18n.t('Processing...')}
-                            </>
-                        ) : (
-                            <>
-                                <span>📤</span>
-                                {i18n.t('Send')}
-                            </>
-                        )}
-                    </button>
+                    <Tooltip content={isProcessing ? "Processing your request..." : "Send message"}>
+                        <button
+                            onClick={handleSubmit}
+                            disabled={disabled || isProcessing || (!value.trim() && attachments.length === 0)}
+                            style={{
+                                padding: '12px 20px',
+                                fontSize: '15px',
+                                fontWeight: '600',
+                                backgroundColor: (disabled || isProcessing || (!value.trim() && attachments.length === 0))
+                                    ? 'var(--color-gray-300)'
+                                    : 'var(--color-primary)',
+                                color: (disabled || isProcessing || (!value.trim() && attachments.length === 0))
+                                    ? 'var(--color-text-disabled)'
+                                    : 'var(--color-text-inverse)',
+                                border: 'none',
+                                borderRadius: '8px',
+                                cursor: (disabled || isProcessing || (!value.trim() && attachments.length === 0))
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                                whiteSpace: 'nowrap',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                transition: 'all var(--transition-fast)',
+                                minWidth: '80px',
+                                height: '48px',
+                                justifyContent: 'center',
+                                boxShadow: (disabled || isProcessing || (!value.trim() && attachments.length === 0))
+                                    ? 'none'
+                                    : 'var(--shadow-sm)'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (!(disabled || isProcessing || (!value.trim() && attachments.length === 0))) {
+                                    e.currentTarget.style.backgroundColor = 'var(--color-primary-600)';
+                                    e.currentTarget.style.transform = 'translateY(-1px)';
+                                    e.currentTarget.style.boxShadow = 'var(--shadow-md)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (!(disabled || isProcessing || (!value.trim() && attachments.length === 0))) {
+                                    e.currentTarget.style.backgroundColor = 'var(--color-primary)';
+                                    e.currentTarget.style.transform = 'translateY(0)';
+                                    e.currentTarget.style.boxShadow = 'var(--shadow-sm)';
+                                }
+                            }}
+                            aria-label={isProcessing ? "Processing" : "Send message"}
+                        >
+                            {isProcessing ? (
+                                <>
+                                    <div style={{
+                                        width: '16px',
+                                        height: '16px',
+                                        border: '2px solid var(--color-text-inverse)',
+                                        borderTop: '2px solid transparent',
+                                        borderRadius: '50%',
+                                        animation: 'spin 1s linear infinite'
+                                    }} />
+                                    <span style={{ fontSize: '13px' }}>
+                                        {i18n.t('Processing...')}
+                                    </span>
+                                </>
+                            ) : (
+                                <>
+                                    <span style={{ fontSize: '16px' }}>✈️</span>
+                                    <span>{i18n.t('Send')}</span>
+                                </>
+                            )}
+                        </button>
+                    </Tooltip>
                 </div>
 
-                {/* Drag hint */}
+                {/* Footer with hints and keyboard shortcuts */}
                 {!dragOver && (
                     <div style={{
-                        padding: '4px 12px',
-                        fontSize: '11px',
-                        color: '#6c757d',
+                        padding: '8px 16px',
+                        fontSize: '12px',
+                        color: 'var(--color-text-secondary)',
                         textAlign: 'center',
-                        borderTop: '1px solid #f8f9fa'
+                        borderTop: '1px solid var(--color-border-light)',
+                        backgroundColor: 'var(--color-gray-50)',
+                        borderRadius: '0 0 12px 12px'
                     }}>
-                        💡 Tip: Drag and drop files here, or click 📎 to attach files
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>💡 Drag & drop files or click 📎 to attach</span>
+                            <span style={{ fontSize: '11px', opacity: 0.7 }}>
+                                Press Enter to send • Shift+Enter for new line
+                            </span>
+                        </div>
                     </div>
                 )}
             </div>

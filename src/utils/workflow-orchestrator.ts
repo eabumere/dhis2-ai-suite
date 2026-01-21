@@ -41,7 +41,7 @@ export interface ConversationMessage {
     data?: any;
     threadId?: string; // For grouping related messages (request → processing → result)
     type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection'
-	    | 'tracker_processing_complete' | 'data_set_selection' | 'success' | 'warning' | 'info' | 'progress';
+	    | 'tracker_processing_complete' | 'data_set_selection' | 'tracker_data_grid' | 'success' | 'warning' | 'info' | 'progress';
 }
 
 export interface WorkflowStep {
@@ -819,6 +819,56 @@ class WorkflowOrchestrator {
             content,
             'response',
             messageData
+        );
+    }
+
+    // Specialized method for rendering tracker data results in conversation
+    requestTrackerRender(trackerResult: any, originalQuery: string) {
+        console.log('🏥 Rendering tracker data results:', trackerResult);
+
+        // Handle tracker data results - these come from tracker agent
+        // and contain extracted patients and mapped tracker data
+
+        if (!trackerResult || trackerResult.success === false) {
+            // Error case - add error message
+            return this.addAssistantMessage(
+                trackerResult?.error || 'Tracker processing failed',
+                'error',
+                trackerResult
+            );
+        }
+
+        // Check if this is tracker data with extracted patients
+        if (trackerResult.extractedPatients && Array.isArray(trackerResult.extractedPatients)) {
+            const patientCount = trackerResult.extractedPatients.length;
+            const mappedCount = trackerResult.mappedTrackerData ? trackerResult.mappedTrackerData.length : 0;
+
+            let content = `Document processed successfully!`;
+            content += `\n\n📋 Extracted ${patientCount} patient record(s)`;
+            if (mappedCount > 0) {
+                content += `\n🏥 Mapped ${mappedCount} to DHIS2 tracker entities`;
+            }
+
+            // Add the tracker data grid as a specialized message type
+            return this.addAssistantMessage(
+                content,
+                'tracker_data_grid',
+                {
+                    extractedPatients: trackerResult.extractedPatients,
+                    mappedTrackerData: trackerResult.mappedTrackerData || [],
+                    headerMappings: trackerResult.headerMappings || {},
+                    headerDisplayNames: trackerResult.headerDisplayNames || {},
+                    reviewMode: trackerResult.reviewMode || false
+                }
+            );
+        }
+
+        // Default case - add as regular response with data
+        const content = trackerResult.message || 'Tracker processing completed';
+        return this.addAssistantMessage(
+            content,
+            'response',
+            trackerResult
         );
     }
 

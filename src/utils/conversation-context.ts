@@ -5,6 +5,8 @@
  * Enables follow-up questions with full conversation awareness.
  */
 
+import { ChatModels } from './chat-model-factory';
+
 export interface ConversationEntry {
     id: string;
     timestamp: number;
@@ -46,6 +48,9 @@ export interface ConversationMemory {
 export class ConversationContextManager {
     private memory: ConversationMemory;
     private storageKey = 'dhis2_conversation_context';
+    private llmModel: any;
+    private llmCache = new Map<string, { result: any; timestamp: number; ttl: number }>();
+    private cacheTTL = 30 * 60 * 1000; // 30 minutes cache TTL
 
     constructor() {
         this.memory = {
@@ -53,6 +58,15 @@ export class ConversationContextManager {
             dataContexts: new Map(),
             activeTopics: []
         };
+
+        // Initialize LLM model for multilingual classification
+        try {
+            this.llmModel = ChatModels.createAgentModel();
+        } catch (error) {
+            console.warn('Failed to initialize LLM model for conversation context:', error);
+            this.llmModel = null;
+        }
+
         this.loadFromStorage();
     }
 
@@ -348,52 +362,35 @@ export class ConversationContextManager {
     }
 
     private extractDiscussionTopic(query: string, response: any): string | undefined {
-        // Extract topic from query and response
-        const lowerQuery = query.toLowerCase();
-
-        if (lowerQuery.includes('hiv') || lowerQuery.includes('aids')) return 'HIV/AIDS';
-        if (lowerQuery.includes('malaria')) return 'Malaria';
-        if (lowerQuery.includes('tb') || lowerQuery.includes('tuberculosis')) return 'Tuberculosis';
-        if (lowerQuery.includes('vaccin')) return 'Vaccination';
-        if (lowerQuery.includes('immunization')) return 'Immunization';
-        if (lowerQuery.includes('maternal') || lowerQuery.includes('pregnan')) return 'Maternal Health';
-        if (lowerQuery.includes('child') || lowerQuery.includes('infant')) return 'Child Health';
-        if (lowerQuery.includes('reporting')) return 'Reporting Systems';
-
-        // Try to extract from response if it's an analytics response
-        if (response && response.originalIndicators) {
-            return `Analytics: ${response.originalIndicators.join(', ')}`;
+        // Try LLM-based extraction first (synchronous with caching)
+        if (this.llmModel) {
+            try {
+                // For now, use fallback since this is sync context
+                // TODO: Consider making this async in future refactoring
+                const llmResult = this.extractDiscussionTopicLLMSync(query, response);
+                if (llmResult) return llmResult;
+            } catch (error) {
+                console.warn('LLM topic extraction failed, using fallback:', error);
+            }
         }
 
-        return undefined;
+        // Fallback to keyword-based extraction
+        return this.extractDiscussionTopicFallback(query, response);
     }
 
     private isContextRelevantToQuery(context: DataContext, query: string): boolean {
-        const lowerQuery = query.toLowerCase();
-
-        // Check if query mentions "previous", "last", "that data", etc.
-        if (lowerQuery.includes('previous') || lowerQuery.includes('last') ||
-            lowerQuery.includes('that data') || lowerQuery.includes('this data')) {
-            return true;
+        // Try LLM-based relevance checking first (synchronous with caching)
+        if (this.llmModel) {
+            try {
+                const llmResult = this.isContextRelevantToQueryLLMSync(context, query);
+                if (llmResult !== undefined) return llmResult;
+            } catch (error) {
+                console.warn('LLM context relevance check failed, using fallback:', error);
+            }
         }
 
-        // Check topic relevance
-        if (context.metadata?.indicators) {
-            const hasIndicatorMatch = context.metadata.indicators.some(ind =>
-                lowerQuery.includes(ind.toLowerCase())
-            );
-            if (hasIndicatorMatch) return true;
-        }
-
-        // Check if query is analytical and we have analytics context
-        if (context.type === 'analytics' && (
-            lowerQuery.includes('analyze') || lowerQuery.includes('show') ||
-            lowerQuery.includes('calculate') || lowerQuery.includes('compare')
-        )) {
-            return true;
-        }
-
-        return false;
+        // Fallback to keyword-based relevance checking
+        return this.isContextRelevantToQueryFallback(context, query);
     }
 
     private updateActiveTopics(entry: ConversationEntry): void {
@@ -478,6 +475,216 @@ export class ConversationContextManager {
 
     private getLastConversation(): ConversationEntry | undefined {
         return this.memory.conversations[this.memory.conversations.length - 1];
+    }
+
+    // LLM caching and classification methods
+
+    /**
+     * Get cached LLM result or fetch new one
+     */
+    private async getCachedLLMResult(cacheKey: string, input: any, prompt: string): Promise<any> {
+        const inputHash = this.hashInput(input);
+
+        // Check cache first
+        const cached = this.llmCache.get(`${cacheKey}_${inputHash}`);
+        if (cached && (Date.now() - cached.timestamp) < cached.ttl) {
+            return cached.result;
+        }
+
+        // Not in cache or expired, make LLM call
+        if (!this.llmModel) {
+            console.warn('LLM model not available, using fallback for:', cacheKey);
+            return this.getFallbackResult(cacheKey, input);
+        }
+
+        try {
+            const result = await this.llmModel.invoke([{ role: 'user', content: prompt }]);
+            const response = (result.content as string).trim();
+
+            // Cache the result
+            this.llmCache.set(`${cacheKey}_${inputHash}`, {
+                result: response,
+                timestamp: Date.now(),
+                ttl: this.cacheTTL
+            });
+
+            // Clean up old cache entries periodically
+            this.cleanCache();
+
+            return response;
+        } catch (error) {
+            console.warn(`LLM call failed for ${cacheKey}, using fallback:`, error);
+            return this.getFallbackResult(cacheKey, input);
+        }
+    }
+
+    /**
+     * Clean up expired cache entries
+     */
+    private cleanCache(): void {
+        const now = Date.now();
+        for (const [key, value] of this.llmCache.entries()) {
+            if (now - value.timestamp > value.ttl) {
+                this.llmCache.delete(key);
+            }
+        }
+    }
+
+    /**
+     * Generate hash for input caching
+     */
+    private hashInput(input: any): string {
+        const str = JSON.stringify(input);
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit integer
+        }
+        return hash.toString(36);
+    }
+
+    /**
+     * Fallback results when LLM is unavailable
+     */
+    private getFallbackResult(cacheKey: string, input: any): any {
+        switch (cacheKey) {
+            case 'topic_extraction':
+                // Fallback to keyword-based topic extraction
+                return this.extractDiscussionTopicFallback(input.query, input.response);
+
+            case 'context_relevance':
+                // Fallback to simple keyword matching
+                const contextSummary = input.context || '';
+                const query = input.query || '';
+                // Create a minimal DataContext-like object for the fallback method
+                const mockContext = {
+                    type: 'analytics' as const,
+                    data: {},
+                    memoryId: 'mock',
+                    summary: contextSummary
+                };
+                return this.isContextRelevantToQueryFallback(mockContext, query);
+
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Synchronous LLM-based topic extraction (with caching)
+     */
+    private extractDiscussionTopicLLMSync(query: string, response: any): string | undefined {
+        // For synchronous context, we need to check cache synchronously
+        const inputHash = this.hashInput({ query, response });
+        const cacheKey = `topic_extraction_${inputHash}`;
+        const cached = this.llmCache.get(cacheKey);
+
+        if (cached && (Date.now() - cached.timestamp) < cached.ttl) {
+            return cached.result && cached.result !== 'general' ? cached.result : undefined;
+        }
+
+        // If not in cache, use fallback for now (could trigger async LLM call in background)
+        return undefined; // Let it fall back to keyword-based
+    }
+
+    /**
+     * Synchronous LLM-based context relevance checking (with caching)
+     */
+    private isContextRelevantToQueryLLMSync(context: DataContext, query: string): boolean | undefined {
+        // For synchronous context, we need to check cache synchronously
+        const inputHash = this.hashInput({ context: context.summary, query });
+        const cacheKey = `context_relevance_${inputHash}`;
+        const cached = this.llmCache.get(cacheKey);
+
+        if (cached && (Date.now() - cached.timestamp) < cached.ttl) {
+            return cached.result === 'true';
+        }
+
+        // If not in cache, use fallback for now (could trigger async LLM call in background)
+        return undefined; // Let it fall back to keyword-based
+    }
+
+    /**
+     * LLM-based topic extraction
+     */
+    private async extractDiscussionTopicLLM(query: string, response: any): Promise<string | undefined> {
+        const prompt = `Analyze this DHIS2 conversation and extract the main discussion topic.
+Return a concise topic name (max 3 words) that captures what this conversation is about.
+
+Query: "${query}"
+Response type: ${response?.type || 'unknown'}
+
+Examples: "HIV/AIDS", "Malaria Control", "Vaccination Programs", "Data Analysis"
+Return only the topic name or "general" if no specific topic.`;
+
+        const result = await this.getCachedLLMResult('topic_extraction', { query, response }, prompt);
+        return result && result !== 'general' ? result : undefined;
+    }
+
+    /**
+     * LLM-based context relevance checking
+     */
+    private async isContextRelevantToQueryLLM(context: DataContext, query: string): Promise<boolean> {
+        const prompt = `Determine if this data context is relevant to the user's query.
+Consider semantic meaning, not just exact keyword matches.
+
+Data Context Summary: ${context.summary}
+User Query: "${query}"
+
+Return only "true" or "false".`;
+
+        const result = await this.getCachedLLMResult('context_relevance', { context: context.summary, query }, prompt);
+        return result === 'true';
+    }
+
+    /**
+     * Fallback keyword-based topic extraction
+     */
+    private extractDiscussionTopicFallback(query: string, response: any): string | undefined {
+        const lowerQuery = query.toLowerCase();
+
+        if (lowerQuery.includes('hiv') || lowerQuery.includes('aids')) return 'HIV/AIDS';
+        if (lowerQuery.includes('malaria')) return 'Malaria';
+        if (lowerQuery.includes('tb') || lowerQuery.includes('tuberculosis')) return 'Tuberculosis';
+        if (lowerQuery.includes('vaccin')) return 'Vaccination';
+        if (lowerQuery.includes('immunization')) return 'Immunization';
+        if (lowerQuery.includes('maternal') || lowerQuery.includes('pregnan')) return 'Maternal Health';
+        if (lowerQuery.includes('child') || lowerQuery.includes('infant')) return 'Child Health';
+        if (lowerQuery.includes('reporting')) return 'Reporting Systems';
+
+        if (response && response.originalIndicators) {
+            return `Analytics: ${response.originalIndicators.join(', ')}`;
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Fallback keyword-based context relevance
+     */
+    private isContextRelevantToQueryFallback(context: DataContext, query: string): boolean {
+        const lowerQuery = query.toLowerCase();
+
+        // Check if query mentions "previous", "last", "that data", etc.
+        if (lowerQuery.includes('previous') || lowerQuery.includes('last') ||
+            lowerQuery.includes('that data') || lowerQuery.includes('this data')) {
+            return true;
+        }
+
+        // Check topic relevance
+        if (context.metadata?.indicators) {
+            const hasIndicatorMatch = context.metadata.indicators.some(ind =>
+                lowerQuery.includes(ind.toLowerCase())
+            );
+            if (hasIndicatorMatch) return true;
+        }
+
+        // Check if query is analytical and we have analytics context
+        return context.type === 'analytics' && (
+            lowerQuery.includes('analyze') || lowerQuery.includes('show') ||
+            lowerQuery.includes('calculate') || lowerQuery.includes('compare')
+        );
     }
 
     private saveToStorage(): void {

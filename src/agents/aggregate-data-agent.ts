@@ -177,10 +177,6 @@ const AggregateDataAnnotation = Annotation.Root({
         reducer: (left: any[], right: any[]) => right ? right : left,
         default: () => []
     }),
-    orchestrator: Annotation<any>({
-        reducer: (left, right) => right || left,
-        default: () => null
-    }),
 
     // Batch validation results with resource details
     resourceDetails: Annotation<Map<string, { exists: boolean; details?: any }>>({
@@ -231,6 +227,19 @@ const AggregateDataAnnotation = Annotation.Root({
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
+
+// Progress tracking helper
+function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof AggregateDataAnnotation.State> {
+    return {
+        workflowProgress: {
+            currentStep: step,
+            totalSteps: 10,
+            stepName,
+            message,
+            isIndeterminate
+        }
+    };
+}
 
 // StateGraph Workflow Nodes
 
@@ -1907,8 +1916,8 @@ async function handleDataValueUpdate(query: string, conversationHistory: any[], 
 					dataElement: row[0] || '',
 					orgUnit: row[1] || '',
 					period: row[2] || '',
-					categoryOptionCombo: row[3] || '',
-					attributeOptionCombo: row[4] || '',
+					categoryOptionCombos: row[3] || '',
+					attributeOptionCombos: row[4] || '',
 					value: row[5] || '',
 					rowIndex: index
 				}));

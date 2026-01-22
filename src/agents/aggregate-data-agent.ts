@@ -2159,8 +2159,8 @@ async function update_data_set(state: typeof AggregateDataAnnotation.State, data
             period: dataValue.period,
             orgUnit: dataValue.orgUnit,
             value: newValues.value !== undefined ? newValues.value : dataValue.value,
-            ...(dataValue.categoryOptionCombo && { categoryOptionCombo: dataValue.categoryOptionCombo }),
-            ...(dataValue.attributeOptionCombo && { attributeOptionCombo: dataValue.attributeOptionCombo })
+            ...(dataValue.categoryOptionCombos && { categoryOptionCombo: dataValue.categoryOptionCombos }),
+            ...(dataValue.attributeOptionCombos && { attributeOptionCombo: dataValue.attributeOptionCombos })
         }));
 
         // Update data values in DHIS2

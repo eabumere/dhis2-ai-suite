@@ -1,9 +1,12 @@
 import React, {useCallback, useState} from 'react';
-import {Alert, Button, Input, Modal, Progress, Select, Spin, Table, Tag} from 'antd';
+import {Alert, Button, Input, Modal, Progress, Select, Spin, Table, Tag, message} from 'antd';
 import {ReloadOutlined, RobotOutlined, SettingOutlined, UploadOutlined} from '@ant-design/icons';
 import {matchPdfHeadersToMapping, validateHeaderMatchingResult} from '../utils/tools/metadata/header-matching';
 import {dhis2Config} from '../utils/env-config';
 import LoadingSkeleton from './LoadingSkeleton';
+import AttributeEditor from './AttributeEditor';
+import EntityActions from './EntityActions';
+import dayjs from 'dayjs';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -41,6 +44,12 @@ interface TrackerDataGridProps {
     mappedTrackerData: TrackerDataValue[];
     headerMappings?: Record<string, string>; // PDF header -> DHIS2 attribute ID mapping
     headerDisplayNames?: Record<string, string>; // PDF header -> DHIS2 display name mapping
+    attributeMetadata?: Record<string, {
+        valueType: string;
+        optionSet?: { id: string; name: string; options: Array<{ id: string; name: string }> };
+        mandatory?: boolean;
+        unique?: boolean;
+    }>; // Attribute metadata for dynamic input rendering
     onConfigureProcessing?: (config: {
         orgUnit: string;
         programId: string;
@@ -48,8 +57,11 @@ interface TrackerDataGridProps {
     }) => void;
     onUploadDocument?: (file: File) => void;
     onRetryProcessing?: () => void;
-    onConfirmSave?: () => void;
+    onConfirmSave?: (modifiedData?: any) => void;
     onCancelSave?: () => void;
+    onUpdateEntity?: (entityId: string) => void;
+    onDeleteEntity?: (entityId: string) => void;
+    onViewEntityDetails?: (entityId: string) => void;
     processingStep?: string;
     processingProgress?: number;
     error?: string;
@@ -66,6 +78,9 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
     onRetryProcessing,
     onConfirmSave,
     onCancelSave,
+    onUpdateEntity,
+    onDeleteEntity,
+    onViewEntityDetails,
     processingStep,
     processingProgress,
     error,
@@ -86,6 +101,65 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
 
     // Attribute display name mapping for column headers
     const [attributeDisplayNames, setAttributeDisplayNames] = useState<Record<string, string>>({});
+
+    // Editable grid state for review mode
+    const [editingData, setEditingData] = useState<Record<string, Record<string, string>>>({});
+    const [modifiedRows, setModifiedRows] = useState<Set<number>>(new Set());
+
+    // Cell editing handlers
+    const handleCellEdit = useCallback((rowIndex: number, fieldName: string, value: string) => {
+        const rowKey = `row_${rowIndex}`;
+        setEditingData(prev => ({
+            ...prev,
+            [rowKey]: {
+                ...prev[rowKey],
+                [fieldName]: value
+            }
+        }));
+        setModifiedRows(prev => new Set([...prev, rowIndex]));
+    }, []);
+
+    const handleCellSave = useCallback((rowIndex: number, fieldName: string) => {
+        // Save is handled automatically when onConfirmSave is called with the modified data
+        console.log(`Cell saved: row ${rowIndex}, field ${fieldName}`);
+    }, []);
+
+    const handleCellCancel = useCallback((rowIndex: number, fieldName: string) => {
+        const rowKey = `row_${rowIndex}`;
+        setEditingData(prev => {
+            const newData = { ...prev };
+            if (newData[rowKey]) {
+                delete newData[rowKey][fieldName];
+                if (Object.keys(newData[rowKey]).length === 0) {
+                    delete newData[rowKey];
+                }
+            }
+            return newData;
+        });
+
+        // Check if this row still has modifications
+        const rowKeyCheck = `row_${rowIndex}`;
+        const hasOtherModifications = Object.keys(editingData[rowKeyCheck] || {}).some(key => key !== fieldName);
+        if (!hasOtherModifications) {
+            setModifiedRows(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(rowIndex);
+                return newSet;
+            });
+        }
+    }, [editingData]);
+
+    // Get the edited value for a cell
+    const getEditedValue = useCallback((rowIndex: number, fieldName: string, originalValue: string) => {
+        const rowKey = `row_${rowIndex}`;
+        return editingData[rowKey]?.[fieldName] ?? originalValue;
+    }, [editingData]);
+
+    // Check if a cell has been modified
+    const isCellModified = useCallback((rowIndex: number, fieldName: string) => {
+        const rowKey = `row_${rowIndex}`;
+        return editingData[rowKey]?.[fieldName] !== undefined;
+    }, [editingData]);
 
     // Get all available field names from extracted patients
     const availableFields = React.useMemo(() => {
@@ -504,6 +578,70 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                 );
             },
         },
+        {
+            title: (
+                <div style={{
+                    fontWeight: 'var(--font-weight-semibold)',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 'var(--font-size-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)'
+                }}>
+                    ⚡ Actions
+                </div>
+            ),
+            key: 'actions',
+            width: 120,
+            fixed: 'right' as const,
+            render: (record: TrackerDataValue) => {
+                const attrMeta = attributeMetadata || {};
+                return (
+                    <EntityActions
+                        entityId={record.trackedEntityInstance}
+                        entityName="Tracker Entity"
+                        currentAttributes={record.attributes.map(attr => {
+                            const meta = attrMeta[attr.attribute];
+                            return {
+                                attribute: attr.attribute,
+                                value: attr.value,
+                                displayName: headerDisplayNames?.[attr.attribute] || attr.attribute,
+                                valueType: meta?.valueType || 'TEXT',
+                                optionSet: meta?.optionSet
+                            };
+                        })}
+                        availableAttributes={Object.entries(attrMeta).map(([id, meta]) => ({
+                            id,
+                            name: headerDisplayNames?.[id] || id,
+                            valueType: meta.valueType || 'TEXT',
+                            optionSet: meta.optionSet,
+                            mandatory: meta.mandatory
+                        }))}
+                        onUpdate={onUpdateEntity}
+                        onDelete={onDeleteEntity}
+                        onViewDetails={onViewEntityDetails}
+                        onUpdateAttributes={async (entityId, attributes) => {
+                            // Create partial update payload
+                            const updatePayload = {
+                                trackedEntityInstance: entityId,
+                                attributes: attributes.map(attr => ({
+                                    attribute: attr.attribute,
+                                    value: attr.value
+                                }))
+                            };
+
+                            // Call the workflow orchestrator
+                            if (onUpdateEntity) {
+                                // For now, we'll trigger the update action with attribute data
+                                // In a full implementation, this would call a specific attribute update handler
+                                console.log('Attribute update requested:', updatePayload);
+                                // TODO: Implement actual attribute update logic
+                            }
+                        }}
+                    />
+                );
+            },
+        },
     ];
 
     // Create dynamic columns from extracted field names with proper DHIS2 attribute display names
@@ -540,71 +678,141 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                         gap: 'var(--space-2)'
                     }}>
                         {displayName}
+                        {reviewMode && modifiedRows.size > 0 && (
+                            <span style={{
+                                backgroundColor: 'var(--color-warning)',
+                                color: 'var(--color-text-inverse)',
+                                padding: 'var(--space-1) var(--space-2)',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: 'var(--font-size-xs)',
+                                fontWeight: 'var(--font-weight-bold)'
+                            }}>
+                                ✏️
+                            </span>
+                        )}
                     </div>
                 ),
                 dataIndex: fieldName,
                 key: fieldName,
-                width: 180,
-                onCell: (record: any) => ({
+                width: 200,
+                onCell: (record: any, rowIndex: number) => ({
                     style: {
                         transition: 'var(--transition-fast)',
+                        backgroundColor: isCellModified(rowIndex, fieldName) ? 'var(--color-warning-50)' : 'transparent',
+                        border: isCellModified(rowIndex, fieldName) ? '2px solid var(--color-warning)' : 'none'
                     },
                     onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) => {
                         const target = e.currentTarget as HTMLTableCellElement;
-                        target.style.backgroundColor = 'var(--color-gray-50)';
+                        target.style.backgroundColor = isCellModified(rowIndex, fieldName) ? 'var(--color-warning-100)' : 'var(--color-gray-50)';
                         target.style.transform = 'scale(1.01)';
                     },
                     onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
                         const target = e.currentTarget as HTMLTableCellElement;
-                        target.style.backgroundColor = '';
+                        target.style.backgroundColor = isCellModified(rowIndex, fieldName) ? 'var(--color-warning-50)' : '';
                         target.style.transform = '';
                     }
                 }),
-                render: (value: { value: string; confidence: number }) => {
+                render: (value: { value: string; confidence: number }, record: any, rowIndex: number) => {
                     const confidence = value.confidence || 0;
                     const isLowConfidence = confidence < 0.8;
+                    const editedValue = getEditedValue(rowIndex, fieldName, value.value || '');
+                    const hasBeenModified = isCellModified(rowIndex, fieldName);
 
-                    return (
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 'var(--space-2)',
-                            padding: 'var(--space-2)'
-                        }}>
-                            <span style={{
-                                color: isLowConfidence ? 'var(--color-error)' : 'var(--color-text-primary)',
-                                fontWeight: isLowConfidence ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
-                                flex: 1,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
+                    if (reviewMode) {
+                        // Editable mode in review
+                        return (
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 'var(--space-2)',
+                                padding: 'var(--space-1)'
                             }}>
-                                {value.value || '-'}
-                            </span>
-                            {isLowConfidence && (
+                                <Input
+                                    value={editedValue}
+                                    onChange={(e) => handleCellEdit(rowIndex, fieldName, e.target.value)}
+                                    style={{
+                                        flex: 1,
+                                        borderColor: hasBeenModified ? 'var(--color-warning)' : 'var(--color-border-light)',
+                                        backgroundColor: hasBeenModified ? 'var(--color-warning-25)' : 'var(--color-bg-primary)'
+                                    }}
+                                    size="small"
+                                />
+                                {isLowConfidence && (
+                                    <span style={{
+                                        backgroundColor: 'var(--color-error)',
+                                        color: 'var(--color-text-inverse)',
+                                        padding: 'var(--space-1) var(--space-2)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        fontSize: 'var(--font-size-xs)',
+                                        fontWeight: 'var(--font-weight-bold)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 'var(--space-1)'
+                                    }}>
+                                        ⚠️ {Math.round(confidence * 100)}%
+                                    </span>
+                                )}
+                                {hasBeenModified && (
+                                    <span style={{
+                                        backgroundColor: 'var(--color-success)',
+                                        color: 'var(--color-text-inverse)',
+                                        padding: 'var(--space-1) var(--space-2)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        fontSize: 'var(--font-size-xs)',
+                                        fontWeight: 'var(--font-weight-bold)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 'var(--space-1)'
+                                    }}>
+                                        ✓ Edited
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    } else {
+                        // Read-only mode
+                        return (
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 'var(--space-2)',
+                                padding: 'var(--space-2)'
+                            }}>
                                 <span style={{
-                                    backgroundColor: 'var(--color-error)',
-                                    color: 'var(--color-text-inverse)',
-                                    padding: 'var(--space-1) var(--space-2)',
-                                    borderRadius: 'var(--radius-lg)',
-                                    fontSize: 'var(--font-size-xs)',
-                                    fontWeight: 'var(--font-weight-bold)',
-                                    animation: 'pulse 2s infinite',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 'var(--space-1)'
+                                    color: isLowConfidence ? 'var(--color-error)' : 'var(--color-text-primary)',
+                                    fontWeight: isLowConfidence ? 'var(--font-weight-semibold)' : 'var(--font-weight-normal)',
+                                    flex: 1,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap'
                                 }}>
-                                    ⚠️ {Math.round(confidence * 100)}%
+                                    {value.value || '-'}
                                 </span>
-                            )}
-                        </div>
-                    );
+                                {isLowConfidence && (
+                                    <span style={{
+                                        backgroundColor: 'var(--color-error)',
+                                        color: 'var(--color-text-inverse)',
+                                        padding: 'var(--space-1) var(--space-2)',
+                                        borderRadius: 'var(--radius-lg)',
+                                        fontSize: 'var(--font-size-xs)',
+                                        fontWeight: 'var(--font-weight-bold)',
+                                        animation: 'pulse 2s infinite',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 'var(--space-1)'
+                                    }}>
+                                        ⚠️ {Math.round(confidence * 100)}%
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    }
                 },
             };
         });
 
         return columns;
-    }, [extractedPatients, attributeMappings, attributeDisplayNames]);
+    }, [extractedPatients, attributeMappings, attributeDisplayNames, reviewMode, modifiedRows, editingData, handleCellEdit, getEditedValue, isCellModified]);
 
     // Transform extracted patients data for patient-by-patient display
     const patientTableData = React.useMemo(() => {
@@ -676,10 +884,39 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                     <Button
                         type="primary"
                         size="large"
-                        onClick={onConfirmSave}
+                        onClick={() => {
+                            // Pass edited data back to parent
+                            const modifiedData = {
+                                editedPatients: patientTableData.map((patient, index) => {
+                                    const editedPatient = { ...patient };
+                                    const rowKey = `row_${index}`;
+
+                                    // Apply edits to the patient data
+                                    if (editingData[rowKey]) {
+                                        Object.entries(editingData[rowKey]).forEach(([fieldName, value]) => {
+                                            if (editedPatient[fieldName]) {
+                                                editedPatient[fieldName] = {
+                                                    ...editedPatient[fieldName],
+                                                    value: value
+                                                };
+                                            }
+                                        });
+                                    }
+
+                                    return editedPatient;
+                                }),
+                                hasModifications: modifiedRows.size > 0,
+                                modifiedRowCount: modifiedRows.size
+                            };
+
+                            if (onConfirmSave) {
+                                onConfirmSave(modifiedData);
+                            }
+                        }}
                         style={{ minWidth: '120px' }}
+                        disabled={modifiedRows.size === 0}
                     >
-                        ✅ Save to DHIS2
+                        ✅ Save to DHIS2 {modifiedRows.size > 0 && `(${modifiedRows.size} edited)`}
                     </Button>
                     <Button
                         danger

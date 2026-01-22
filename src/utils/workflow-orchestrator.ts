@@ -1468,6 +1468,65 @@ class WorkflowOrchestrator {
                 // TODO: Trigger bulk resolution workflow
                 break;
 
+            case 'update_entity_attributes':
+                console.log('🔧 Updating entity attributes:', data);
+
+                // Import the tracker agent to handle the attribute update
+                try {
+                    const { createTrackerDataAgent } = await import('../agents/tracker-agent');
+                    const trackerAgent = createTrackerDataAgent(this);
+
+                    if (trackerAgent?.handleUIInteraction) {
+                        // Create current state (minimal state needed for attribute update)
+                        const currentState = {
+                            uploadedDocument: null,
+                            extractedPatients: [],
+                            mappedTrackerData: [],
+                            orgUnit: '',
+                            programId: '',
+                            attributeMappings: {},
+                            uiAction: '',
+                            messages: this.currentUIState.conversation.filter(msg => msg.role === 'user'),
+                            orchestrator: this,
+                            finalResult: null
+                        };
+
+                        // Call the tracker agent's UI interaction handler
+                        const updatedState = await trackerAgent.handleUIInteraction(
+                            { type, data },
+                            currentState
+                        );
+
+                        // Handle the result
+                        if (updatedState.finalResult) {
+                            this.addAssistantMessage(
+                                updatedState.finalResult.message || 'Entity attributes updated successfully',
+                                'response',
+                                updatedState.finalResult
+                            );
+                        } else {
+                            // If no final result, show a confirmation message
+                            this.addAssistantMessage(
+                                'Entity attributes updated successfully',
+                                'response'
+                            );
+                        }
+                    } else {
+                        console.warn('Tracker agent handleUIInteraction not available');
+                        this.addAssistantMessage(
+                            'Unable to process attribute update - agent not available',
+                            'error'
+                        );
+                    }
+                } catch (error) {
+                    console.error('Failed to import tracker agent for attribute update:', error);
+                    this.addAssistantMessage(
+                        'Unable to process attribute update - agent loading failed',
+                        'error'
+                    );
+                }
+                break;
+
             default:
                 console.warn('Unknown data grid interaction:', type);
         }

@@ -1962,6 +1962,7 @@ export const processScannedRegister = tool(
         filename: string;
         orgUnit?: string;
         programId?: string;
+        extractedOrgUnit?: string; // From Azure Document Intelligence
     }) => {
         try {
             const { processDocumentWithAI, splitPdfIntoPages } = await import('../../azure-document-intelligence');
@@ -2003,6 +2004,13 @@ export const processScannedRegister = tool(
                 }
             }
 
+            // Use organization unit extracted from document fields by Azure Document Intelligence
+            let extractedOrgUnit = input.extractedOrgUnit || null;
+            if (extractedOrgUnit) {
+                orgUnit = extractedOrgUnit;
+                console.log(`📍 Using organization unit extracted from document: "${orgUnit}"`);
+            }
+
             // Merge patient records by ART No Patient ID (matching Python implementation)
             const mergedPatients = mergePatientRecords(cleanData);
 
@@ -2014,7 +2022,8 @@ export const processScannedRegister = tool(
                 totalPages: pages.length,
                 totalTables: cleanData.length,
                 orgUnit: orgUnit,
-                message: `Successfully processed ${pages.length} pages and extracted ${mergedPatients.length} patient records`
+                extractedOrgUnit: extractedOrgUnit, // Include extracted org unit separately for UI feedback
+                message: `Successfully processed ${pages.length} pages and extracted ${mergedPatients.length} patient records${extractedOrgUnit ? ` from ${extractedOrgUnit}` : ''}`
             });
 
         } catch (error) {
@@ -2033,7 +2042,8 @@ export const processScannedRegister = tool(
             fileBuffer: z.instanceof(Uint8Array).describe("The PDF file buffer to process"),
             filename: z.string().describe("Original filename for processing"),
             orgUnit: z.string().optional().describe("DHIS2 organisation unit ID for the facility"),
-            programId: z.string().optional().describe("DHIS2 tracker program ID")
+            programId: z.string().optional().describe("DHIS2 tracker program ID"),
+            extractedOrgUnit: z.string().optional().describe("Pre-extracted organization unit from Azure Document Intelligence")
         })
     }
 );
@@ -3933,6 +3943,168 @@ export const createDhis2DashboardItem = createLLMFirstTool({
     dhis2SchemaName: "DashboardItem"
 });
 
+// Delete tools - Core
+export const deleteDhis2DataElement = createDhis2UpdateTool({
+    name: "delete_dhis2_data_element",
+    description: "Delete DHIS2 data elements using schema-compliant properties",
+    schema: Dhis2Schemas.DataElement,
+    metadataType: "dataElements",
+});
+
+export const deleteDhis2OrganisationUnit = createDhis2UpdateTool({
+    name: "delete_dhis2_organisation_unit",
+    description: "Delete DHIS2 organisation units using schema-compliant properties",
+    schema: Dhis2Schemas.OrganisationUnit,
+    metadataType: "organisationUnits",
+});
+
+export const deleteDhis2Category = createDhis2UpdateTool({
+    name: "delete_dhis2_category",
+    description: "Delete DHIS2 categories using schema-compliant properties",
+    schema: Dhis2Schemas.Category,
+    metadataType: "categories",
+});
+
+export const deleteDhis2CategoryCombo = createDhis2UpdateTool({
+    name: "delete_dhis2_category_combo",
+    description: "Delete DHIS2 category combinations using schema-compliant properties",
+    schema: Dhis2Schemas.CategoryCombo,
+    metadataType: "categoryCombos",
+});
+
+export const deleteDhis2CategoryOption = createDhis2UpdateTool({
+    name: "delete_dhis2_category_option",
+    description: "Delete DHIS2 category options using schema-compliant properties",
+    schema: Dhis2Schemas.CategoryOption,
+    metadataType: "categoryOptions",
+});
+
+export const deleteDhis2DataSet = createDhis2UpdateTool({
+    name: "delete_dhis2_data_set",
+    description: "Delete DHIS2 data sets using schema-compliant properties",
+    schema: Dhis2Schemas.DataSet,
+    metadataType: "dataSets",
+});
+
+export const deleteDhis2OrganisationUnitGroup = createDhis2UpdateTool({
+    name: "delete_dhis2_organisation_unit_group",
+    description: "Delete DHIS2 organisation unit groups using schema-compliant properties",
+    schema: Dhis2Schemas.OrganisationUnitGroup,
+    metadataType: "organisationUnitGroups",
+});
+
+export const deleteDhis2OrganisationUnitGroupSet = createDhis2UpdateTool({
+    name: "delete_dhis2_organisation_unit_group_set",
+    description: "Delete DHIS2 organisation unit group sets using schema-compliant properties",
+    schema: Dhis2Schemas.OrganisationUnitGroupSet,
+    metadataType: "organisationUnitGroupSets",
+});
+
+export const deleteDhis2Program = createDhis2UpdateTool({
+    name: "delete_dhis2_program",
+    description: "Delete DHIS2 programs using schema-compliant properties",
+    schema: Dhis2Schemas.Program,
+    metadataType: "programs",
+});
+
+export const deleteDhis2TrackedEntityType = createDhis2UpdateTool({
+    name: "delete_dhis2_tracked_entity_type",
+    description: "Delete DHIS2 tracked entity types using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityType,
+    metadataType: "trackedEntityTypes",
+});
+
+export const deleteDhis2TrackedEntityAttribute = createDhis2UpdateTool({
+    name: "delete_dhis2_tracked_entity_attribute",
+    description: "Delete DHIS2 tracked entity attributes using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityAttribute,
+    metadataType: "trackedEntityAttributes",
+});
+
+export const deleteDhis2Indicator = createDhis2UpdateTool({
+    name: "delete_dhis2_indicator",
+    description: "Delete DHIS2 indicators using schema-compliant properties",
+    schema: Dhis2Schemas.Indicator,
+    metadataType: "indicators",
+});
+
+export const deleteDhis2IndicatorType = createDhis2UpdateTool({
+    name: "delete_dhis2_indicator_type",
+    description: "Delete DHIS2 indicator types using schema-compliant properties",
+    schema: Dhis2Schemas.IndicatorType,
+    metadataType: "indicatorTypes",
+});
+
+export const deleteDhis2ValidationRule = createDhis2UpdateTool({
+    name: "delete_dhis2_validation_rule",
+    description: "Delete DHIS2 validation rules using schema-compliant properties",
+    schema: Dhis2Schemas.ValidationRule,
+    metadataType: "validationRules",
+});
+
+export const deleteDhis2Option = createDhis2UpdateTool({
+    name: "delete_dhis2_option",
+    description: "Delete DHIS2 options using schema-compliant properties",
+    schema: Dhis2Schemas.Option,
+    metadataType: "options",
+});
+
+export const deleteDhis2OptionSet = createDhis2UpdateTool({
+    name: "delete_dhis2_option_set",
+    description: "Delete DHIS2 option sets using schema-compliant properties",
+    schema: Dhis2Schemas.OptionSet,
+    metadataType: "optionSets",
+});
+
+export const deleteDhis2Dashboard = createDhis2UpdateTool({
+    name: "delete_dhis2_dashboard",
+    description: "Delete DHIS2 dashboards using schema-compliant properties",
+    schema: Dhis2Schemas.Dashboard,
+    metadataType: "dashboards",
+});
+
+export const deleteDhis2TrackedEntityInstance = createDhis2UpdateTool({
+    name: "delete_dhis2_tracked_entity_instance",
+    description: "Delete DHIS2 tracked entity instances using schema-compliant properties",
+    schema: Dhis2Schemas.TrackedEntityInstance,
+    metadataType: "trackedEntityInstances",
+});
+
+export const deleteDhis2Enrollment = createDhis2UpdateTool({
+    name: "delete_dhis2_enrollment",
+    description: "Delete DHIS2 enrollments using schema-compliant properties",
+    schema: Dhis2Schemas.Enrollment,
+    metadataType: "enrollments",
+});
+
+export const deleteDhis2Event = createDhis2UpdateTool({
+    name: "delete_dhis2_event",
+    description: "Delete DHIS2 events using schema-compliant properties",
+    schema: Dhis2Schemas.Event,
+    metadataType: "events",
+});
+
+export const deleteDhis2User = createDhis2UpdateTool({
+    name: "delete_dhis2_user",
+    description: "Delete DHIS2 users using schema-compliant properties",
+    schema: Dhis2Schemas.User,
+    metadataType: "users",
+});
+
+export const deleteDhis2RelationshipType = createDhis2UpdateTool({
+    name: "delete_dhis2_relationship_type",
+    description: "Delete DHIS2 relationship types using schema-compliant properties",
+    schema: Dhis2Schemas.RelationshipType,
+    metadataType: "relationshipTypes",
+});
+
+export const deleteDhis2Relationship = createDhis2UpdateTool({
+    name: "delete_dhis2_relationship",
+    description: "Delete DHIS2 relationships using schema-compliant properties",
+    schema: Dhis2Schemas.Relationship,
+    metadataType: "relationships",
+});
+
 // Export all tools - TEMPORARY: Only including currently migrated LLM-first tools
 export const Dhis2StructuredTools = {
     // LLM-First Creation Tools (Migrated)
@@ -3950,15 +4122,15 @@ export const Dhis2StructuredTools = {
     createDhis2IndicatorType,
     createDhis2RelationshipType,
     createDhis2Relationship,
-    createDhis2Program, 
-    createDhis2TrackedEntityType, 
-    createDhis2TrackedEntityAttribute, 
-    createDhis2ProgramStage, 
-    createDhis2ProgramRule, 
-    createDhis2ProgramIndicator, 
+    createDhis2Program,
+    createDhis2TrackedEntityType,
+    createDhis2TrackedEntityAttribute,
+    createDhis2ProgramStage,
+    createDhis2ProgramRule,
+    createDhis2ProgramIndicator,
     createDhis2Indicator, // Complex tool with legacy parsing
-    // createDhis2ValidationRule, 
-    // createDhis2DashboardItem, 
+    // createDhis2ValidationRule,
+    // createDhis2DashboardItem,
     createDhis2TrackedEntityInstance,
     createDhis2Enrollment,
     createDhis2Event,
@@ -3987,6 +4159,31 @@ export const Dhis2StructuredTools = {
     updateDhis2User,
     updateDhis2RelationshipType,
     updateDhis2Relationship,
+
+    // Delete tools - Core
+    deleteDhis2DataElement,
+    deleteDhis2OrganisationUnit,
+    deleteDhis2Category,
+    deleteDhis2CategoryCombo,
+    deleteDhis2CategoryOption,
+    deleteDhis2DataSet,
+    deleteDhis2OrganisationUnitGroup,
+    deleteDhis2OrganisationUnitGroupSet,
+    deleteDhis2Program,
+    deleteDhis2TrackedEntityType,
+    deleteDhis2TrackedEntityAttribute,
+    deleteDhis2Indicator,
+    deleteDhis2IndicatorType,
+    deleteDhis2ValidationRule,
+    deleteDhis2Option,
+    deleteDhis2OptionSet,
+    deleteDhis2Dashboard,
+    deleteDhis2TrackedEntityInstance,
+    deleteDhis2Enrollment,
+    deleteDhis2Event,
+    deleteDhis2User,
+    deleteDhis2RelationshipType,
+    deleteDhis2Relationship,
 
     // 📊 ANALYTICS TOOLS 📊
     queryAnalytics,

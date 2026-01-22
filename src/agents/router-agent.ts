@@ -270,7 +270,8 @@ async function invoke_crud_agent(state: typeof RouterAnnotation.State): Promise<
 
 	try {
 		const result = await crudAgent.invoke({
-			messages: [{ role: 'user', content: state.originalQuery }]
+			messages: [{ role: 'user', content: state.originalQuery }],
+			orchestrator: state.orchestrator // Pass orchestrator for UI feedback
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;

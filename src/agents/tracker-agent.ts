@@ -84,6 +84,28 @@ const TrackerDataAnnotation = Annotation.Root({
         default: () => ''
     }),
 
+    // Org unit resolution state
+    extractedOrgUnit: Annotation<string>({
+        reducer: (left, right) => right || left,
+        default: () => ''
+    }),
+
+    resolvedOrgUnit: Annotation<{id: string, name: string} | null>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
+
+    // Attribute metadata state for dynamic input rendering
+    attributeMetadata: Annotation<Record<string, {
+        valueType: string;
+        optionSet?: { id: string; name: string; options: Array<{ id: string; name: string }> };
+        mandatory?: boolean;
+        unique?: boolean;
+    }>>({
+        reducer: (left, right) => right || left,
+        default: () => ({})
+    }),
+
     programId: Annotation<string>({
         reducer: (left, right) => right || left,
         default: () => ''
@@ -114,6 +136,24 @@ const TrackerDataAnnotation = Annotation.Root({
     userConfirmedSave: Annotation<boolean>({
         reducer: (left, right) => right !== undefined ? right : left,
         default: () => false
+    }),
+
+    // Editing mode for tracking when user is editing data
+    editingMode: Annotation<boolean>({
+        reducer: (left, right) => right !== undefined ? right : left,
+        default: () => false
+    }),
+
+    // Track modified data during editing sessions
+    modifiedData: Annotation<Record<string, any>>({
+        reducer: (left, right) => right || left,
+        default: () => ({})
+    }),
+
+    // Track entity operations performed during session
+    entityOperations: Annotation<Array<{action: string, entityId: string, data: any, timestamp: number}>>({
+        reducer: (left, right) => right ? [...left, ...right] : left,
+        default: () => []
     }),
 
     // Messages and orchestrator reference
@@ -303,7 +343,8 @@ async function extract_patient_data(state: typeof TrackerDataAnnotation.State): 
 
         return {
             extractedPatients: parsedResult.patients,
-            uiAction: 'map_to_tracker_format'
+            extractedOrgUnit: parsedResult.extractedOrgUnit || '',
+            uiAction: 'resolve_org_unit'
         };
 
     } catch (error) {
@@ -317,7 +358,179 @@ async function extract_patient_data(state: typeof TrackerDataAnnotation.State): 
     }
 }
 
-// 4. Map extracted data to DHIS2 tracker format
+// 3. Resolve organisation unit from extracted data
+async function resolve_org_unit(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    if (!state.extractedOrgUnit) {
+        console.log('📍 Tracker Data Agent: No org unit extracted from document, using default');
+        return {
+            resolvedOrgUnit: null, // No resolution needed
+            uiAction: 'map_to_tracker_format'
+        };
+    }
+
+    console.log(`📍 Tracker Data Agent: Resolving org unit "${state.extractedOrgUnit}" from extracted data`);
+
+    try {
+        // Import the search tool
+        const { searchDhis2OrganisationUnits } = await import('../utils/tools/metadata/structured-tools');
+
+        // Search for organisation units by name
+        const searchResult = await searchDhis2OrganisationUnits.invoke({
+            query: state.extractedOrgUnit,
+            limit: 10
+        });
+
+        const parsedResult = JSON.parse(searchResult);
+        const orgUnits = parsedResult.organisationUnits || [];
+
+        console.log(`📍 Tracker Data Agent: Found ${orgUnits.length} potential org unit matches`);
+
+        if (orgUnits.length === 0) {
+            console.log('📍 Tracker Data Agent: No org units found for extracted name');
+            return {
+                resolvedOrgUnit: null,
+                uiAction: 'map_to_tracker_format' // Continue with default
+            };
+        }
+
+        if (orgUnits.length === 1) {
+            // Exact match - auto-resolve
+            const orgUnit = orgUnits[0];
+            console.log(`📍 Tracker Data Agent: Auto-resolved to org unit: ${orgUnit.name} (${orgUnit.id})`);
+            return {
+                resolvedOrgUnit: { id: orgUnit.id, name: orgUnit.name },
+                uiAction: 'map_to_tracker_format'
+            };
+        }
+
+        // Multiple matches - need user selection
+        console.log('📍 Tracker Data Agent: Multiple org unit matches found, pausing for user selection');
+
+        // Return result indicating user interaction is needed for org unit selection
+        // This will trigger the MetadataSelector component with single select mode
+        return {
+            finalResult: {
+                type: 'select_org_unit',
+                message: `Found ${orgUnits.length} organisation units matching "${state.extractedOrgUnit}". Please select the correct one:`,
+                data: {
+                    extractedOrgUnit: state.extractedOrgUnit,
+                    selectionOptions: orgUnits.map(ou => ({
+                        id: ou.id,
+                        name: ou.name,
+                        type: 'organisationUnit' as const
+                    })),
+                    originalQuery: state.extractedOrgUnit,
+                    allowMultiple: false,
+                    requiresUserAction: true,
+                    actions: ['select_org_unit', 'use_default', 'manual_entry']
+                },
+                requiresUserAction: true
+            }
+        };
+
+    } catch (error) {
+        console.error('📍 Tracker Data Agent: Failed to resolve org unit:', error);
+        // Continue with default org unit on search failure
+        return {
+            resolvedOrgUnit: null,
+            uiAction: 'map_to_tracker_format'
+        };
+    }
+}
+
+// 4. Fetch attribute metadata for dynamic input rendering
+async function fetch_attribute_metadata(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    if (!state.programId) {
+        console.log('📋 Tracker Data Agent: No program ID available, skipping attribute metadata fetch');
+        return {
+            attributeMetadata: {},
+            uiAction: 'map_to_tracker_format'
+        };
+    }
+
+    console.log(`📋 Tracker Data Agent: Fetching attribute metadata for program: ${state.programId}`);
+
+    try {
+        // Import the attribute fetching tool
+        const { getDhis2TrackedEntityAttributeById } = await import('../utils/tools/metadata/structured-tools');
+
+        // Get all attribute IDs from the attribute mappings
+        const attributeIds = Object.values(state.attributeMappings || {});
+        if (attributeIds.length === 0) {
+            console.log('📋 Tracker Data Agent: No attribute mappings found, fetching from program');
+
+            // If no mappings, try to fetch program attributes
+            const { fetchProgramAttributes } = await import('../utils/tools/metadata/structured-tools');
+            const programData = await fetchProgramAttributes(state.programId);
+            Object.keys(programData.attributes).forEach(attrId => attributeIds.push(attrId));
+        }
+
+        console.log(`📋 Tracker Data Agent: Fetching metadata for ${attributeIds.length} attributes`);
+
+        // Fetch metadata for each attribute
+        const attributeMetadata: Record<string, any> = {};
+
+        for (const attributeId of attributeIds) {
+            try {
+                console.log(`📋 Fetching metadata for attribute: ${attributeId}`);
+                const result = await getDhis2TrackedEntityAttributeById.invoke({ id: attributeId });
+                const parsedResult = JSON.parse(result);
+
+                if (parsedResult.success && parsedResult.data) {
+                    const attr = parsedResult.data;
+
+                    // Extract relevant metadata for input rendering
+                    attributeMetadata[attributeId] = {
+                        valueType: attr.valueType,
+                        mandatory: attr.mandatory || false,
+                        unique: attr.unique || false
+                    };
+
+                    // Handle option sets for dropdowns
+                    if (attr.optionSet) {
+                        // Fetch option set values
+                        const { getDhis2OptionSetById } = await import('../utils/tools/metadata/structured-tools');
+                        const optionSetResult = await getDhis2OptionSetById.invoke({ id: attr.optionSet.id });
+                        const parsedOptionSet = JSON.parse(optionSetResult);
+
+                        if (parsedOptionSet.success && parsedOptionSet.data) {
+                            attributeMetadata[attributeId].optionSet = {
+                                id: attr.optionSet.id,
+                                name: attr.optionSet.name,
+                                options: parsedOptionSet.data.options?.map((opt: any) => ({
+                                    id: opt.id,
+                                    name: opt.name
+                                })) || []
+                            };
+                        }
+                    }
+
+                    console.log(`📋 Fetched metadata for ${attr.name} (${attributeId}): ${attr.valueType}`);
+                }
+            } catch (error) {
+                console.warn(`📋 Failed to fetch metadata for attribute ${attributeId}:`, error);
+                // Continue with other attributes
+            }
+        }
+
+        console.log(`📋 Tracker Data Agent: Fetched metadata for ${Object.keys(attributeMetadata).length} attributes`);
+
+        return {
+            attributeMetadata,
+            uiAction: 'map_to_tracker_format'
+        };
+
+    } catch (error) {
+        console.error('📋 Tracker Data Agent: Failed to fetch attribute metadata:', error);
+        // Continue with empty metadata (will use default input types)
+        return {
+            attributeMetadata: {},
+            uiAction: 'map_to_tracker_format'
+        };
+    }
+}
+
+// 5. Map extracted data to DHIS2 tracker format
 async function map_to_tracker_format(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
     if (!state.extractedPatients || state.extractedPatients.length === 0) {
         console.log('📄 Tracker Data Agent: No patient records found in document');
@@ -481,7 +694,23 @@ async function register_tracker_entities(state: typeof TrackerDataAnnotation.Sta
     }
 }
 
-// 6. Display processing results
+// 6. Handle entity operations (CRUD)
+async function handle_entity_operations(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
+    console.log('🔧 Tracker Data Agent: Handling entity operations');
+
+    // This function handles CRUD operations on tracker entities
+    // The actual operations are triggered through UI interactions
+
+    return {
+        finalResult: {
+            success: true,
+            message: 'Entity operations handler initialized',
+            type: 'entity_operations_ready'
+        }
+    };
+}
+
+// 7. Display processing results
 async function display_processing_results(state: typeof TrackerDataAnnotation.State): Promise<Partial<typeof TrackerDataAnnotation.State>> {
     console.log('📄 Tracker Data Agent: Displaying processing results');
 
@@ -700,6 +929,8 @@ const trackerDataWorkflow = new StateGraph(TrackerDataAnnotation);
 // Add nodes
 trackerDataWorkflow.addNode('handle_document_upload', handle_document_upload);
 trackerDataWorkflow.addNode('extract_patient_data', extract_patient_data);
+trackerDataWorkflow.addNode('resolve_org_unit', resolve_org_unit);
+trackerDataWorkflow.addNode('fetch_attribute_metadata', fetch_attribute_metadata);
 trackerDataWorkflow.addNode('map_to_tracker_format', map_to_tracker_format);
 trackerDataWorkflow.addNode('review_extracted_data', review_extracted_data);
 trackerDataWorkflow.addNode('register_tracker_entities', register_tracker_entities);
@@ -724,6 +955,18 @@ trackerDataWorkflow.addConditionalEdges('handle_document_upload', (state) => {
 
 // @ts-ignore
 trackerDataWorkflow.addConditionalEdges('extract_patient_data', (state) => {
+    if (state.uiAction === 'resolve_org_unit') return 'resolve_org_unit';
+    return END;
+});
+
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('resolve_org_unit', (state) => {
+    if (state.uiAction === 'map_to_tracker_format') return 'fetch_attribute_metadata';
+    return END;
+});
+
+// @ts-ignore
+trackerDataWorkflow.addConditionalEdges('fetch_attribute_metadata', (state) => {
     if (state.uiAction === 'map_to_tracker_format') return 'map_to_tracker_format';
     return END;
 });
@@ -898,7 +1141,7 @@ export function createTrackerDataAgent(orchestrator: any) {
                         let resultDetails: any = {};
 
                         try {
-                            // The registrationResult is the finalResult from the state graph
+                            // The registrationResult contains finalResult which is the actual result object
                             const finalResult = registrationResult.finalResult;
                             const parsedResult = typeof finalResult === 'string' ? JSON.parse(finalResult) : finalResult;
 
@@ -930,19 +1173,19 @@ export function createTrackerDataAgent(orchestrator: any) {
                                     detailedMessage += ` Program: ${currentState.programId}.`;
                                 }
                             } else {
-                                detailedMessage = parsedResult?.message || finalResult?.message || 'Registration completed with issues.';
+                                detailedMessage = parsedResult?.message || 'Registration completed with issues.';
                             }
                         } catch (parseError) {
                             // Fallback to original message if parsing fails
                             console.warn('Failed to parse registration result for detailed feedback:', parseError);
-                            detailedMessage = registrationResult.finalResult?.message ||
-                                registrationResult.message ||
-                                'Tracker entities registered successfully.';
+                            detailedMessage = typeof registrationResult.finalResult === 'string'
+                                ? registrationResult.finalResult
+                                : 'Tracker entities registered successfully.';
                         }
 
                         // Create enhanced final result with detailed message
                         const enhancedResult = {
-                            success: registrationResult.finalResult?.success ?? registrationResult.success ?? true,
+                            success: registrationResult.finalResult?.success ?? true,
                             message: detailedMessage,
                             details: {
                                 ...resultDetails,
@@ -979,6 +1222,196 @@ export function createTrackerDataAgent(orchestrator: any) {
                         message: 'Data save cancelled by user',
                         type: 'tracker_processing_cancelled'
                     };
+                    break;
+
+                case 'select_org_unit':
+                    // User selected an org unit from the MetadataSelector
+                    console.log('📍 Tracker Data Agent: User selected org unit:', data);
+                    if (data.selectedItems && data.selectedItems.length > 0) {
+                        const selectedOrgUnit = data.selectedItems[0]; // Single select mode
+                        updatedState.resolvedOrgUnit = {
+                            id: selectedOrgUnit.id,
+                            name: selectedOrgUnit.name
+                        };
+                        updatedState.uiAction = 'map_to_tracker_format';
+                    } else {
+                        // No selection made, use default
+                        updatedState.resolvedOrgUnit = null;
+                        updatedState.uiAction = 'map_to_tracker_format';
+                    }
+                    break;
+
+                case 'use_default':
+                    // User chose to use default org unit instead of selecting
+                    console.log('📍 Tracker Data Agent: User chose to use default org unit');
+                    updatedState.resolvedOrgUnit = null; // Will use default in mapping
+                    updatedState.uiAction = 'map_to_tracker_format';
+                    break;
+
+                case 'manual_entry':
+                    // User wants to manually enter org unit - this would trigger a different UI
+                    console.log('📍 Tracker Data Agent: User chose manual org unit entry');
+                    updatedState.finalResult = {
+                        type: 'manual_org_unit_entry',
+                        message: 'Please specify the organisation unit manually',
+                        data: {
+                            extractedOrgUnit: currentState.extractedOrgUnit,
+                            requiresUserAction: true,
+                            actions: ['specify_org_unit', 'use_default']
+                        },
+                        requiresUserAction: true
+                    };
+                    break;
+
+                case 'specify_org_unit':
+                    // User manually specified an org unit
+                    console.log('📍 Tracker Data Agent: User manually specified org unit:', data);
+                    if (data.orgUnit) {
+                        updatedState.resolvedOrgUnit = {
+                            id: data.orgUnit,
+                            name: data.orgUnit // Name not available, use ID
+                        };
+                        updatedState.uiAction = 'map_to_tracker_format';
+                    } else {
+                        updatedState.resolvedOrgUnit = null;
+                        updatedState.uiAction = 'map_to_tracker_format';
+                    }
+                    break;
+
+                case 'update_entity':
+                    // User wants to update an existing entity
+                    console.log('🔄 Tracker Data Agent: User requested entity update:', data.entityId);
+
+                    // Import the update tool
+                    try {
+                        const { updateDhis2TrackedEntityInstance } = await import('../utils/tools/metadata/structured-tools');
+
+                        // For now, show a message that update functionality is available
+                        // In a full implementation, this would show an edit form
+                        updatedState.finalResult = {
+                            success: true,
+                            message: `Entity update functionality is available for entity ${data.entityId}. Edit form would be shown here.`,
+                            type: 'entity_update_requested',
+                            data: {
+                                entityId: data.entityId,
+                                action: 'update'
+                            }
+                        };
+                    } catch (error) {
+                        console.error('Failed to import update tool:', error);
+                        updatedState.finalResult = {
+                            success: false,
+                            error: `Failed to initialize entity update: ${error.message}`
+                        };
+                    }
+                    break;
+
+                case 'delete_entity':
+                    // User wants to delete an existing entity
+                    console.log('🗑️ Tracker Data Agent: User requested entity deletion:', data.entityId);
+
+                    // Import the delete tool
+                    try {
+                        const { deleteDhis2TrackedEntityInstance } = await import('../utils/tools/metadata/structured-tools');
+
+                        // Call the delete API
+                        const deleteResult = await deleteDhis2TrackedEntityInstance.invoke({
+                            id: data.entityId
+                        });
+
+                        const parsedResult = JSON.parse(deleteResult);
+
+                        if (parsedResult.success) {
+                            updatedState.finalResult = {
+                                success: true,
+                                message: `Entity ${data.entityId} deleted successfully from DHIS2`,
+                                type: 'entity_deleted',
+                                data: {
+                                    entityId: data.entityId,
+                                    action: 'delete'
+                                }
+                            };
+                        } else {
+                            updatedState.finalResult = {
+                                success: false,
+                                error: `Failed to delete entity: ${parsedResult.error || 'Unknown error'}`,
+                                type: 'entity_delete_failed'
+                            };
+                        }
+                    } catch (error) {
+                        console.error('Failed to delete entity:', error);
+                        updatedState.finalResult = {
+                            success: false,
+                            error: `Failed to delete entity: ${error.message}`
+                        };
+                    }
+                    break;
+
+                case 'view_entity_details':
+                    // User wants to view entity details
+                    console.log('👁️ Tracker Data Agent: User requested entity details:', data.entityId);
+
+                    // For now, show a message that details view is available
+                    updatedState.finalResult = {
+                        success: true,
+                        message: `Entity details view is available for entity ${data.entityId}. Details panel would be shown here.`,
+                        type: 'entity_details_requested',
+                        data: {
+                            entityId: data.entityId,
+                            action: 'view_details'
+                        }
+                    };
+                    break;
+
+                case 'update_entity_attributes':
+                    // User wants to update specific attributes of an entity
+                    console.log('🔧 Tracker Data Agent: User requested attribute update:', data);
+
+                    try {
+                        // Import the update tool
+                        const { updateDhis2TrackedEntityInstance } = await import('../utils/tools/metadata/structured-tools');
+
+                        // Prepare the attribute update payload
+                        const attributeUpdatePayload = {
+                            trackedEntityInstance: data.entityId,
+                            attributes: data.attributes.map((attr: any) => ({
+                                attribute: attr.attribute,
+                                value: attr.value
+                            }))
+                        };
+
+                        console.log('🔧 Tracker Data Agent: Updating entity attributes:', attributeUpdatePayload);
+
+                        // Call the update API
+                        const updateResult = await updateDhis2TrackedEntityInstance.invoke(attributeUpdatePayload);
+
+                        const parsedResult = JSON.parse(updateResult);
+
+                        if (parsedResult.success) {
+                            updatedState.finalResult = {
+                                success: true,
+                                message: `Entity ${data.entityId} attributes updated successfully`,
+                                type: 'entity_attributes_updated',
+                                data: {
+                                    entityId: data.entityId,
+                                    updatedAttributes: data.attributes.length,
+                                    action: 'update_attributes'
+                                }
+                            };
+                        } else {
+                            updatedState.finalResult = {
+                                success: false,
+                                error: `Failed to update entity attributes: ${parsedResult.error || 'Unknown error'}`,
+                                type: 'entity_attributes_update_failed'
+                            };
+                        }
+                    } catch (error) {
+                        console.error('Failed to update entity attributes:', error);
+                        updatedState.finalResult = {
+                            success: false,
+                            error: `Failed to update entity attributes: ${error.message}`
+                        };
+                    }
                     break;
 
                 case 'retry_processing':

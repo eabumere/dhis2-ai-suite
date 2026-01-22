@@ -57,12 +57,6 @@ const DataEntryRouterAnnotation = Annotation.Root({
 		default: () => false
 	}),
 
-	// Orchestrator reference for direct calls and rendering
-	orchestrator: Annotation<any>({
-		reducer: (left, right) => right || left,
-		default: () => null
-	}),
-
 	// Messages for processing
 	messages: Annotation<any[]>({
 		reducer: (left: any[], right: any[]) => right ? right : left,

@@ -700,18 +700,36 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                     headerMappings={message.data.headerMappings || {}}
                                     headerDisplayNames={message.data.headerDisplayNames || {}}
                                     reviewMode={true}
-                                    onConfirmSave={() => {
-                                        workflowOrchestrator.handleDataGridInteraction({
-                                            type: 'confirm_save',
-                                            data: {}
-                                        });
-                                    }}
-                                    onCancelSave={() => {
-                                        workflowOrchestrator.handleDataGridInteraction({
-                                            type: 'cancel_save',
-                                            data: {}
-                                        });
-                                    }}
+                                onConfirmSave={() => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'confirm_save',
+                                        data: {}
+                                    });
+                                }}
+                                onCancelSave={() => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'cancel_save',
+                                        data: {}
+                                    });
+                                }}
+                                onUpdateEntity={(entityId) => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'update_entity',
+                                        data: { entityId }
+                                    });
+                                }}
+                                onDeleteEntity={(entityId) => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'delete_entity',
+                                        data: { entityId }
+                                    });
+                                }}
+                                onViewEntityDetails={(entityId) => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'view_entity_details',
+                                        data: { entityId }
+                                    });
+                                }}
                                 />
                             )}
                         </div>
@@ -883,6 +901,24 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                 }}
                                 onCancelSave={() => {
                                     workflowOrchestrator.handleCancelSave();
+                                }}
+                                onUpdateEntity={(entityId) => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'update_entity',
+                                        data: { entityId }
+                                    });
+                                }}
+                                onDeleteEntity={(entityId) => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'delete_entity',
+                                        data: { entityId }
+                                    });
+                                }}
+                                onViewEntityDetails={(entityId) => {
+                                    workflowOrchestrator.handleDataGridInteraction({
+                                        type: 'view_entity_details',
+                                        data: { entityId }
+                                    });
                                 }}
                                 processingStep={workflowOrchestrator.getTrackerState().processingStep}
                                 processingProgress={workflowOrchestrator.getTrackerState().processingProgress}

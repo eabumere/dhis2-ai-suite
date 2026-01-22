@@ -29,6 +29,8 @@ export interface ProcessedDocumentData {
         headers: string[];
         rows: string[][];
     }>;
+    extractedOrgUnit?: string;
+    documentFields?: Record<string, any>; // Raw document fields for debugging
 }
 
 
@@ -63,10 +65,21 @@ export async function processDocumentWithAI(
             tables: []
         };
 
+        // Store raw document fields for debugging/analysis
+        if (result.documents && result.documents[0]?.fields) {
+            processedData.documentFields = result.documents[0].fields;
+        }
+
+        // Extract organization unit information from document fields
+        const extractedOrgUnit = extractOrgUnitFromDocumentFields(result.documents?.[0]?.fields);
+        if (extractedOrgUnit) {
+            processedData.extractedOrgUnit = extractedOrgUnit;
+            console.log(`📍 Extracted organization unit from document fields: "${extractedOrgUnit}"`);
+        }
+
         // Process structured table fields from custom model (e.g., TableDataHandVersionPG3)
         if (result.documents && result.documents[0]?.fields) {
             for (const [fieldName, field] of Object.entries(result.documents[0].fields)) {
-				console.log('Document analysis finished - ', field);
                 if (fieldName.startsWith('TableData') && Array.isArray(field['values'])) {
                     const tableData = processStructuredTableField(field['values']);
                     if (tableData && tableData.rows.length > 0) {
@@ -158,6 +171,136 @@ export async function splitPdfIntoPages(pdfBuffer: Uint8Array): Promise<Uint8Arr
         console.error('Error splitting PDF into pages:', error);
         throw new Error(`Failed to split PDF: ${error.message}`);
     }
+}
+
+/**
+ * Extract organization unit information from Azure Document Intelligence document fields
+ * Scans all document fields for facility/organization information
+ */
+function extractOrgUnitFromDocumentFields(fields: Record<string, any> | undefined): string | null {
+    if (!fields) {
+        return null;
+    }
+
+    // Common field names that might contain organization/facility information
+    const orgUnitFieldPatterns = [
+        /facility/i,
+        /hospital/i,
+        /clinic/i,
+        /center/i,
+        /organisation/i,
+        /organization/i,
+        /org.?unit/i,
+        /site/i,
+        /location/i,
+        /district/i,
+        /province/i,
+        /department/i,
+        /ward/i,
+        /health.?facility/i,
+        /medical.?center/i,
+        /health.?post/i,
+        /health.?centre/i,
+        /clinic.?name/i,
+        /hospital.?name/i,
+        /facility.?name/i,
+        /org.?name/i,
+        /institution/i,
+        /establishment/i
+    ];
+
+    const candidates: Array<{ name: string; confidence: number; source: string }> = [];
+
+    // Scan all document fields
+    for (const [fieldName, field] of Object.entries(fields)) {
+        const normalizedFieldName = fieldName.toLowerCase().trim();
+
+        // Check if field name suggests it's an org unit field
+        let isOrgUnitField = false;
+        for (const pattern of orgUnitFieldPatterns) {
+            if (pattern.test(normalizedFieldName)) {
+                isOrgUnitField = true;
+                break;
+            }
+        }
+
+        // Extract content from different field types
+        let fieldContent = '';
+        let confidence = 0.5; // Default confidence
+
+        if (field.kind === 'string' && field.content) {
+            fieldContent = field.content.trim();
+            confidence = field.confidence || 0.8;
+        } else if (field.value && typeof field.value === 'string') {
+            fieldContent = field.value.trim();
+            confidence = field.confidence || 0.8;
+        } else if (typeof field === 'string') {
+            fieldContent = field.trim();
+            confidence = 0.6; // Lower confidence for raw strings
+        }
+
+        if (!fieldContent || fieldContent.length < 3) {
+            continue;
+        }
+
+        // If field name suggests org unit OR content looks like facility name
+        if (isOrgUnitField) {
+            // High confidence for matching field names
+            candidates.push({
+                name: fieldContent,
+                confidence: confidence,
+                source: `field:${fieldName}`
+            });
+        } else {
+            // Check if content looks like a facility name even in generic fields
+            const normalizedContent = fieldContent.toLowerCase().trim();
+
+            // Look for facility-like patterns in content
+            const facilityPatterns = [
+                /\b(?:st\.?\s*|dr\.?\s*|mother\s*|father\s*|holy\s*|sacred\s*|divine\s*|saint\s*)/i,
+                /\b(?:regional|district|provincial|national|central|general|teaching|university|specialist|referral|community|rural|urban)\b/i,
+                /\b(?:hospital|clinic|center|centre|health.?post|medical.?center)\b/i,
+                /\bhospital\b/i,
+                /\bclinic\b/i,
+                /\bcenter\b/i,
+                /\bcentre\b/i
+            ];
+
+            let looksLikeFacility = false;
+            for (const pattern of facilityPatterns) {
+                if (pattern.test(normalizedContent)) {
+                    looksLikeFacility = true;
+                    break;
+                }
+            }
+
+            // Also check for proper noun patterns (capitalized words)
+            if (!looksLikeFacility && /[A-Z][a-z]+/.test(fieldContent)) {
+                // Has proper nouns, might be a facility name
+                looksLikeFacility = true;
+            }
+
+            if (looksLikeFacility) {
+                candidates.push({
+                    name: fieldContent,
+                    confidence: confidence * 0.7, // Lower confidence for content-based detection
+                    source: `content:${fieldName}`
+                });
+            }
+        }
+    }
+
+    if (candidates.length === 0) {
+        return null;
+    }
+
+    // Sort by confidence and select best candidate
+    candidates.sort((a, b) => b.confidence - a.confidence);
+
+    const bestCandidate = candidates[0];
+    console.log(`📍 Selected org unit from document fields: "${bestCandidate.name}" (confidence: ${bestCandidate.confidence.toFixed(2)}, source: ${bestCandidate.source})`);
+
+    return bestCandidate.name;
 }
 
 /**

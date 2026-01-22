@@ -73,6 +73,7 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
     mappedTrackerData,
     headerMappings = {},
     headerDisplayNames = {},
+    attributeMetadata = {},
     onConfigureProcessing,
     onUploadDocument,
     onRetryProcessing,

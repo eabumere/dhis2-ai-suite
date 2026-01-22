@@ -93,6 +93,22 @@ const GraphAnnotation = Annotation.Root({
 		reducer: (left, right) => right,
 		default: () => null,
 	}),
+	dataSummary: Annotation<{
+		totalRecords: number;
+		totalValue: number;
+		averageValue: number;
+		minValue: number;
+		maxValue: number;
+		nonZeroCount: number;
+		orgUnitCount: number;
+		periodCount: number;
+		indicatorCount: number;
+		summaryText: string;
+		insights: string[];
+	}>({
+		reducer: (left, right) => right,
+		default: () => null,
+	}),
 
 	// Workflow pause/resume state
 	workflowId: Annotation<string>({
@@ -701,7 +717,7 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 			queryData: data
 		});
 
-		// Always proceed to chart building - the chart node will handle cases where no data exists
+		// Proceed to summarization step instead of directly to chart building
 		return {
 			data,
 			finalResult: !data.data ? {
@@ -735,31 +751,144 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 	}
 }
 
-async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+// New summarization node - computes statistics and generates humanized summary
+async function summarizeAnalyticsData(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
-		console.log('📊 Building analytics chart using pure DHIS2 data', state);
+		console.log('📈 Summarizing analytics data');
 
 		// Update progress
-		updateProgress(8, 'Creating Visualization', 'Building your analytics chart...', false);
-		state.orchestrator?.addProgressMessage('Building your analytics chart...');
+		updateProgress(8, 'Analyzing Results', 'Computing statistics and generating insights...', false);
+		state.orchestrator?.addProgressMessage('Computing statistics and generating insights...');
 
-		// Check if we have analytics data to build chart from
-		if (!state.data || !state.data.data) {
-			console.warn('📊 No analytics data available - chart building not possible');
+		if (!state.data?.data) {
+			console.warn('📈 No analytics data to summarize');
+			return {
+				step: 'completed',
+				finalResult: {
+					success: false,
+					message: 'No data available to summarize',
+					type: 'analytics'
+				}
+			};
+		}
+
+		// Extract values from analytics data
+		const rows = state.data.data.rows || [];
+		const values: number[] = [];
+
+		// Collect all numeric values (typically in the last column)
+		rows.forEach((row: any[]) => {
+			const value = parseFloat(row[row.length - 1]);
+			if (!isNaN(value)) {
+				values.push(value);
+			}
+		});
+
+		// Compute basic statistics
+		const totalRecords = rows.length;
+		const totalValue = values.reduce((sum, val) => sum + val, 0);
+		const averageValue = totalRecords > 0 ? totalValue / totalRecords : 0;
+		const minValue = values.length > 0 ? Math.min(...values) : 0;
+		const maxValue = values.length > 0 ? Math.max(...values) : 0;
+		const nonZeroCount = values.filter(v => v > 0).length;
+
+		// Count unique org units and periods (from metadata)
+		const orgUnitCount = state.orgUnitsMetadata?.suggestions?.length || 0;
+		const periodCount = state.datePeriodsMetadata?.periods?.length || 1;
+		const indicatorCount = state.metadata?.suggestions?.length || 0;
+
+		const dataSummary = {
+			totalRecords,
+			totalValue,
+			averageValue,
+			minValue,
+			maxValue,
+			nonZeroCount,
+			orgUnitCount,
+			periodCount,
+			indicatorCount,
+			summaryText: '',
+			insights: [] as string[]
+		};
+
+		// Generate humanized summary using LLM
+		const summaryPrompt = `
+Generate a humanized summary of these analytics results for the query: "${state.query}"
+
+STATISTICS:
+- Total Records: ${totalRecords}
+- Total Value: ${totalValue.toLocaleString()}
+- Average Value: ${averageValue.toLocaleString(undefined, {maximumFractionDigits: 2})}
+- Min Value: ${minValue.toLocaleString()}
+- Max Value: ${maxValue.toLocaleString()}
+- Non-Zero Values: ${nonZeroCount}
+- Organisation Units: ${orgUnitCount}
+- Time Periods: ${periodCount}
+- Indicators/Data Elements: ${indicatorCount}
+
+CONTEXT:
+- Indicators: ${state.metadata?.suggestions?.map(s => s.name).join(', ') || 'N/A'}
+- Organisation Units: ${state.orgUnitsMetadata?.suggestions?.map(s => s.name).join(', ') || 'N/A'}
+- Periods: ${state.datePeriodsMetadata?.periods?.join(', ') || 'N/A'}
+
+Write a natural, conversational summary that:
+1. Explains what the data shows in simple terms
+2. Highlights key insights and trends
+3. Uses appropriate context for health data
+4. Is engaging and easy to understand
+
+Keep it concise but informative. Return just the summary text.`;
+
+		try {
+			const summaryResult = await model.invoke([new HumanMessage(summaryPrompt)]);
+			dataSummary.summaryText = (summaryResult.content as string).trim();
+
+			// Extract key insights
+			dataSummary.insights = [
+				totalRecords > 0 ? `Found ${totalRecords} data points across ${orgUnitCount} locations` : 'No data points found',
+				nonZeroCount > 0 ? `Average value of ${averageValue.toFixed(1)} (range: ${minValue} - ${maxValue})` : 'All values are zero',
+				periodCount > 1 ? `Data spans ${periodCount} time periods` : 'Data for single time period'
+			].filter(Boolean);
+
+		} catch (summaryError) {
+			console.warn('📈 LLM summary generation failed, using basic summary:', summaryError);
+			dataSummary.summaryText = `Found ${totalRecords} data points with total value of ${totalValue.toLocaleString()}.`;
+			dataSummary.insights = [`Total: ${totalValue.toLocaleString()}`, `Average: ${averageValue.toFixed(1)}`];
+		}
+
+		console.log('📈 Data summary computed:', dataSummary);
+
+		// Proceed to chart building (which will be lazy-loaded)
+		return {
+			dataSummary,
+			step: 'build_chart'
+		};
+
+	} catch (error) {
+		console.error('📈 Data summarization failed:', error);
+		return {
+			step: 'completed',
+			finalResult: {
+				success: false,
+				error: `Failed to summarize analytics data: ${error.message}`,
+				type: 'analytics'
+			}
+		};
+	}
+}
+
+async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
+	try {
+		console.log('📊 Preparing analytics summary with lazy chart loading');
+
+		// Check if we have analytics data
+		if (!state.data?.data) {
+			console.warn('📊 No analytics data available');
 
 			const noDataResult = {
-				success: true, // Success in the sense we have metadata but no data
-				message: 'Metadata resolved but no analytics data available for visualization',
-				data: {
-					metadata: state.metadata,
-					orgUnitsMetadata: state.orgUnitsMetadata,
-					queryData: state.data
-				},
-				queryData: state.data,
-				type: 'analytics',
-				chartAttempted: false,
-				chartFailed: false,
-				chartError: 'No analytics data returned from DHIS2'
+				success: false,
+				message: 'No analytics data available for analysis',
+				type: 'analytics'
 			};
 
 			return {
@@ -767,162 +896,109 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 				finalResult: noDataResult
 			};
 		}
-		const result = await buildAnalyticsChart.invoke({
+
+		// Build the chart data but DON'T render it yet - store it for lazy loading
+		const chartResult = await buildAnalyticsChart.invoke({
 			userQuery: state.query,
-			analyticsData: state.data.data, // Pure DHIS2 structured data only
+			analyticsData: state.data.data,
 			chartType: 'bar',
 			indicators: state.data.indicators || [],
 			periods: state.data.periods || ['2024'],
 			orgUnits: state.data.org_units || [],
-			disaggregations: state.data.disaggregations || [], // Pass the disaggregations from query data
-			filterOptions: state.disaggregationsMetadata?.filterOptions || [], // Pass category filter options for chart filtering
+			disaggregations: state.data.disaggregations || [],
+			filterOptions: state.disaggregationsMetadata?.filterOptions || [],
 			optionsToCocs: state.optionsToCocs,
 		});
 
-		const chart = JSON.parse(result);
-		console.log('📊 Chart building result:', chart);
+		const chartData = JSON.parse(chartResult);
+		console.log('📊 Chart data prepared for lazy loading');
 
-		if (chart.success) {
-			// Chart building succeeded - trigger chart rendering through orchestrator
-			const finalResult = {
-				success: true,
-				message: 'Analytics query completed successfully',
-				data: chart,
-				metadata: state.metadata,
-				queryData: state.data,
-				orgUnitsMetadata: state.orgUnitsMetadata,
-				chart: chart,
-				type: 'analytics'
-			};
-
-			// Add final result to conversation via orchestrator and save to context
-			if (state.orchestrator) {
-				state.orchestrator.addAssistantMessage(finalResult.message || 'Analytics completed successfully', 'response', finalResult);
-				state.orchestrator.renderChart(finalResult);
-			}
-
-			// Also save to conversation context with proper DataContext structure
-			const dataContext = createAnalyticsDataContext(finalResult);
-			addConversation(state.query, 'analytics', finalResult, dataContext);
-
-			return {
-				chart,
-				step: 'completed',
-				finalResult
-			};
-		} else {
-			// Chart building failed - but we still have valid analytics data
-			// Create a simple fallback chart structure for orchestrator compatibility
-			console.warn('📊 Chart building failed - creating fallback chart visualization');
-
-			// Create a basic chart structure that can be displayed
-			const fallbackChartData = {
-				success: true,
-				chart_id: `fallback_${Date.now()}`,
-				chart_type: 'bar',
-				title: state.query,
-				echarts_option: {
-					title: {
-						text: 'Analytics Data Available',
-						subtext: 'Chart building failed - data available for export',
-						left: 'center'
-					},
-					tooltip: { trigger: 'axis' },
-					xAxis: { type: 'category', data: ['Value'] },
-					yAxis: { type: 'value' },
-					series: [{
-						name: 'Count',
-						type: 'bar',
-            data: [parseFloat(state.data.data?.rows?.[0]?.[6] || '0') || 1], // Extract value from raw analytics data (minimum 1 for visibility)
-						itemStyle: { color: '#ff9800' } // Orange color for fallback
-					}]
-				},
-				data_summary: {
-					total_points: 1,
-					indicators_count: 1,
-					periods_count: 1,
-					org_units_count: 1,
-					disaggregations_count: 0
-				}
-			};
-
-			const fallbackResult = {
-				success: true, // Success because we have valid data
-				message: 'Analytics data retrieved successfully (using fallback chart)',
-				data: fallbackChartData,  // Consistent structure - data contains the chart result
-				metadata: state.metadata,
-				queryData: state.data,
-				orgUnitsMetadata: state.orgUnitsMetadata,
-				chart: fallbackChartData,  // Also available here for consistency
-				type: 'analytics',
-				chartAttempted: true,
-				chartFailed: true,
-				chartError: chart.error || 'Chart building failed - fallback visualization created'
-			};
-
-			addConversation(state.query, 'analytics', fallbackResult);
-
-			return {
-				chart: fallbackChartData,
-				step: 'completed',
-				finalResult: fallbackResult
-			};
-		}
-	} catch (chartError) {
-		console.error('❌ Chart building exception:', chartError);
-		// Even if chart building completely fails, we still have the analytics data
-		// This is a major improvement: never fail the entire query just because chart fails
-
-		// Create a minimal fallback chart for severe failures
-		const minimalFallbackChart = {
+		// Create summary result with chart option - don't auto-render chart
+		const summaryResult = {
 			success: true,
-			chart_id: `error_${Date.now()}`,
-			chart_type: 'bar',
-			title: state.query,
-			echarts_option: {
-				title: {
-					text: 'Data Retrieved',
-					subtext: 'Visualization error - check console for details',
-					left: 'center',
-					textStyle: { color: '#666' }
-				},
-				tooltip: { trigger: 'axis' },
-				xAxis: { type: 'category', data: ['Data'] },
-				yAxis: { type: 'value' },
-				series: [{
-					name: 'Value',
-					type: 'bar',
-					data: [1], // Dummy data to show something
-					itemStyle: { color: '#ccc' } // Gray for error state
-				}]
+			message: state.dataSummary?.summaryText || 'Analytics data summarized successfully',
+			summary: {
+				text: state.dataSummary?.summaryText,
+				insights: state.dataSummary?.insights || [],
+				statistics: {
+					totalRecords: state.dataSummary?.totalRecords,
+					totalValue: state.dataSummary?.totalValue,
+					averageValue: state.dataSummary?.averageValue,
+					minValue: state.dataSummary?.minValue,
+					maxValue: state.dataSummary?.maxValue,
+					orgUnitCount: state.dataSummary?.orgUnitCount,
+					periodCount: state.dataSummary?.periodCount,
+					indicatorCount: state.dataSummary?.indicatorCount
+				}
 			},
-			data_summary: {
-				total_points: 1,
-				indicators_count: 1,
-				periods_count: 1,
-				org_units_count: 1,
-				disaggregations_count: 0
-			}
+			chartAvailable: true,
+			chartData: chartData, // Store chart data for lazy loading
+			metadata: state.metadata,
+			queryData: state.data,
+			orgUnitsMetadata: state.orgUnitsMetadata,
+			dataSummary: state.dataSummary,
+			type: 'analytics',
+			chartRendered: false, // Flag to indicate chart is not yet rendered
+			actions: [{
+				type: 'view_chart',
+				label: '📊 View Chart',
+				description: 'Show the data as an interactive chart',
+				actionId: 'render_chart'
+			}]
 		};
 
+		// Add to conversation context without rendering chart
+		const dataContext = createAnalyticsDataContext(summaryResult);
+		addConversation(state.query, 'analytics', summaryResult, dataContext);
+
+		// Show summary result through orchestrator
+		if (state.orchestrator) {
+			state.orchestrator.addAssistantMessage(summaryResult.message, 'response', summaryResult);
+			// Note: We don't call renderChart() here - chart is lazy-loaded on user click
+		}
+
+		console.log('📈 Analytics summary prepared with lazy chart loading option');
+
+		return {
+			chart: chartData, // Store chart data for potential lazy loading
+			step: 'completed',
+			finalResult: summaryResult
+		};
+
+	} catch (chartError) {
+		console.error('❌ Chart preparation failed:', chartError);
+
+		// Even if chart preparation fails, we can still show the summary
 		const fallbackResult = {
-			success: true, // Success because analytics data is valid
-			message: 'Analytics data retrieved successfully',
-			data: minimalFallbackChart,  // Consistent structure - always has chart data
-			metadata: state.metadata,
-			orgUnitsMetadata: state.orgUnitsMetadata,
-			chart: minimalFallbackChart,
-			type: 'analytics',
-			chartAttempted: true,
-			chartFailed: true,
+			success: true,
+			message: state.dataSummary?.summaryText || 'Analytics data summarized (chart preparation failed)',
+			summary: {
+				text: state.dataSummary?.summaryText,
+				insights: state.dataSummary?.insights || [],
+				statistics: {
+					totalRecords: state.dataSummary?.totalRecords,
+					totalValue: state.dataSummary?.totalValue,
+					averageValue: state.dataSummary?.averageValue,
+					minValue: state.dataSummary?.minValue,
+					maxValue: state.dataSummary?.maxValue,
+					orgUnitCount: state.dataSummary?.orgUnitCount,
+					periodCount: state.dataSummary?.periodCount,
+					indicatorCount: state.dataSummary?.indicatorCount
+				}
+			},
+			chartAvailable: false,
 			chartError: chartError.message,
-			humanReadable: "Analytics query completed - basic visualization available"
+			metadata: state.metadata,
+			queryData: state.data,
+			orgUnitsMetadata: state.orgUnitsMetadata,
+			dataSummary: state.dataSummary,
+			type: 'analytics',
+			chartRendered: false
 		};
 
 		addConversation(state.query, 'analytics', fallbackResult);
 
 		return {
-			chart: minimalFallbackChart,
 			step: 'completed',
 			finalResult: fallbackResult
 		};
@@ -1797,6 +1873,7 @@ workflow.addNode('search_date_periods', searchDatePeriods);
 workflow.addNode('search_org_units', searchOrgUnits);
 workflow.addNode('search_disaggregations', searchDisaggregations);
 workflow.addNode('query_data', queryData);
+workflow.addNode('summarize_analytics_data', summarizeAnalyticsData);
 workflow.addNode('build_chart', buildChart);
 
 // Recovery nodes
@@ -1839,7 +1916,11 @@ workflow.addEdge('search_org_units', 'search_disaggregations'); // Always try di
 // @ts-ignore
 workflow.addEdge('search_disaggregations', 'query_data');   // Always proceed to data query after disaggregation attempt
 // @ts-ignore
-workflow.addEdge('query_data', 'build_chart');             // Always try chart building after data query
+workflow.addEdge('query_data', 'summarize_analytics_data'); // Summarize data after query
+// @ts-ignore
+workflow.addEdge('summarize_analytics_data', 'build_chart'); // Build chart after summarization
+// @ts-ignore
+workflow.addEdge('summarize_analytics_data', 'build_chart'); // Build chart after summarization
 // @ts-ignore
 workflow.addEdge('build_chart', END);
 // @ts-ignore

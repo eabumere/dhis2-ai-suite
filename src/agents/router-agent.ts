@@ -7,6 +7,7 @@ import { analyticsGraphAgent } from './analytics-graph-agent';
 import { createRoutedDataEntryAgent } from './routed-data-entry-agent';
 import { addConversation, createMutationDataContext, createSearchDataContext, findCurrentSessionContext } from '../utils/conversation-context';
 import { clarificationService, Interpretation } from '../utils/clarification-service';
+import { llmClassificationService } from '../utils/llm-classification-service';
 
 // Define Router State - tracks workflow context and orchestrator reference
 const RouterAnnotation = Annotation.Root({
@@ -374,55 +375,41 @@ async function handle_clarification(state: typeof RouterAnnotation.State): Promi
 	};
 }
 
-// Generate multiple intent interpretations for clarification service
+// Generate multiple intent interpretations for clarification service using LLM classification
 async function generateIntentInterpretations(query: string): Promise<Interpretation[]> {
 	try {
 		console.log('🤖 Router: Generating multiple interpretations for:', query);
 
-		const interpretationPrompt = `
-Analyze this DHIS2 query and provide up to 4 possible interpretations with confidence scores.
+		// Use the centralized LLM classification service
+		const intentClassification = await llmClassificationService.classifyIntent(query);
 
-Query: "${query}"
-
-Return a JSON array of interpretations, each with:
-- intent: The workflow type (direct_search, analytics_routing, crud, data_entry)
-- confidence: Number between 0-1 indicating certainty
-- reasoning: Brief explanation of why this interpretation fits
-
-Focus on DHIS2-specific workflows:
-- direct_search: Finding/showing existing metadata
-- analytics_routing: Analysis, calculations, visualizations
-- crud: Creating/modifying/deleting metadata objects
-- data_entry: Setting up data collection structures or updating data values
-
-Example output format:
-[
-  {
-    "intent": "analytics_routing",
-    "confidence": 0.8,
-    "reasoning": "Query contains analysis keywords and visualization requests"
-  }
-]`;
-
-		const result = await model.invoke([new HumanMessage(interpretationPrompt)]);
-		const responseContent = (result.content as string).trim();
-
-		const interpretations = JSON.parse(responseContent) as Interpretation[];
-
-		// Validate and normalize interpretations
-		return interpretations
-			.filter(i => i.intent && typeof i.confidence === 'number')
-			.map(i => ({
-				...i,
-				confidence: Math.max(0, Math.min(1, i.confidence)), // Clamp to 0-1
+		// Convert to clarification service format
+		const interpretations: Interpretation[] = [
+			{
+				intent: intentClassification.intent as any, // Map to clarification service format
+				confidence: intentClassification.confidence,
+				reasoning: intentClassification.reasoning,
 				domain: 'general' as const
-			}))
-			.sort((a, b) => b.confidence - a.confidence); // Sort by confidence descending
+			}
+		];
+
+		// Add alternatives if available
+		if (intentClassification.alternatives && intentClassification.alternatives.length > 0) {
+			interpretations.push(...intentClassification.alternatives.map(alt => ({
+				intent: alt.intent as any,
+				confidence: alt.confidence,
+				reasoning: `Alternative interpretation: ${alt.intent}`,
+				domain: 'general' as const
+			})));
+		}
+
+		// Sort by confidence descending
+		return interpretations.sort((a, b) => b.confidence - a.confidence);
 
 	} catch (error) {
 		console.error('🤖 Router: Failed to generate interpretations:', error);
 
-		// Fallback to simple keyword-based interpretations
+		// Fallback to simple keyword-based interpretations (minimal fallback)
 		const queryLower = query.toLowerCase();
 		const interpretations: Interpretation[] = [];
 

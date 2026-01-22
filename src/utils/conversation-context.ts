@@ -35,6 +35,8 @@ export interface ConversationMemory {
     dataContexts: Map<string, DataContext>;
     activeTopics: string[];
     lastAnalyticsQuery?: ConversationEntry;
+    sessionId?: string; // Track which session this context belongs to
+    sessionStartTime?: number; // When this session started
 }
 
 /**
@@ -216,6 +218,88 @@ export class ConversationContextManager {
             enhancedQuery,
             contextSummary,
             relevantDataAvailable
+        };
+    }
+
+    /**
+     * Start a new session - clear conversation history and set new session ID
+     */
+    startNewSession(): string {
+        const sessionId = this.generateId();
+        const sessionStartTime = Date.now();
+
+        console.log(`🔄 Starting new conversation session: ${sessionId}`);
+
+        this.memory = {
+            conversations: [],
+            dataContexts: new Map(),
+            activeTopics: [],
+            sessionId,
+            sessionStartTime
+        };
+        this.saveToStorage();
+
+        return sessionId;
+    }
+
+    /**
+     * Get current session information
+     */
+    getCurrentSession(): { sessionId?: string; sessionStartTime?: number; isActive: boolean } {
+        return {
+            sessionId: this.memory.sessionId,
+            sessionStartTime: this.memory.sessionStartTime,
+            isActive: !!this.memory.sessionId
+        };
+    }
+
+    /**
+     * Check if conversation belongs to current session
+     */
+    isCurrentSessionConversation(entry: ConversationEntry): boolean {
+        // If no session ID is set, consider all conversations current (backward compatibility)
+        if (!this.memory.sessionId) return true;
+
+        // Check if entry was created after session start
+        return !this.memory.sessionStartTime || entry.timestamp >= this.memory.sessionStartTime;
+    }
+
+    /**
+     * Get conversations only from current session
+     */
+    getCurrentSessionConversations(): ConversationEntry[] {
+        return this.memory.conversations.filter(entry => this.isCurrentSessionConversation(entry));
+    }
+
+    /**
+     * Find relevant context for current session only
+     */
+    findCurrentSessionContext(query: string): {
+        recentConversations: ConversationEntry[];
+        relevantDataContexts: DataContext[];
+        lastAnalyticsData?: DataContext;
+    } {
+        const currentSessionConversations = this.getCurrentSessionConversations();
+        const recentConversations = currentSessionConversations.slice(-8); // Last 8 from current session
+
+        // Find data contexts that might be relevant to this query (from current session only)
+        const relevantDataContexts = Array.from(this.memory.dataContexts.values()).filter(context => {
+            // Only include contexts created during current session
+            const contextTime = context.data?.timestamp || context.data?.createdAt || 0;
+            return this.memory.sessionStartTime && contextTime >= this.memory.sessionStartTime && this.isContextRelevantToQuery(context, query);
+        });
+
+        // Find last analytics query from current session
+        const lastAnalyticsQuery = currentSessionConversations
+            .filter(entry => entry.agent === 'analytics' && entry.response?.success !== false)
+            .pop();
+
+        const lastAnalyticsData = lastAnalyticsQuery?.dataContext;
+
+        return {
+            recentConversations,
+            relevantDataContexts,
+            lastAnalyticsData
         };
     }
 
@@ -441,3 +525,9 @@ export const createMutationDataContext = (operationType: 'creation' | 'update', 
 
 export const generateContextualQuery = (originalQuery: string, followUpQuery: string) =>
     conversationContext.generateContextualQuery(originalQuery, followUpQuery);
+
+// Session management functions
+export const startNewSession = () => conversationContext.startNewSession();
+export const getCurrentSession = () => conversationContext.getCurrentSession();
+export const getCurrentSessionConversations = () => conversationContext.getCurrentSessionConversations();
+export const findCurrentSessionContext = (query: string) => conversationContext.findCurrentSessionContext(query);

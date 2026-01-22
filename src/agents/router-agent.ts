@@ -5,7 +5,7 @@ import { searchAgent } from './search-agent';
 import { crudAgent } from './crud-agent';
 import { analyticsGraphAgent } from './analytics-graph-agent';
 import { createRoutedDataEntryAgent } from './routed-data-entry-agent';
-import { addConversation, createMutationDataContext, createSearchDataContext } from '../utils/conversation-context';
+import { addConversation, createMutationDataContext, createSearchDataContext, findCurrentSessionContext } from '../utils/conversation-context';
 import { clarificationService, Interpretation } from '../utils/clarification-service';
 
 // Define Router State - tracks workflow context and orchestrator reference
@@ -129,7 +129,14 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 
 	// No clarification needed - FIRST: Classify intent properly (new task vs follow-up)
 	const fullConversationHistory = state.orchestrator?.currentUIState?.conversation || state.messages;
-	const intentClassification = await classifyIntentType(query, fullConversationHistory);
+	// Use session-aware context for better intent classification
+	const sessionContext = findCurrentSessionContext(query);
+	const recentSessionMessages = sessionContext.recentConversations.map(entry => ({
+		role: entry.agent === 'router' ? 'user' : 'assistant',
+		content: entry.query,
+		type: entry.agent === 'router' ? 'query' : 'response'
+	}));
+	const intentClassification = await classifyIntentType(query, recentSessionMessages);
 	console.log(`🔍 Router: Intent classification: ${intentClassification.type} (${intentClassification.confidence})`, intentClassification);
 
 	// SECOND: Handle based on intent type
@@ -144,7 +151,7 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 		};
 	} else if (intentClassification.type === 'follow_up') {
 		// This is a follow-up - determine which agent to route to
-		const followUpInfo = await determineFollowUpAgent(query, fullConversationHistory, intentClassification);
+		const followUpInfo = await determineFollowUpAgent(query, recentSessionMessages, intentClassification);
 		console.log(`🔄 Router: Follow-up detected, routing to ${followUpInfo.targetAgent}${followUpInfo.dataEntryType ? ` (${followUpInfo.dataEntryType})` : ''}`);
 
 		return {

@@ -1,4 +1,6 @@
 // Workflow Orchestrator - complete UI and workflow lifecycle management
+import { startNewSession } from './conversation-context';
+
 export interface SelectionOptions {
     name: string;
     id: string;
@@ -202,7 +204,11 @@ class WorkflowOrchestrator {
 
     // Initialize UI state for a new chat session (clear conversation history)
     initializeNewChatSession() {
-        console.log('🔄 Initializing new chat session - clearing conversation history');
+        console.log('🔄 Initializing new chat session - clearing conversation history and starting new context session');
+
+        // Start a new session in the conversation context
+        const sessionId = startNewSession();
+
         this.currentUIState = {
             showQueryInput: true,
             queryText: '',

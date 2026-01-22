@@ -43,6 +43,7 @@ import {
 	// Utility Tools
 	resolveResourceReference,
 } from '../utils/tools/metadata';
+import {llmClassificationService} from "../utils/llm-classification-service";
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
@@ -1227,39 +1228,49 @@ async function handle_single_delete(state: typeof CrudAnnotation.State): Promise
 	}
 }
 
-// LLM-based CRUD operation classification
+// LLM-based CRUD operation classification with complexity analysis
 async function classifyCrudOperationType(query: string): Promise<string> {
 	try {
 		console.log('🤖 CRUD Agent: Using LLM to classify operation type for:', query);
 
+		// First, use LLM operation complexity analysis to determine if this is a complex multi-operation request
+		const complexityAnalysis = await llmClassificationService.analyzeOperationComplexity(query);
+		console.log('🤖 CRUD Agent: Operation complexity analysis:', complexityAnalysis);
+
+		// If LLM detects multiple operations, classify as batch
+		if (complexityAnalysis.complexity === 'multiple' || complexityAnalysis.complexity === 'complex') {
+			console.log('🤖 CRUD Agent: Detected complex multi-operation request, classifying as batch');
+			return 'batch';
+		}
+
+		// For single operations, use LLM classification for the specific operation type
 		const classificationPrompt = `
 Classify this DHIS2 CRUD operation into one of these categories:
 
 - create: Creating new resources (create, add, new)
 - update: Updating existing resources (update, modify, change, rename)
 - delete: Deleting existing resources (delete, remove, destroy)
-- batch: Multiple operations or complex workflows (create multiple, batch, several)
 - reference_resolution: Resolving references to existing resources (find, get, resolve, the last, previous)
 
 Query: "${query}"
 
-Return ONLY one of: create, update, delete, batch, reference_resolution
+Return ONLY one of: create, update, delete, reference_resolution
 `;
 
 		const result = await model.invoke([new HumanMessage(classificationPrompt)]);
 		const category = (result.content as string).trim().toLowerCase();
 
-		// Validate the response
-		const validCategories = ['create', 'update', 'delete', 'batch', 'reference_resolution'];
+		// Validate the response is one of our expected categories
+		const validCategories = ['create', 'update', 'delete', 'reference_resolution'];
 		if (validCategories.includes(category)) {
 			return category;
 		}
 
-		// Default to create if unclear
-		console.log('🤖 CRUD Agent: Unclear classification, defaulting to create');
+		// If LLM returned something unexpected, treat as create
+		console.log('🤖 CRUD Agent: Unexpected LLM response, defaulting to create');
 		return 'create';
 	} catch (error) {
-		console.error('🤖 CRUD Agent: Classification failed, defaulting to create');
+		console.error('🤖 CRUD Agent: LLM classification failed, defaulting to create');
 		return 'create';
 	}
 }
@@ -1289,26 +1300,33 @@ crudWorkflow.addEdge(START, 'classify_crud_operation');
 
 // Enhanced workflow routing for complex operations
 // @ts-ignore
-crudWorkflow.addConditionalEdges('classify_crud_operation', (state) => {
+crudWorkflow.addConditionalEdges('classify_crud_operation', async (state) => {
 	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
 
-	// Check if this looks like a complex multi-resource operation
-	const hasConjunctions = query.includes(' and ') ||
-		query.includes(' with ') ||
-		query.includes(' including ') ||
-		query.includes(' along with ');
+	// Use LLM operation complexity analysis to determine workflow path
+	try {
+		const complexityAnalysis = await llmClassificationService.analyzeOperationComplexity(query);
+		const isComplexOperation = complexityAnalysis.complexity === 'multiple' || complexityAnalysis.complexity === 'complex';
 
-	const hasComplexPatterns = query.match(/\b(create|add|setup)\b.*\b(and|with|including)\b/i) !== null;
+		console.log('🤖 CRUD Workflow: Complexity analysis result:', complexityAnalysis);
 
-	const isLongQuery = (query.split(' ').length as number) > 15;
-
-	const isComplexOperation = hasConjunctions || hasComplexPatterns || isLongQuery;
-
-	if (isComplexOperation || state.operationType === 'batch') {
-		console.log('🔀 Using enhanced multi-resource workflow');
-		return 'plan_crud_operations';
-	} else {
-		// Use legacy workflow for simple operations
+		if (isComplexOperation || state.operationType === 'batch') {
+			console.log('🔀 Using enhanced multi-resource workflow for complex operation');
+			return 'plan_crud_operations';
+		} else {
+			console.log('🔀 Using single-operation workflow');
+			// Use legacy workflow for simple operations
+			switch (state.operationType) {
+				case 'create': return 'handle_single_creation';
+				case 'update': return 'handle_single_update';
+				case 'delete': return 'handle_single_delete';
+				case 'reference_resolution': return 'handle_reference_resolution';
+				default: return 'handle_single_creation';
+			}
+		}
+	} catch (error) {
+		console.error('❌ CRUD Workflow: Failed to analyze operation complexity, defaulting to single operation workflow:', error);
+		// Fallback to single operation workflow on error
 		switch (state.operationType) {
 			case 'create': return 'handle_single_creation';
 			case 'update': return 'handle_single_update';

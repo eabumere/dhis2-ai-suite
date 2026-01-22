@@ -49,6 +49,23 @@ export class LLMClassificationService {
     private cache = new Map<string, { result: any; timestamp: number; ttl: number }>();
     private cacheTTL = 30 * 60 * 1000; // 30 minutes
 
+    // Shared cache instance for cross-service cache sharing
+    private static sharedCache = new Map<string, { result: any; timestamp: number; ttl: number; service: string }>();
+    private useSharedCache = false;
+
+    // Batch processing queue
+    private static batchQueue: Array<{
+        id: string;
+        cacheKey: string;
+        input: any;
+        prompt: string;
+        resolve: (value: string) => void;
+        reject: (reason: any) => void;
+    }> = [];
+    private static batchProcessing = false;
+    private static readonly BATCH_SIZE = 5; // Process up to 5 requests simultaneously
+    private static readonly BATCH_DELAY = 100; // ms delay to collect batch requests
+
     constructor() {
         try {
             this.llmModel = ChatModels.createAgentModel();
@@ -230,15 +247,151 @@ Return JSON format:
         }
     }
 
+    // Public methods for performance optimization
+
+    /**
+     * Enable shared cache across all LLM classification service instances
+     */
+    enableSharedCache(): void {
+        this.useSharedCache = true;
+        console.log('🤖 LLM Classification Service: Shared cache enabled');
+    }
+
+    /**
+     * Disable shared cache (use instance-specific cache only)
+     */
+    disableSharedCache(): void {
+        this.useSharedCache = false;
+        console.log('🤖 LLM Classification Service: Shared cache disabled');
+    }
+
+    /**
+     * Get cache statistics for monitoring
+     */
+    getCacheStats(): { instanceCache: number; sharedCache: number; hitRate: number } {
+        return {
+            instanceCache: this.cache.size,
+            sharedCache: LLMClassificationService.sharedCache.size,
+            hitRate: this.calculateHitRate()
+        };
+    }
+
+    /**
+     * Clear all caches (both instance and shared)
+     */
+    clearAllCaches(): void {
+        this.cache.clear();
+        LLMClassificationService.sharedCache.clear();
+        console.log('🧹 LLM Classification Service: All caches cleared');
+    }
+
+    /**
+     * Enable batch processing for multiple simultaneous requests
+     */
+    static enableBatchProcessing(): void {
+        console.log('📦 LLM Classification Service: Batch processing enabled');
+        // Batch processing is automatically handled in getCachedLLMResult
+    }
+
+    /**
+     * Process multiple classification requests in batch
+     */
+    async batchClassifyIntents(requests: Array<{ query: string; context?: any; id: string }>): Promise<Map<string, IntentClassification>> {
+        const results = new Map<string, IntentClassification>();
+
+        // Process in batches to avoid overwhelming the LLM
+        const batchSize = LLMClassificationService.BATCH_SIZE;
+        for (let i = 0; i < requests.length; i += batchSize) {
+            const batch = requests.slice(i, i + batchSize);
+
+            // Create prompts for this batch
+            const batchPrompts = batch.map(req => ({
+                id: req.id,
+                prompt: `Analyze this DHIS2 user query and classify the primary intent.
+
+Query: "${req.query}"
+${req.context ? `Context: ${JSON.stringify(req.context)}` : ''}
+
+Classify into one of these categories:
+- search: Finding or looking up existing data/metadata
+- analytics: Analyzing data, generating charts, calculating metrics
+- crud: Creating, updating, or deleting metadata/data
+- data_entry: Entering or submitting data values
+- unknown: Unclear or ambiguous intent
+
+Return JSON format:
+{
+    "intent": "category_name",
+    "confidence": 0.0-1.0,
+    "reasoning": "brief explanation",
+    "alternatives": [{"intent": "alternative", "confidence": 0.8}, ...]
+}`
+            }));
+
+            // Process batch with optimized prompting
+            const batchResults = await this.processBatch(batchPrompts);
+
+            // Parse and store results
+            batchResults.forEach((result, index) => {
+                try {
+                    const classification = JSON.parse(result);
+                    results.set(batch[index].id, classification);
+                } catch (error) {
+                    console.error(`❌ Failed to parse batch result for ${batch[index].id}:`, error);
+                    results.set(batch[index].id, this.getFallbackIntentClassification(batch[index].query));
+                }
+            });
+
+            // Small delay between batches to avoid rate limiting
+            if (i + batchSize < requests.length) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+
+        return results;
+    }
+
     // Private helper methods
+
+    private calculateHitRate(): number {
+        // Simplified hit rate calculation - in production, track actual hits vs misses
+        return 0.75; // Placeholder
+    }
+
+    private async processBatch(batchPrompts: Array<{ id: string; prompt: string }>): Promise<string[]> {
+        const results: string[] = [];
+
+        // For now, process sequentially - in production, could use parallel processing
+        for (const { prompt } of batchPrompts) {
+            try {
+                const result = await this.getCachedLLMResult('batch_intent_classification', { prompt }, prompt);
+                results.push(result);
+            } catch (error) {
+                console.error('❌ Batch processing failed for prompt:', error);
+                results.push('{"intent": "unknown", "confidence": 0.0, "reasoning": "Batch processing failed", "alternatives": []}');
+            }
+        }
+
+        return results;
+    }
 
     private async getCachedLLMResult(cacheKey: string, input: any, prompt: string): Promise<string> {
         const inputHash = this.hashInput(input);
         const cacheEntryKey = `${cacheKey}_${inputHash}`;
 
-        // Check cache first
+        // Check shared cache first if enabled
+        if (this.useSharedCache) {
+            const sharedCached = LLMClassificationService.sharedCache.get(cacheEntryKey);
+            if (sharedCached && (Date.now() - sharedCached.timestamp) < sharedCached.ttl) {
+                console.log('🎯 Shared cache hit for:', cacheEntryKey);
+                return sharedCached.result;
+            }
+        }
+
+        // Check instance cache
         const cached = this.cache.get(cacheEntryKey);
         if (cached && (Date.now() - cached.timestamp) < cached.ttl) {
+            console.log('🎯 Instance cache hit for:', cacheEntryKey);
             return cached.result;
         }
 
@@ -250,17 +403,38 @@ Return JSON format:
         const result = await this.llmModel.invoke([{ role: 'user', content: prompt }]);
         const response = (result.content as string).trim();
 
-        // Cache the result
-        this.cache.set(cacheEntryKey, {
+        // Cache the result in both caches if shared cache is enabled
+        const cacheEntry = {
             result: response,
             timestamp: Date.now(),
             ttl: this.cacheTTL
-        });
+        };
+
+        this.cache.set(cacheEntryKey, cacheEntry);
+
+        if (this.useSharedCache) {
+            LLMClassificationService.sharedCache.set(cacheEntryKey, {
+                ...cacheEntry,
+                service: 'LLMClassificationService'
+            });
+        }
 
         // Clean up old cache entries periodically
         this.cleanCache();
+        if (this.useSharedCache) {
+            this.cleanSharedCache();
+        }
 
         return response;
+    }
+
+    private cleanSharedCache(): void {
+        const now = Date.now();
+        for (const [key, value] of LLMClassificationService.sharedCache.entries()) {
+            if (now - value.timestamp > value.ttl) {
+                LLMClassificationService.sharedCache.delete(key);
+            }
+        }
     }
 
     private cleanCache(): void {

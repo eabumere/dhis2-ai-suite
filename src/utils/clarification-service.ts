@@ -1,4 +1,5 @@
 import { ChatModels } from './chat-model-factory';
+import { llmClassificationService } from './llm-classification-service';
 
 // =============================================================================
 // CLARIFICATION SERVICE - Global clarification system for all agents
@@ -17,7 +18,7 @@ export interface Interpretation {
 
 export interface ClarificationContext {
     domain: 'analytics' | 'data_entry' | 'search' | 'crud' | 'general';
-    locale?: string;
+    locale?: string; // Language code (e.g., 'en', 'fr', 'es', 'ar', 'pt')
     userId?: string;
     conversationHistory?: Array<{role: string, content: string}>;
     previousClarifications?: ClarificationAttempt[];
@@ -225,19 +226,77 @@ class ClarificationService {
             return { seek: true, reason: 'domain_mismatch', confidence };
         }
 
-        // Check for missing required parameters
-        const hasRequiredParams = this.hasRequiredParameters(query, topInterpretation);
+        // Check for missing required parameters using LLM
+        const hasRequiredParams = await this.hasRequiredParameters(query, topInterpretation);
         if (!hasRequiredParams && confidence > strategy.requireClarificationThreshold) {
             return { seek: true, reason: 'missing_parameters', confidence };
         }
 
-        // Very low confidence indicates genuine confusion
-        if (confidence < strategy.requireClarificationThreshold) {
-            return { seek: true, reason: 'genuine_confusion', confidence };
-        }
-
         // Default: proceed with best guess
         return { seek: false, reason: 'best_guess', confidence };
+    }
+
+    // Check for missing required parameters using LLM
+    private async hasRequiredParameters(query: string, interpretation: Interpretation): Promise<boolean> {
+        try {
+            // Use LLM classification service to analyze query for parameter completeness
+            const queryAnalysis = await llmClassificationService.analyzeQuery(query);
+
+            // Check if required parameters are present based on LLM analysis
+            const requiredParams = interpretation.requiredParams || [];
+            const identifiedEntities = queryAnalysis.entities || [];
+
+            // Map identified entities to parameter types
+            const identifiedParamTypes = identifiedEntities.map(entity => entity.type.toLowerCase());
+
+            // Check if all required parameters are covered
+            return requiredParams.every(param => {
+                const paramType = param.toLowerCase();
+                return identifiedParamTypes.some(entityType =>
+                    entityType.includes(paramType) ||
+                    paramType.includes(entityType) ||
+                    // Semantic matching for common parameter types
+                    this.isParameterTypeMatch(paramType, entityType)
+                );
+            });
+        } catch (error) {
+            console.error('❌ LLM parameter detection failed, falling back to keyword check:', error);
+            // Fallback to simple keyword-based check
+            return this.hasRequiredParametersFallback(query, interpretation);
+        }
+    }
+
+    // Fallback keyword-based parameter check
+    private hasRequiredParametersFallback(query: string, interpretation: Interpretation): boolean {
+        const requiredParams = interpretation.requiredParams || [];
+
+        return requiredParams.every(param => {
+            // Simple keyword check
+            return query.toLowerCase().includes(param.toLowerCase());
+        });
+    }
+
+    // Check if parameter types semantically match
+    private isParameterTypeMatch(requiredParam: string, identifiedType: string): boolean {
+        const semanticMappings = {
+            'indicator': ['indicator', 'dataelement', 'metric', 'measure'],
+            'orgunit': ['orgunit', 'organisationunit', 'facility', 'location', 'site'],
+            'period': ['period', 'time', 'date', 'month', 'year', 'quarter'],
+            'categoryoption': ['categoryoption', 'category', 'disaggregation'],
+            'dataset': ['dataset', 'data set', 'report']
+        };
+
+        const requiredLower = requiredParam.toLowerCase();
+        const identifiedLower = identifiedType.toLowerCase();
+
+        for (const [key, synonyms] of Object.entries(semanticMappings)) {
+            if ((requiredLower.includes(key) || synonyms.some(s => requiredLower.includes(s))) &&
+                (identifiedLower.includes(key) || synonyms.some(s => identifiedLower.includes(s)))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Generate appropriate clarification request
@@ -444,7 +503,8 @@ class ClarificationService {
     }
 
     private generateHelpfulExamples(domain: string, locale?: string): string[] {
-        const examples = {
+        // Efficient multilingual examples - LLMs can translate from English examples
+        const examples: Record<string, string[]> = {
             analytics: [
                 'Show malaria cases by district for 2024',
                 'Compare vaccination rates between regions',
@@ -462,6 +522,12 @@ class ClarificationService {
                 'Show me data elements for malaria',
                 'Search for facilities in Nairobi',
                 'Find user groups with admin access'
+            ],
+            crud: [
+                'Create a new data element for HIV testing',
+                'Update the malaria indicator definition',
+                'Delete unused data sets',
+                'Add categories to existing data elements'
             ]
         };
 
@@ -538,15 +604,7 @@ class ClarificationService {
         return validIntents.includes(interpretation.intent);
     }
 
-    private hasRequiredParameters(query: string, interpretation: Interpretation): boolean {
-        // Check if required parameters are present
-        const requiredParams = interpretation.requiredParams || [];
 
-        return requiredParams.every(param => {
-            // Simple check - could be enhanced with NLP
-            return query.toLowerCase().includes(param.toLowerCase());
-        });
-    }
 
     private identifyMissingParameters(query: string, interpretation: Interpretation): string[] {
         const requiredParams = interpretation.requiredParams || [];

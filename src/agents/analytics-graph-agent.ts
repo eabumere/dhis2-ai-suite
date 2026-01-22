@@ -14,6 +14,9 @@ import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 // Import conversation context
 import { addConversation, conversationContext, createAnalyticsDataContext } from '../utils/conversation-context';
 
+// Import centralized LLM classification service
+import { llmClassificationService } from '../utils/llm-classification-service';
+
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
@@ -205,16 +208,16 @@ async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Part
 	}
 
 	const prompt = `
-Analyze this query in the context of DHIS2 analytics. Consider the conversation history.
+Analyze this analytics query. You understand multiple languages (English, French, Spanish, Arabic, Portuguese).
 
-${contextSummary ? `CONVERSATION CONTEXT:\n${contextSummary}\n\n` : ''}CURRENT QUERY: "${query}"
+${contextSummary ? `CONTEXT: ${contextSummary}\n\n` : ''}QUERY: "${query}"
 
-Classify the intent as one of:
-- new_analytics_query: New analytics request requiring data search and visualization
-- followup_data_analysis: Follow-up question about existing analytics data (asking about months, values, highest/lowest, trends, etc.)
-- non_analytics: Not related to analytics
+Classify intent:
+- new_analytics_query: New analytics request (charts, analysis, reports)
+- followup_data_analysis: Follow-up about existing data (trends, values, comparisons)
+- non_analytics: Not analytics-related
 
-Return only a JSON object with:
+Return JSON:
 {
   "intent": "new_analytics_query|followup_data_analysis|non_analytics",
   "confidence": "high|medium|low",
@@ -243,8 +246,14 @@ Return only a JSON object with:
 			};
 		}
 
-		// Check if query already includes selected metadata (follow-up query)
-		const hasSelectedMetadata = query.toLowerCase().includes('selected metadata:') ||
+		// Use LLM-based query analysis to determine if this is a follow-up with selected metadata
+		const queryAnalysis = await llmClassificationService.analyzeQuery(query, {
+			conversationContext: contextSummary,
+			previousAnalyticsAvailable: !!context.lastAnalyticsData
+		});
+
+		const hasSelectedMetadata = queryAnalysis.requiresMetadata ||
+			query.toLowerCase().includes('selected metadata:') ||
 			query.toLowerCase().includes('analyze using these') ||
 			(query.toLowerCase().includes('indicator:') && query.toLowerCase().includes('(id:'));
 

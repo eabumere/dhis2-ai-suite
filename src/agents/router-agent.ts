@@ -162,15 +162,11 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 			dataEntryType: followUpInfo.dataEntryType
 		};
 	} else if (intentClassification.type === 'ambiguous') {
-		// Intent is ambiguous - provide user selection options
-		console.log('🤔 Router: Intent is ambiguous, providing user selection options');
+		// Intent is ambiguous - generate LLM-powered user selection options
+		console.log('🤔 Router: Intent is ambiguous, generating LLM-powered user selection options');
 
-		const selectionOptions = [
-			{ name: "Search existing metadata", id: "direct_search", type: "search" },
-			{ name: "Create/update metadata", id: "crud", type: "crud" },
-			{ name: "Data analysis and visualization", id: "analytics_routing", type: "analytics" },
-			{ name: "Data entry and collection", id: "data_entry", type: "data_entry" }
-		];
+		const selectionOptions = await generateLLMSelectionOptions(query, interpretations);
+		console.log('🤖 Router: Generated LLM selection options:', selectionOptions);
 
 		return {
 			workflowType: 'user_selection_needed',
@@ -837,6 +833,130 @@ Category:`;
 		if (isSearch) return 'direct_search';
 		return 'unknown';
 	}
+}
+
+// Generate LLM-powered user selection options for ambiguous queries
+async function generateLLMSelectionOptions(query: string, interpretations: Interpretation[]): Promise<any[]> {
+	try {
+		console.log('🤖 Router: Generating LLM-powered selection options for:', query);
+
+		const selectionPrompt = `
+Based on this ambiguous user query and possible interpretations, generate 3-5 user-friendly selection options that would help clarify what the user wants to do.
+
+User query: "${query}"
+
+Possible interpretations:
+${interpretations.map((i, idx) => `${idx + 1}. ${i.intent} (${Math.round(i.confidence * 100)}% confidence)`).join('\n')}
+
+Generate selection options that:
+1. Are clear and user-friendly
+2. Cover the main interpretation possibilities
+3. Include specific actions the user can take
+4. Are in natural language (not technical jargon)
+5. Consider multilingual context - be clear and not rely on English-specific idioms
+
+Return JSON format:
+{
+  "options": [
+    {
+      "name": "Clear description of what this option does",
+      "id": "technical_id",
+      "type": "agent_type"
+    }
+  ]
+}
+
+Examples:
+For query "analyze the data":
+- "Create charts and graphs from data"
+- "Find and search for existing data"
+- "Enter or submit new data values"
+
+Make options specific and actionable.
+`;
+
+		const result = await model.invoke([new HumanMessage(selectionPrompt)]);
+		const response = JSON.parse(result.content as string);
+
+		console.log('🤖 Router: LLM generated selection options:', response.options);
+
+		return response.options || [];
+
+	} catch (error) {
+		console.error('🤖 Router: Failed to generate LLM selection options:', error);
+
+		// Fallback to enhanced keyword-based options
+		console.log('🔄 Router: Falling back to enhanced keyword-based selection options');
+
+		return generateFallbackSelectionOptions(query, interpretations);
+	}
+}
+
+// Enhanced fallback selection options when LLM fails
+function generateFallbackSelectionOptions(query: string, interpretations: Interpretation[]): any[] {
+	const queryLower = query.toLowerCase();
+	const options: any[] = [];
+
+	// Always include search option as it's most common
+	options.push({
+		name: "Search for existing data and metadata",
+		id: "direct_search",
+		type: "search"
+	});
+
+	// Check for analytics patterns
+	if (['analyze', 'calculate', 'chart', 'graph', 'trend', 'compare', 'show'].some(k => queryLower.includes(k))) {
+		options.push({
+			name: "Create data analysis and visualizations",
+			id: "analytics_routing",
+			type: "analytics"
+		});
+	}
+
+	// Check for CRUD patterns
+	if (['create', 'add', 'update', 'delete', 'modify', 'change', 'new'].some(k => queryLower.includes(k))) {
+		options.push({
+			name: "Create or modify data structures",
+			id: "crud",
+			type: "crud"
+		});
+	}
+
+	// Check for data entry patterns
+	if (['enter', 'input', 'submit', 'record', 'data entry', 'values'].some(k => queryLower.includes(k))) {
+		options.push({
+			name: "Enter or submit data values",
+			id: "data_entry",
+			type: "data_entry"
+		});
+	}
+
+	// Ensure we have at least 3 options
+	while (options.length < 3) {
+		if (!options.some(opt => opt.id === 'analytics_routing')) {
+			options.push({
+				name: "Analyze data and create reports",
+				id: "analytics_routing",
+				type: "analytics"
+			});
+		}
+		if (!options.some(opt => opt.id === 'crud')) {
+			options.push({
+				name: "Manage metadata and structures",
+				id: "crud",
+				type: "crud"
+			});
+		}
+		if (!options.some(opt => opt.id === 'data_entry')) {
+			options.push({
+				name: "Input data values",
+				id: "data_entry",
+				type: "data_entry"
+			});
+		}
+	}
+
+	return options.slice(0, 4); // Limit to 4 options
 }
 
 // Create and compile StateGraph workflow

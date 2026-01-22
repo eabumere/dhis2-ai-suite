@@ -1,5 +1,6 @@
 // Workflow Orchestrator - complete UI and workflow lifecycle management
 import { startNewSession } from './conversation-context';
+import { llmClassificationService } from './llm-classification-service';
 
 export interface SelectionOptions {
     name: string;
@@ -2068,8 +2069,74 @@ class WorkflowOrchestrator {
 
     // Error Classification System
 
-    // Classify an error and create recovery strategies
-    classifyError(error: any, context?: {
+    // Classify an error and create recovery strategies using LLM
+    async classifyError(error: any, context?: {
+        workflowId?: string;
+        stepId?: string;
+        agent?: string;
+        operation?: string;
+    }): Promise<ClassifiedError> {
+        try {
+            const errorMessage = error?.message || error?.error || String(error);
+            const errorCode = error?.code || error?.statusCode || 'UNKNOWN';
+
+            console.log('🤖 Workflow Orchestrator: Classifying error with LLM:', errorMessage);
+
+            // Use LLM classification service for multilingual error analysis
+            const errorClassification = await llmClassificationService.classifyError(error);
+
+            // Map LLM classification to our internal format
+            const classification: ErrorClassification = errorClassification.category === 'resource' || errorClassification.category === 'auth' || errorClassification.category === 'network' || errorClassification.category === 'input'
+                ? 'recoverable'
+                : errorClassification.category === 'server'
+                ? 'non-recoverable'
+                : 'recoverable'; // Default to recoverable
+
+            // Map severity from LLM response
+            const severityMap = {
+                'low': 'info' as const,
+                'medium': 'warning' as const,
+                'high': 'error' as const,
+                'critical': 'critical' as const
+            };
+            const severity = severityMap[errorClassification.severity] || 'error';
+
+            // Use LLM-generated reasoning for user message
+            const userMessage = errorClassification.suggestedActions?.[0] || this.createUserFriendlyMessage(error, classification, severity);
+
+            // Create technical message for debugging
+            const technicalMessage = this.createTechnicalMessage(error, context);
+
+            // Use LLM-suggested actions as recovery strategies
+            const recoveryStrategies = errorClassification.suggestedActions?.map((action, index) => ({
+                id: `llm_recovery_${index}`,
+                name: action,
+                description: action,
+                action: action.toLowerCase().replace(/\s+/g, '_'),
+                priority: index + 1,
+                requiresUserInput: action.toLowerCase().includes('provide') || action.toLowerCase().includes('enter'),
+                automated: !action.toLowerCase().includes('provide') && !action.toLowerCase().includes('enter')
+            })) || this.generateRecoveryStrategies(classification, severity, context);
+
+            return {
+                originalError: error,
+                classification,
+                severity,
+                errorCode,
+                userMessage,
+                technicalMessage,
+                recoveryStrategies,
+                context: context || {}
+            };
+        } catch (llmError) {
+            console.error('❌ LLM error classification failed, falling back to keyword-based:', llmError);
+            // Fallback to original keyword-based classification
+            return this.classifyErrorFallback(error, context);
+        }
+    }
+
+    // Fallback keyword-based error classification
+    private classifyErrorFallback(error: any, context?: {
         workflowId?: string;
         stepId?: string;
         agent?: string;
@@ -2360,14 +2427,14 @@ class WorkflowOrchestrator {
     }
 
     // Get error recovery strategies for a workflow
-    getErrorRecoveryStrategies(workflowId: string): RecoveryStrategy[] {
+    async getErrorRecoveryStrategies(workflowId: string): Promise<RecoveryStrategy[]> {
         const workflow = this.activeWorkflows.get(workflowId);
         if (!workflow?.error) {
             return [];
         }
 
-        // Classify the workflow error
-        const classifiedError = this.classifyError(workflow.error, {
+        // Classify the workflow error using LLM
+        const classifiedError = await this.classifyError(workflow.error, {
             workflowId,
             agent: workflow.flowType
         });

@@ -52,8 +52,8 @@ export interface AggregatedDataValue {
     dataElement: string; // Resolved ID
     orgUnit: string; // Resolved ID
     period: string; // YYYYMM format
-    categoryOptionCombos?: string; // Resolved ID
-    attributeOptionCombos?: string; // Resolved ID
+    categoryOptionCombo?: string; // Resolved ID
+    attributeOptionCombo?: string; // Resolved ID
     value: number;
 }
 
@@ -453,8 +453,8 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
                 extractedData.dataElement || '',
                 orgUnitValue || '',
                 extractedData.period || '',
-                extractedData.categoryOptionCombos || '',
-                extractedData.attributeOptionCombos || '',
+                extractedData.categoryOptionCombo || '',
+                extractedData.attributeOptionCombo || '',
                 extractedData.value || ''
             ];
 
@@ -869,8 +869,8 @@ async function map_csv_headers(state: typeof AggregateDataAnnotation.State): Pro
                 extractedData.dataElement || '',
                 orgUnitValue || '',
                 extractedData.period || '',
-                extractedData.categoryOptionCombos || '',
-                extractedData.attributeOptionCombos || '',
+                extractedData.categoryOptionCombo || '',
+                extractedData.attributeOptionCombo || '',
                 extractedData.value || ''
             ];
 
@@ -1858,8 +1858,9 @@ async function handleDataValueUpdate(query: string, conversationHistory: any[], 
 			if (submittedDataSets.length > 0) {
 				// Get the most recent submission
 				const recentSubmission = submittedDataSets[submittedDataSets.length - 1];
-				if (recentSubmission.submittedData) {
-					submittedData = recentSubmission.submittedData;
+				const data = (recentSubmission as any).submittedData;
+				if (data) {
+					submittedData = data;
 					console.log('🔄 Aggregate Data Agent: Found submitted data in orchestrator state:', submittedData.length, 'values');
 				}
 			}
@@ -1990,8 +1991,8 @@ If you cannot determine which value to update, return:
 			period: targetDataValue.period,
 			orgUnit: targetDataValue.orgUnit,
 			value: newValue,
-			...(targetDataValue.categoryOptionCombo && { categoryOptionCombo: targetDataValue.categoryOptionCombo }),
-			...(targetDataValue.attributeOptionCombo && { attributeOptionCombo: targetDataValue.attributeOptionCombo })
+            ...(targetDataValue.categoryOptionCombos && { categoryOptionCombo: targetDataValue.categoryOptionCombos }),
+            ...(targetDataValue.attributeOptionCombos && { attributeOptionCombo: targetDataValue.attributeOptionCombos })
 		};
 
 		console.log('🔄 Aggregate Data Agent: Updating data value:', updatePayload);
@@ -2089,7 +2090,8 @@ async function load_and_display_data_set(state: typeof AggregateDataAnnotation.S
 
     // For now, we'll reconstruct the data from the stored information
     // In a real implementation, you'd query DHIS2 to get the current data
-    const rows = (dataSetInfo as any).submittedData?.map((dataValue: any, index: number) => [
+    const dataSetInfoTyped = dataSetInfo as { submittedData?: AggregatedDataValue[] };
+    const rows = dataSetInfoTyped.submittedData?.map((dataValue: AggregatedDataValue, index: number) => [
         dataValue.dataElement || '',
         dataValue.orgUnit || '',
         dataValue.period || '',
@@ -2159,8 +2161,8 @@ async function update_data_set(state: typeof AggregateDataAnnotation.State, data
             period: dataValue.period,
             orgUnit: dataValue.orgUnit,
             value: newValues.value !== undefined ? newValues.value : dataValue.value,
-            ...(dataValue.categoryOptionCombos && { categoryOptionCombo: dataValue.categoryOptionCombos }),
-            ...(dataValue.attributeOptionCombos && { attributeOptionCombo: dataValue.attributeOptionCombos })
+            ...(dataValue.categoryOptionCombo && { categoryOptionCombo: dataValue.categoryOptionCombo }),
+            ...(dataValue.attributeOptionCombo && { attributeOptionCombo: dataValue.attributeOptionCombo })
         }));
 
         // Update data values in DHIS2
@@ -2360,8 +2362,8 @@ function constructGridDataFromSubmittedData(dataSetInfo: any): any {
         dataValue.dataElement || '',
         dataValue.orgUnit || '',
         dataValue.period || '',
-        dataValue.categoryOptionCombos || '',
-        dataValue.attributeOptionCombos || '',
+        dataValue.categoryOptionCombo || '',
+        dataValue.attributeOptionCombo || '',
         dataValue.value?.toString() || ''
     ]);
 
@@ -2422,11 +2424,11 @@ async function delete_from_data_set(state: typeof AggregateDataAnnotation.State,
             });
 
             // Add optional parameters
-            if (dataValue.categoryOptionCombos) {
-                deleteParams.append('co', dataValue.categoryOptionCombos);
+            if (dataValue.categoryOptionCombo) {
+                deleteParams.append('co', dataValue.categoryOptionCombo);
             }
-            if (dataValue.attributeOptionCombos) {
-                deleteParams.append('cc', dataValue.attributeOptionCombos);
+            if (dataValue.attributeOptionCombo) {
+                deleteParams.append('cc', dataValue.attributeOptionCombo);
             }
 
             const mutationConfig = {
@@ -2460,8 +2462,8 @@ async function delete_from_data_set(state: typeof AggregateDataAnnotation.State,
                     return dataValue.dataElement === deleted.dataElement &&
                            dataValue.period === deleted.period &&
                            dataValue.orgUnit === deleted.orgUnit &&
-                           dataValue.categoryOptionCombos === deleted.categoryOptionCombos &&
-                           dataValue.attributeOptionCombos === deleted.attributeOptionCombos;
+                           dataValue.categoryOptionCombo === deleted.categoryOptionCombo &&
+                           dataValue.attributeOptionCombo === deleted.attributeOptionCombo;
                 });
             });
 
@@ -2555,8 +2557,8 @@ async function extractDataValuesFromPrompt(content: string): Promise<{
     dataElement?: string;
     orgUnit?: string;
     period?: string;
-    categoryOptionCombos?: string;
-    attributeOptionCombos?: string;
+    categoryOptionCombo?: string;
+    attributeOptionCombo?: string;
     value?: string;
 } | null> {
     try {
@@ -2619,12 +2621,12 @@ async function extractContextualInfo(messages: any[]): Promise<{
     const userMessages = messages.filter(m => m.role === 'user');
     const allText = userMessages.map(m => m.content).join(' ');
 
-    // Extract organisation unit keywords using LLM-powered tool
+    // Extract organisation unit keywords using LLM exclusively (no regex fallback)
     let extractedOrgUnits: string[] = [];
     try {
         const llmResult = await extractOrgUnitKeywordsLLM.invoke({
             query: allText,
-            context: 'health analytics - extract geographic locations and organization unit names'
+            context: 'health analytics - extract geographic locations and organization unit names in any language'
         });
 
         const llmResponse = JSON.parse(llmResult as string);
@@ -2634,22 +2636,9 @@ async function extractContextualInfo(messages: any[]): Promise<{
         extractedOrgUnits = llmResponse.keywordCandidates || [];
         console.log('🏥 Extracted org unit keywords from LLM:', extractedOrgUnits);
     } catch (error) {
-        console.warn('🏥 LLM organisation unit extraction failed, using regex fallback:', error);
-        // Fallback to simple regex extraction if LLM fails
-        const orgUnitPatterns = [
-            /\b(?:at|in|for)\s+([A-Za-z\s]+?)(?:\s+(?:hospital|clinic|center|facility|district|province|region)|\s*\d{4}|$)/gi,
-            /\b([A-Za-z\s]+?)(?:\s+hospital|\s+clinic|\s+center|\s+facility|\s+district|\s+province|\s+region)\b/gi
-        ];
-
-        for (const pattern of orgUnitPatterns) {
-            let match;
-            while ((match = pattern.exec(allText)) !== null) {
-                const orgUnit = match[1].trim();
-                if (orgUnit.length > 2 && !extractedOrgUnits.includes(orgUnit)) {
-                    extractedOrgUnits.push(orgUnit);
-                }
-            }
-        }
+        console.warn('🏥 LLM organisation unit extraction failed, returning empty array:', error);
+        // Return empty array instead of falling back to regex - rely on LLM capabilities exclusively
+        extractedOrgUnits = [];
     }
 
     // Get current user's organisation unit from DHIS2 /me endpoint
@@ -2722,7 +2711,7 @@ function generateDisplayLabels(fieldMappings: (string | null)[], originalHeaders
     });
 }
 
-// Use LLM to intelligently map CSV headers to DHIS2 required fields
+// Use LLM to intelligently map CSV headers to DHIS2 required fields with multilingual support
 async function mapHeadersWithLLM(headers: string[], requiredFields: Record<string, string>): Promise<{
     mappings: (string | null)[];
     displayLabels: string[];
@@ -2732,7 +2721,7 @@ async function mapHeadersWithLLM(headers: string[], requiredFields: Record<strin
     try {
         const llm = ChatModels.createAnalysisModel();
 
-        // Create mapping prompt
+        // Create mapping prompt with multilingual support
         const requiredFieldList = Object.entries(requiredFields)
             .map(([field, description]) => `"${field}": ${description}`)
             .join('\n');
@@ -2740,7 +2729,7 @@ async function mapHeadersWithLLM(headers: string[], requiredFields: Record<strin
         const headersList = headers.map((header, index) => `${index}: "${header}"`).join('\n');
 
         const prompt = `
-You are mapping CSV headers to DHIS2 aggregate data fields. Your task is to intelligently match user-provided column headers to the required DHIS2 field names based on semantic meaning, not just exact text matching.
+You are mapping CSV headers to DHIS2 aggregate data fields. You understand queries in multiple languages (English, French, Spanish, Arabic, Portuguese). Your task is to intelligently match user-provided column headers to the required DHIS2 field names based on semantic meaning, not just exact text matching.
 
 REQUIRED DHIS2 FIELDS:
 ${requiredFieldList}
@@ -2748,21 +2737,29 @@ ${requiredFieldList}
 PROVIDED CSV HEADERS:
 ${headersList}
 
+MULTILINGUAL MAPPING GUIDELINES:
+- Data Elements: indicator, measure, metric, élément de données, indicador, medida, مؤشر, indicador
+- Organisation Units: facility, site, location, organisation unit, établissement, instalación, منشأة, instalação
+- Periods: time period, month, quarter, year, période, período, فترة, período
+- Category Option Combos: disaggregation, breakdown, category, combo d'options de catégorie, combo de opciones de categoría, مجموعة خيارات الفئة, combinação de opções de categoria
+- Values: result, number, amount, count, valeur, valor, قيمة, valor
+
 INSTRUCTIONS:
 1. For each CSV header (identified by index), determine which DHIS2 field it most closely matches
-2. Use semantic understanding - "Facility" should map to "orgUnit", "Indicator" to "dataElement", etc.
-3. If a header doesn't match any required field, return null for that index
-4. If multiple headers could map to the same field, choose the best semantic match
-5. Some required fields may not be present in the CSV - that's OK
+2. Use semantic understanding across languages - "Établissement" (French) should map to "orgUnit", "Indicador" (Portuguese) to "dataElement", etc.
+3. Recognize DHIS2 data structures: data elements collect specific metrics, org units are locations/facilities, periods are time references, category combos are disaggregations
+4. If a header doesn't match any required field, return null for that index
+5. If multiple headers could map to the same field, choose the best semantic match
+6. Some required fields may not be present in the CSV - that's OK
 
-EXAMPLES:
-- "Facility Name" → "orgUnit"
-- "Indicator" → "dataElement"  
-- "Location" → "orgUnit"
-- "Measure" → "dataElement"
-- "Disaggregation" → "categoryOptionCombos"
-- "Result" → "value"
-- "Time Period" → "period"
+MULTILINGUAL EXAMPLES:
+- "Facility Name" / "Nom de l'établissement" / "Nombre de la instalación" → "orgUnit"
+- "Indicator" / "Indicateur" / "Indicador" / "مؤشر" → "dataElement"
+- "Location" / "Emplacement" / "Ubicación" / "موقع" → "orgUnit"
+- "Measure" / "Mesure" / "Medida" / "قياس" → "dataElement"
+- "Disaggregation" / "Désagrégation" / "Desagregación" → "categoryOptionCombos"
+- "Result" / "Résultat" / "Resultado" / "نتيجة" → "value"
+- "Time Period" / "Période" / "Período" / "فترة زمنية" → "period"
 
 Return ONLY a JSON object with this exact structure:
 {
@@ -2803,7 +2800,7 @@ Where:
             };
         } catch (parseError) {
             console.warn('🧠 LLM returned invalid JSON, using fallback mapping');
-            // Fallback to simple regex-based mapping
+            // Fallback to enhanced multilingual regex-based mapping
             return fallbackHeaderMapping(headers, requiredFields);
         }
 

@@ -227,18 +227,19 @@ async function classify_data_entry_intent(state: typeof DataEntryRouterAnnotatio
 	};
 }
 
-// 2. Handle unclear classification - return user selection prompt
+// 2. Handle unclear classification - generate LLM-powered user selection prompt
 async function handle_unclear_classification(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
-	console.log('❓ Data Entry Router: Classification unclear, prompting user selection');
+	console.log('❓ Data Entry Router: Classification unclear, generating LLM-powered user selection prompt');
+
+	const query = state.originalQuery || state.messages.filter(m => m.role === 'user').pop()?.content || '';
+
+	// Generate LLM-powered selection options for unclear data entry classification
+	const selectionOptions = await generateLLMDataEntrySelectionOptions(query);
 
 	const selectionPrompt = {
 		type: 'user_selection_required',
 		message: 'Please select the data entry category that best matches your request:',
-		options: [
-			{ value: 'aggregate_data', label: 'Aggregate Data - Create data elements, categories, data sets for periodic reporting' },
-			{ value: 'events', label: 'Events - Set up event programs and record individual events' },
-			{ value: 'tracker', label: 'Tracker - Manage tracked entities, enrollments, and longitudinal tracking' }
-		],
+		options: selectionOptions,
 		originalQuery: state.originalQuery
 	};
 
@@ -396,56 +397,29 @@ async function detectDataGridActionIntent(query: string, orchestrator: any, foll
 		}
 
 		const detectionPrompt = `
-Analyze this user query in the context of a DHIS2 data entry interface${isTrackerReviewGrid ? ' showing tracker data for review' : isAggregateDataGrid ? ' with aggregate data that may have unresolved items' : ''}.
+Analyze this data entry grid action query in any language (English, French, Spanish, Arabic, Portuguese).
 
-Determine if the user is asking to perform one of these specific actions:
+Context: ${isTrackerReviewGrid ? 'Tracker data review interface' : isAggregateDataGrid ? 'Aggregate data entry with unresolved items' : 'Data entry interface'}
+
+ACTIONS:
 ${isTrackerReviewGrid ? `
-- confirm_save: User wants to save/confirm the reviewed tracker data to DHIS2
-- cancel_save: User wants to cancel the tracker data save operation` : `
-- resolve_all: User wants to resolve/fix/complete all pending unresolved items
-- submit_data: User wants to submit/send the data to DHIS2
-- update_data_value: User wants to update/modify a specific data value`}
+- confirm_save: Save/confirm tracker data
+- cancel_save: Cancel tracker data save` : `
+- resolve_all: Resolve/fix all pending items
+- submit_data: Submit/send data to DHIS2
+- update_data_value: Update/modify specific data value`}
 
+EXAMPLES:
 ${isTrackerReviewGrid ? `
-Examples of confirm_save:
-- "save the data"
-- "confirm save"
-- "save to DHIS2"
-- "submit the tracker data"
-- "confirm the patient data"
-
-Examples of cancel_save:
-- "cancel"
-- "cancel save"
-- "don't save"
-- "abort"` : `
-Examples of resolve_all:
-- "resolve all the pending items"
-- "fix the unresolved entries"
-- "complete the missing data"
-- "resolve all issues"
-- "finish resolving"
-
-Examples of submit_data:
-- "submit the data"
-- "send to DHIS2"
-- "confirm submission"
-- "upload the data"
-- "submit now"
-
-Examples of update_data_value:
-- "update the first value to 10"
-- "change row 3 to 25"
-- "modify the second entry"
-- "correct the last data point"
-- "fix value 5 to 8"
-- "update first row to 15"`}
-
-Return ONLY one of these values: ${isTrackerReviewGrid ? '"confirm_save", "cancel_save"' : '"resolve_all", "submit_data", "update_data_value"'}, or null if neither matches.
+- "save the data" → confirm_save
+- "cancel" → cancel_save` : `
+- "resolve all" → resolve_all
+- "submit the data" → submit_data
+- "update first value to 10" → update_data_value`}
 
 Query: "${query}"
 
-Response:`;
+Return: ${isTrackerReviewGrid ? '"confirm_save", "cancel_save"' : '"resolve_all", "submit_data", "update_data_value"'} or null`;
 
 		const result = await model.invoke([new HumanMessage(detectionPrompt)]);
 		const intent = (result.content as string).trim();
@@ -466,19 +440,25 @@ Response:`;
 	}
 }
 
-// LLM-based data entry category classification
+// Efficient LLM-based data entry category classification
 async function classifyDataEntryCategoryLLM(query: string): Promise<string> {
 	try {
-		console.log('🤖 Data Entry Router: Using LLM to classify data entry category for:', query);
+		console.log('🤖 Data Entry Router: Using efficient multilingual LLM classification for:', query);
 
 		const classificationPrompt = `
-Classify this DHIS2 data entry query into ONE category. If the query is not clearly about data entry or you cannot determine the category with confidence, respond with "unclear".
+Classify this DHIS2 data entry query into ONE category. You understand queries in multiple languages (English, French, Spanish, Arabic, Portuguese).
 
-Categories:
-- aggregate_data: Creating/modifying aggregate data structures (data elements, categories, data sets, indicators, reporting forms, validation rules for periodic reporting)
-- events: Setting up event programs (WITHOUT_REGISTRATION) or recording individual events without entity tracking
-- tracker: Setting up tracker programs (WITH_REGISTRATION), managing tracked entities, enrollments, or entity relationships
-- unclear: Query is ambiguous, not clearly data entry, or doesn't fit the above categories
+CATEGORIES:
+- aggregate_data: Periodic/facility-level data entry (monthly reports, quarterly summaries)
+- events: Individual event recording (cases, surveys, outbreaks)
+- tracker: Individual record management (patients, beneficiaries, longitudinal tracking)
+- unclear: Not clearly data entry or ambiguous
+
+EXAMPLES:
+- "enter monthly facility data" → aggregate_data
+- "record malaria case" → events
+- "enter patient information" → tracker
+- "submit quarterly report" → aggregate_data
 
 Query: "${query}"
 
@@ -500,6 +480,95 @@ Category:`;
 		console.error('🤖 Data Entry Router: LLM classification failed, defaulting to unclear');
 		return 'unclear';
 	}
+}
+
+// Generate LLM-powered data entry selection options for unclear classification
+async function generateLLMDataEntrySelectionOptions(query: string): Promise<any[]> {
+	try {
+		console.log('🤖 Data Entry Router: Generating efficient LLM-powered selection options for:', query);
+
+		const selectionPrompt = `
+Generate 3 user-friendly selection options for this ambiguous data entry query.
+
+You understand: English, French, Spanish, Arabic, Portuguese.
+
+Query: "${query}"
+
+Categories:
+- aggregate_data: Periodic/facility-level data entry (monthly reports, quarterly summaries)
+- events: Individual event recording (cases, surveys, outbreaks)
+- tracker: Individual record management (patients, beneficiaries, longitudinal tracking)
+
+Return JSON:
+{
+  "options": [
+    {"value": "aggregate_data", "label": "Description..."},
+    {"value": "events", "label": "Description..."},
+    {"value": "tracker", "label": "Description..."}
+  ]
+}
+
+Examples:
+- "enter monthly data" → "Aggregate Data - Enter periodic facility statistics"
+- "record malaria case" → "Events - Record individual disease cases"
+- "enter patient info" → "Tracker - Manage patient records"
+`;
+
+		const result = await model.invoke([new HumanMessage(selectionPrompt)]);
+		const response = JSON.parse(result.content as string);
+
+		console.log('🤖 Data Entry Router: LLM generated selection options:', response.options);
+
+		return response.options || [];
+
+	} catch (error) {
+		console.error('🤖 Data Entry Router: Failed to generate LLM selection options:', error);
+
+		// Fallback to enhanced keyword-based options
+		console.log('🔄 Data Entry Router: Falling back to enhanced keyword-based selection options');
+
+		return generateFallbackDataEntrySelectionOptions(query);
+	}
+}
+
+// Enhanced fallback selection options when LLM fails
+function generateFallbackDataEntrySelectionOptions(query: string): any[] {
+	const queryLower = query.toLowerCase();
+
+	const options = [
+		{
+			value: 'aggregate_data',
+			label: 'Aggregate Data - Enter periodic reporting data like monthly facility statistics and quarterly summaries'
+		},
+		{
+			value: 'events',
+			label: 'Events - Record individual events like disease cases, surveys, or one-time data collection'
+		},
+		{
+			value: 'tracker',
+			label: 'Tracker - Manage individual records like patient tracking, beneficiary follow-up, or longitudinal studies'
+		}
+	];
+
+	// Prioritize options based on query keywords
+	if (queryLower.includes('patient') || queryLower.includes('individual') || queryLower.includes('follow') || queryLower.includes('track')) {
+		// Move tracker to front
+		return [
+			options[2], // tracker
+			options[0], // aggregate
+			options[1]  // events
+		];
+	} else if (queryLower.includes('event') || queryLower.includes('case') || queryLower.includes('outbreak') || queryLower.includes('survey')) {
+		// Move events to front
+		return [
+			options[1], // events
+			options[0], // aggregate
+			options[2]  // tracker
+		];
+	}
+
+	// Default order
+	return options;
 }
 
 // Create and compile StateGraph workflow

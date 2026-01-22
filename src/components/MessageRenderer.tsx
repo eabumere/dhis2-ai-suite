@@ -7,6 +7,9 @@ import TrackerDataGrid from './TrackerDataGrid';
 import ResolutionSelector from './ResolutionSelector';
 import ActionButton from './ActionButton';
 
+// Import centralized LLM classification service
+import { llmClassificationService } from '../utils/llm-classification-service';
+
 // Expandable Text Component for handling overflow content
 interface ExpandableTextProps {
     text: string;
@@ -519,8 +522,30 @@ export const ThreadedMessageRenderer: FC<ThreadedMessageRendererProps> = ({ mess
     );
 };
 
-// Helper function to determine field type from header
-const getFieldTypeFromHeader = (header: string): 'dataElement' | 'orgUnit' | 'period' | 'categoryOptionCombos' | 'attributeOptionCombos' | 'value' | null => {
+// LLM-based helper function to determine field type from header
+const getFieldTypeFromHeader = async (header: string): Promise<'dataElement' | 'orgUnit' | 'period' | 'categoryOptionCombos' | 'attributeOptionCombos' | 'value' | null> => {
+    try {
+        console.log('🤖 MessageRenderer: Detecting column type for header:', header);
+
+        const columnTypeAnalysis = await llmClassificationService.detectColumnType(header, {
+            context: 'DHIS2 data entry grid column headers for aggregate/tracker data',
+            expectedTypes: ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value']
+        });
+
+        console.log(`🤖 MessageRenderer: Detected column type "${columnTypeAnalysis.type}" with confidence ${columnTypeAnalysis.confidence}`);
+
+        return columnTypeAnalysis.type as any;
+    } catch (error) {
+        console.error('❌ MessageRenderer: Column type detection failed:', error);
+
+        // Fallback to keyword-based detection for reliability
+        console.log('🔄 MessageRenderer: Falling back to keyword detection');
+        return getFieldTypeFromHeaderFallback(header);
+    }
+};
+
+// Fallback keyword-based function for reliability
+const getFieldTypeFromHeaderFallback = (header: string): 'dataElement' | 'orgUnit' | 'period' | 'categoryOptionCombos' | 'attributeOptionCombos' | 'value' | null => {
     const lowerHeader = header.toLowerCase();
 
     if (lowerHeader.includes('dataelement') || lowerHeader.includes('data_element')) {

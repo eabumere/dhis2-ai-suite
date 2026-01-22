@@ -424,54 +424,56 @@ export class ConversationContextManager {
     }
 
     private summarizeAnalyticsResponse(response: any): string {
-        if (!response) return "Empty response";
+        if (!response) return "type=empty";
 
-        let summary = "";
+        const parts = ["type=analytics"];
 
         if (response.chart_id) {
-            summary += `Analytics chart '${response.title || 'Unnamed'}'`;
+            parts.push(`chart=${response.title || 'unnamed'}`);
         }
 
-        if (response.originalIndicators) {
-            summary += ` showing ${response.originalIndicators.join(', ')}`;
+        if (response.originalIndicators && response.originalIndicators.length > 0) {
+            parts.push(`indicators=${response.originalIndicators.join(';')}`);
         }
 
-        if (response.originalPeriods) {
-            summary += ` for period(s) ${response.originalPeriods.join(', ')}`;
+        if (response.originalPeriods && response.originalPeriods.length > 0) {
+            parts.push(`periods=${response.originalPeriods.join(';')}`);
         }
 
-        if (response.originalOrgUnits) {
-            summary += ` in ${response.originalOrgUnits.join(', ')}`;
+        if (response.originalOrgUnits && response.originalOrgUnits.length > 0) {
+            parts.push(`orgUnits=${response.originalOrgUnits.join(';')}`);
         }
 
         if (response.count !== undefined) {
-            summary += ` (${response.count} records)`;
+            parts.push(`count=${response.count}`);
         }
 
-        return summary || "Analytics data";
+        return parts.join('|');
     }
 
     private summarizeSearchResponse(response: any): string {
-        if (!response || !response.results) return "Search results";
+        if (!response || !response.results) return "type=search|status=empty";
 
         const types = Object.keys(response.results);
         const totalCount = Object.values(response.results).reduce((sum: number, items: any) =>
             sum + (Array.isArray(items) ? items.length : 0), 0
         );
 
-        return `Search results: ${totalCount} items found (${types.join(', ')})`;
+        return `type=search|count=${totalCount}|categories=${types.join(';')}`;
     }
 
     private summarizeMutationResponse(type: 'creation' | 'update', response: any): string {
-        if (!response) return `${type} operation result`;
+        if (!response) return `type=${type}|status=empty`;
 
-        const action = type === 'creation' ? 'Created' : 'Updated';
+        const parts = [`type=${type}`];
 
         if (response.data?.name) {
-            return `${action} ${response.data.name} (${response.data.id})`;
+            parts.push(`resource=${response.data.name}`, `id=${response.data.id}`);
         }
 
-        return `${action} resource successfully`;
+        parts.push(`status=success`);
+
+        return parts.join('|');
     }
 
     private getLastConversation(): ConversationEntry | undefined {

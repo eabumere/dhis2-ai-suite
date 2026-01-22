@@ -362,35 +362,33 @@ export class ConversationContextManager {
     }
 
     private extractDiscussionTopic(query: string, response: any): string | undefined {
-        // Try LLM-based extraction first (synchronous with caching)
+        // Try LLM-based extraction (synchronous with caching)
         if (this.llmModel) {
             try {
-                // For now, use fallback since this is sync context
-                // TODO: Consider making this async in future refactoring
                 const llmResult = this.extractDiscussionTopicLLMSync(query, response);
                 if (llmResult) return llmResult;
             } catch (error) {
-                console.warn('LLM topic extraction failed, using fallback:', error);
+                console.warn('LLM topic extraction failed:', error);
             }
         }
 
-        // Fallback to keyword-based extraction
-        return this.extractDiscussionTopicFallback(query, response);
+        // No fallback - return undefined if LLM unavailable
+        return undefined;
     }
 
     private isContextRelevantToQuery(context: DataContext, query: string): boolean {
-        // Try LLM-based relevance checking first (synchronous with caching)
+        // Try LLM-based relevance checking (synchronous with caching)
         if (this.llmModel) {
             try {
                 const llmResult = this.isContextRelevantToQueryLLMSync(context, query);
                 if (llmResult !== undefined) return llmResult;
             } catch (error) {
-                console.warn('LLM context relevance check failed, using fallback:', error);
+                console.warn('LLM context relevance check failed:', error);
             }
         }
 
-        // Fallback to keyword-based relevance checking
-        return this.isContextRelevantToQueryFallback(context, query);
+        // No fallback - return false if LLM unavailable or no cached result
+        return false;
     }
 
     private updateActiveTopics(entry: ConversationEntry): void {
@@ -545,26 +543,17 @@ export class ConversationContextManager {
     }
 
     /**
-     * Fallback results when LLM is unavailable
+     * Default results when LLM is unavailable
      */
     private getFallbackResult(cacheKey: string, input: any): any {
         switch (cacheKey) {
             case 'topic_extraction':
-                // Fallback to keyword-based topic extraction
-                return this.extractDiscussionTopicFallback(input.query, input.response);
+                // No fallback - return undefined when LLM unavailable
+                return undefined;
 
             case 'context_relevance':
-                // Fallback to simple keyword matching
-                const contextSummary = input.context || '';
-                const query = input.query || '';
-                // Create a minimal DataContext-like object for the fallback method
-                const mockContext = {
-                    type: 'analytics' as const,
-                    data: {},
-                    memoryId: 'mock',
-                    summary: contextSummary
-                };
-                return this.isContextRelevantToQueryFallback(mockContext, query);
+                // No fallback - return false when LLM unavailable
+                return 'false';
 
             default:
                 return null;
@@ -638,54 +627,7 @@ Return only "true" or "false".`;
         return result === 'true';
     }
 
-    /**
-     * Fallback keyword-based topic extraction
-     */
-    private extractDiscussionTopicFallback(query: string, response: any): string | undefined {
-        const lowerQuery = query.toLowerCase();
 
-        if (lowerQuery.includes('hiv') || lowerQuery.includes('aids')) return 'HIV/AIDS';
-        if (lowerQuery.includes('malaria')) return 'Malaria';
-        if (lowerQuery.includes('tb') || lowerQuery.includes('tuberculosis')) return 'Tuberculosis';
-        if (lowerQuery.includes('vaccin')) return 'Vaccination';
-        if (lowerQuery.includes('immunization')) return 'Immunization';
-        if (lowerQuery.includes('maternal') || lowerQuery.includes('pregnan')) return 'Maternal Health';
-        if (lowerQuery.includes('child') || lowerQuery.includes('infant')) return 'Child Health';
-        if (lowerQuery.includes('reporting')) return 'Reporting Systems';
-
-        if (response && response.originalIndicators) {
-            return `Analytics: ${response.originalIndicators.join(', ')}`;
-        }
-
-        return undefined;
-    }
-
-    /**
-     * Fallback keyword-based context relevance
-     */
-    private isContextRelevantToQueryFallback(context: DataContext, query: string): boolean {
-        const lowerQuery = query.toLowerCase();
-
-        // Check if query mentions "previous", "last", "that data", etc.
-        if (lowerQuery.includes('previous') || lowerQuery.includes('last') ||
-            lowerQuery.includes('that data') || lowerQuery.includes('this data')) {
-            return true;
-        }
-
-        // Check topic relevance
-        if (context.metadata?.indicators) {
-            const hasIndicatorMatch = context.metadata.indicators.some(ind =>
-                lowerQuery.includes(ind.toLowerCase())
-            );
-            if (hasIndicatorMatch) return true;
-        }
-
-        // Check if query is analytical and we have analytics context
-        return context.type === 'analytics' && (
-            lowerQuery.includes('analyze') || lowerQuery.includes('show') ||
-            lowerQuery.includes('calculate') || lowerQuery.includes('compare')
-        );
-    }
 
     private saveToStorage(): void {
         try {

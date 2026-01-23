@@ -573,6 +573,9 @@ const getFieldTypeFromHeaderFallback = (header: string): 'dataElement' | 'orgUni
 const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
     const isUser = message.role === 'user';
 
+    // State for lazy chart loading in analytics messages
+    const [showChart, setShowChart] = useState(false);
+
     // Format timestamp
     const formatTime = (timestamp: number) => {
         return new Date(timestamp).toLocaleTimeString([], {
@@ -591,6 +594,71 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                 );
 
             case 'response':
+                // Special handling for analytics results
+                if (message.data && (message.data.chartAvailable || (message.data.actions && message.data.type === 'analytics'))) {
+                    return (
+                        <div>
+                            {/* Analytics summary text */}
+                            {message.content && (
+                                <div style={{ marginBottom: message.data.actions ? '16px' : '0' }}>
+                                    <ExpandableText text={message.content} maxLength={500} />
+                                </div>
+                            )}
+
+                            {/* Analytics action buttons */}
+                            {message.data.actions && Array.isArray(message.data.actions) && message.data.actions.length > 0 && !showChart && (
+                                <div style={{ marginTop: '16px' }}>
+                                    {message.data.actions.map((action: any, index: number) => (
+                                        <button
+                                            key={index}
+                                            onClick={() => {
+                                                console.log('Analytics action clicked:', action);
+                                                if (action.actionId === 'render_chart') {
+                                                    setShowChart(true);
+                                                }
+                                            }}
+                                            style={{
+                                                marginRight: '8px',
+                                                marginBottom: '8px',
+                                                padding: '8px 16px',
+                                                backgroundColor: '#1976d2',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                fontSize: '14px',
+                                                fontWeight: '500'
+                                            }}
+                                            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1565c0'}
+                                            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1976d2'}
+                                        >
+                                            {action.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Lazy-loaded chart */}
+                            {showChart && message.data.chartData && (
+                                <div style={{ marginTop: '16px', width: '100%' }}>
+                                    <AnalyticsChart
+                                        chartData={message.data.chartData}
+                                        chartId={`chart_msg_${message.id}_analytics`}
+                                        title={message.data.chartData.title || 'Analytics Chart'}
+                                        isLoading={false}
+                                        onFilter={(filters) => console.log('Chart filtered:', filters)}
+                                        onExport={(format) => console.log('Chart exported as:', format)}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Analytics summary data (without actions) */}
+                            {message.data && renderAnalyticsDataContent(message.data)}
+                        </div>
+                    );
+                }
+
+                // Regular response handling
                 return (
                     <div>
                         {/* Text content */}
@@ -958,6 +1026,16 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
         }
     };
 
+    // Special function for rendering analytics data without actions (since actions are handled separately)
+    const renderAnalyticsDataContent = (data: any) => {
+        // Create a copy of data without actions to avoid table rendering
+        const dataWithoutActions = { ...data };
+        delete dataWithoutActions.actions;
+
+        // Call the regular renderDataContent with actions removed
+        return renderDataContent(dataWithoutActions);
+    };
+
     const renderDataContent = (data: any) => {
         // Handle tabular results - check for top-level object with arrays (search results) or nested results
         const resultObject = data.results || data; // Fall back to data itself if no .results
@@ -1104,6 +1182,40 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                         onFilter={(filters) => console.log('Chart filtered:', filters)}
                         onExport={(format) => console.log('Chart exported as:', format)}
                     />
+                </div>
+            );
+        }
+
+        // Handle actions - render as buttons instead of table
+        if (data.actions && Array.isArray(data.actions) && data.actions.length > 0) {
+            return (
+                <div style={{ marginTop: '16px' }}>
+                    {data.actions.map((action: any, index: number) => (
+                        <button
+                            key={index}
+                            onClick={() => {
+                                console.log('Action clicked:', action);
+                                // For now, just log - lazy loading implementation would go here
+                                // Could call workflowOrchestrator.handleAnalyticsAction(action, message) or similar
+                            }}
+                            style={{
+                                marginRight: '8px',
+                                marginBottom: '8px',
+                                padding: '8px 16px',
+                                backgroundColor: '#1976d2',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                fontWeight: '500'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#1565c0'}
+                            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#1976d2'}
+                        >
+                            {action.label}
+                        </button>
+                    ))}
                 </div>
             );
         }

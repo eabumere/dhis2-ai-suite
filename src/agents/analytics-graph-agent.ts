@@ -20,6 +20,77 @@ import { llmClassificationService } from '../utils/llm-classification-service';
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
+// Direct analytics data storage functions (bypassing conversation context manager)
+const ANALYTICS_STORAGE_KEY = 'dhis2_analytics_last_result';
+
+function saveAnalyticsDataDirectly(analyticsResult: any): void {
+    try {
+        // Create a compressed version with essential data only
+        const compressedData = {
+            timestamp: Date.now(),
+            query: analyticsResult.query || '',
+            summary: analyticsResult.message || '',
+            chartData: analyticsResult.chartData || null,
+            dataSummary: analyticsResult.dataSummary || null,
+            metadata: {
+                indicators: analyticsResult.metadata?.suggestions?.map((s: any) => s.name) || [],
+                periods: analyticsResult.datePeriodsMetadata?.periods || [],
+                orgUnits: analyticsResult.orgUnitsMetadata?.suggestions?.map((s: any) => s.name) || []
+            },
+            // Store minimal data needed for follow-up analysis
+            rawData: {
+                chartValues: analyticsResult.dataSummary ? {
+                    totalRecords: analyticsResult.dataSummary.totalRecords,
+                    totalValue: analyticsResult.dataSummary.totalValue,
+                    averageValue: analyticsResult.dataSummary.averageValue,
+                    minValue: analyticsResult.dataSummary.minValue,
+                    maxValue: analyticsResult.dataSummary.maxValue,
+                    periodData: analyticsResult.chartData?.echarts_option?.xAxis?.data || [],
+                    valueData: analyticsResult.chartData?.echarts_option?.series?.[0]?.data || []
+                } : null
+            }
+        };
+
+        localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(compressedData));
+        console.log('💾 Analytics data saved directly to localStorage');
+    } catch (error) {
+        console.warn('Failed to save analytics data directly:', error);
+        // Try to save minimal data if full save fails
+        try {
+            const minimalData = {
+                timestamp: Date.now(),
+                query: analyticsResult.query || '',
+                summary: analyticsResult.message || '',
+                hasData: true
+            };
+            localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(minimalData));
+        } catch (minimalError) {
+            console.warn('Failed to save even minimal analytics data:', minimalError);
+        }
+    }
+}
+
+function getAnalyticsDataDirectly(): any | null {
+    try {
+        const stored = localStorage.getItem(ANALYTICS_STORAGE_KEY);
+        if (stored) {
+            const data = JSON.parse(stored);
+            // Check if data is recent (within last hour)
+            const isRecent = Date.now() - data.timestamp < 60 * 60 * 1000;
+            if (isRecent) {
+                console.log('📖 Analytics data retrieved directly from localStorage');
+                return data;
+            } else {
+                console.log('⏰ Analytics data is too old, ignoring');
+                localStorage.removeItem(ANALYTICS_STORAGE_KEY);
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to retrieve analytics data directly:', error);
+    }
+    return null;
+}
+
 // Recovery context interface for analytics agent
 export interface AnalyticsRecoveryContext {
     failedStep: string;
@@ -92,6 +163,14 @@ const GraphAnnotation = Annotation.Root({
 	chart: Annotation<any>({
 		reducer: (left, right) => right,
 		default: () => null,
+	}),
+	chartData: Annotation<any>({
+		reducer: (left, right) => right,
+		default: () => null,
+	}),
+	chartError: Annotation<string>({
+		reducer: (left, right) => right,
+		default: () => '',
 	}),
 	dataSummary: Annotation<{
 		totalRecords: number;
@@ -205,13 +284,16 @@ async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Part
 	const query = state.query || state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🔍 Extracted query:', query);
 
-	// Get recent conversation context to understand if this is a follow-up
+	// First try direct localStorage for analytics data (bypasses conversation context issues)
+	const directAnalyticsData = getAnalyticsDataDirectly();
+
+	// Also get conversation context as fallback
 	const context = conversationContext.findRelevantContext(query);
 
-	console.log('📚 Conversation context:', {
-		hasLastAnalytics: !!context.lastAnalyticsData,
-		relevantContexts: context.relevantDataContexts.length,
-		lastAnalyticsSummary: context.lastAnalyticsData?.summary
+	console.log('📚 Context check:', {
+		directAnalyticsFound: !!directAnalyticsData,
+		conversationLastAnalytics: !!context.lastAnalyticsData,
+		directSummary: directAnalyticsData?.summary?.substring(0, 50) + '...'
 	});
 
 	// Build context summary for LLM
@@ -262,18 +344,12 @@ Return JSON:
 			};
 		}
 
-		// Use LLM-based query analysis to determine if this is a follow-up with selected metadata
-		const queryAnalysis = await llmClassificationService.analyzeQuery(query, {
-			conversationContext: contextSummary,
-			previousAnalyticsAvailable: !!context.lastAnalyticsData
-		});
-
-		const hasSelectedMetadata = queryAnalysis.requiresMetadata ||
-			query.toLowerCase().includes('selected metadata:') ||
+		// Check if query contains explicitly selected metadata patterns
+		const hasSelectedMetadata = query.toLowerCase().includes('selected metadata:') ||
 			query.toLowerCase().includes('analyze using these') ||
 			(query.toLowerCase().includes('indicator:') && query.toLowerCase().includes('(id:'));
 
-		if (classification.intent === 'followup_data_analysis' || hasSelectedMetadata) {
+		if (classification.intent === 'followup_data_analysis' || classification.intent === 'follow_up' || hasSelectedMetadata) {
 			console.log('🔄 Follow-up analytics query detected');
 			return {
 				query,
@@ -330,32 +406,26 @@ async function analyzeExistingData(state: typeof GraphAnnotation.State): Promise
 	console.log('🔍 Analyzing existing chart data for follow-up query');
 
 	const query = state.query;
-	const context = conversationContext.findRelevantContext(query);
+	const directAnalyticsData = getAnalyticsDataDirectly();
 
-	if (!context.lastAnalyticsData) {
+	if (!directAnalyticsData) {
 		return {
 			step: 'completed',
 			finalResult: {
 				success: false,
-				message: 'No previous analytics data available to analyze',
+				message: 'No previous analytics data available to analyze. Please run an analytics query first.',
 				type: 'analytics'
 			}
 		};
 	}
 
-	const lastResult = context.lastAnalyticsData.data;
-	console.log('📊 Last analytics result:', lastResult);
+	console.log('📊 Retrieved analytics data for follow-up:', directAnalyticsData.summary);
 
-	if (!lastResult?.data) {
-		return {
-			step: 'completed',
-			finalResult: {
-				success: false,
-				message: 'Previous analytics result has no chart data to analyze',
-				type: 'analytics'
-			}
-		};
-	}
+	// Use the stored data for analysis
+	const chartData = directAnalyticsData.rawData || {};
+	const periodData = chartData.periodData || [];
+	const valueData = chartData.valueData || [];
+	const dataSummary = directAnalyticsData.dataSummary || {};
 
 	// Use LLM to analyze the existing chart data based on the follow-up question
 	const analysisPrompt = `
@@ -364,9 +434,16 @@ Analyze this follow-up question about existing analytics data and provide insigh
 FOLLOW-UP QUESTION: "${query}"
 
 PREVIOUS ANALYTICS CONTEXT:
-- Chart data available: ${JSON.stringify(lastResult.data, null, 2)}
+- Summary: ${directAnalyticsData.summary}
+- Data points: ${directAnalyticsData.rawData?.chartValues?.length || 0}
+- Periods: ${directAnalyticsData.rawData?.periodData?.join(', ') || 'N/A'}
+- Values: ${directAnalyticsData.rawData?.valueData?.join(', ') || 'N/A'}
+- Total value: ${dataSummary.totalValue}
+- Average value: ${dataSummary.averageValue}
+- Min value: ${dataSummary.minValue}
+- Max value: ${dataSummary.maxValue}
 
-Provide a natural language answer to the follow-up question based on the chart data. Focus on:
+Provide a natural language answer to the follow-up question based on the analytics data. Focus on:
 - Finding highest/lowest values
 - Identifying trends or patterns
 - Comparing different categories or time periods
@@ -383,9 +460,10 @@ Answer directly and conversationally, as if you're explaining the data to the us
 		const analysisResult = {
 			success: true,
 			message: analysis,
-			data: lastResult.data, // Include the original chart data
-			metadata: lastResult.metadata,
-			queryData: lastResult.queryData,
+			// Include the stored data for reference
+			chartData: directAnalyticsData.chartData,
+			dataSummary: dataSummary,
+			metadata: directAnalyticsData.metadata,
 			type: 'analytics',
 			isFollowUpAnalysis: true,
 			followUpQuery: query
@@ -760,71 +838,36 @@ async function summarizeAnalyticsData(state: typeof GraphAnnotation.State): Prom
 		updateProgress(8, 'Analyzing Results', 'Computing statistics and generating insights...', false);
 		state.orchestrator?.addProgressMessage('Computing statistics and generating insights...');
 
-		if (!state.data?.data) {
-			console.warn('📈 No analytics data to summarize');
+		// Use the dataSummary that was correctly computed in build_chart
+		if (!state.dataSummary) {
+			console.warn('📈 No data summary available from chart processing');
 			return {
 				step: 'completed',
 				finalResult: {
 					success: false,
-					message: 'No data available to summarize',
+					message: 'No data summary available',
 					type: 'analytics'
 				}
 			};
 		}
 
-		// Extract values from analytics data
-		const rows = state.data.data.rows || [];
-		const values: number[] = [];
-
-		// Collect all numeric values (typically in the last column)
-		rows.forEach((row: any[]) => {
-			const value = parseFloat(row[row.length - 1]);
-			if (!isNaN(value)) {
-				values.push(value);
-			}
-		});
-
-		// Compute basic statistics
-		const totalRecords = rows.length;
-		const totalValue = values.reduce((sum, val) => sum + val, 0);
-		const averageValue = totalRecords > 0 ? totalValue / totalRecords : 0;
-		const minValue = values.length > 0 ? Math.min(...values) : 0;
-		const maxValue = values.length > 0 ? Math.max(...values) : 0;
-		const nonZeroCount = values.filter(v => v > 0).length;
-
-		// Count unique org units and periods (from metadata)
-		const orgUnitCount = state.orgUnitsMetadata?.suggestions?.length || 0;
-		const periodCount = state.datePeriodsMetadata?.periods?.length || 1;
-		const indicatorCount = state.metadata?.suggestions?.length || 0;
-
-		const dataSummary = {
-			totalRecords,
-			totalValue,
-			averageValue,
-			minValue,
-			maxValue,
-			nonZeroCount,
-			orgUnitCount,
-			periodCount,
-			indicatorCount,
-			summaryText: '',
-			insights: [] as string[]
-		};
+		// Use the existing dataSummary with correct statistics from chart processing
+		const dataSummary = { ...state.dataSummary };
 
 		// Generate humanized summary using LLM
 		const summaryPrompt = `
 Generate a humanized summary of these analytics results for the query: "${state.query}"
 
 STATISTICS:
-- Total Records: ${totalRecords}
-- Total Value: ${totalValue.toLocaleString()}
-- Average Value: ${averageValue.toLocaleString(undefined, {maximumFractionDigits: 2})}
-- Min Value: ${minValue.toLocaleString()}
-- Max Value: ${maxValue.toLocaleString()}
-- Non-Zero Values: ${nonZeroCount}
-- Organisation Units: ${orgUnitCount}
-- Time Periods: ${periodCount}
-- Indicators/Data Elements: ${indicatorCount}
+- Total Records: ${dataSummary.totalRecords}
+- Total Value: ${dataSummary.totalValue.toLocaleString()}
+- Average Value: ${dataSummary.averageValue.toLocaleString(undefined, {maximumFractionDigits: 2})}
+- Min Value: ${dataSummary.minValue.toLocaleString()}
+- Max Value: ${dataSummary.maxValue.toLocaleString()}
+- Non-Zero Values: ${dataSummary.nonZeroCount}
+- Organisation Units: ${dataSummary.orgUnitCount}
+- Time Periods: ${dataSummary.periodCount}
+- Indicators/Data Elements: ${dataSummary.indicatorCount}
 
 CONTEXT:
 - Indicators: ${state.metadata?.suggestions?.map(s => s.name).join(', ') || 'N/A'}
@@ -845,23 +888,65 @@ Keep it concise but informative. Return just the summary text.`;
 
 			// Extract key insights
 			dataSummary.insights = [
-				totalRecords > 0 ? `Found ${totalRecords} data points across ${orgUnitCount} locations` : 'No data points found',
-				nonZeroCount > 0 ? `Average value of ${averageValue.toFixed(1)} (range: ${minValue} - ${maxValue})` : 'All values are zero',
-				periodCount > 1 ? `Data spans ${periodCount} time periods` : 'Data for single time period'
+				dataSummary.totalRecords > 0 ? `Found ${dataSummary.totalRecords} data points across ${dataSummary.orgUnitCount} locations` : 'No data points found',
+				dataSummary.nonZeroCount > 0 ? `Average value of ${dataSummary.averageValue.toFixed(1)} (range: ${dataSummary.minValue} - ${dataSummary.maxValue})` : 'All values are zero',
+				dataSummary.periodCount > 1 ? `Data spans ${dataSummary.periodCount} time periods` : 'Data for single time period'
 			].filter(Boolean);
 
 		} catch (summaryError) {
 			console.warn('📈 LLM summary generation failed, using basic summary:', summaryError);
-			dataSummary.summaryText = `Found ${totalRecords} data points with total value of ${totalValue.toLocaleString()}.`;
-			dataSummary.insights = [`Total: ${totalValue.toLocaleString()}`, `Average: ${averageValue.toFixed(1)}`];
+			dataSummary.summaryText = `Found ${dataSummary.totalRecords} data points with total value of ${dataSummary.totalValue.toLocaleString()}.`;
+			dataSummary.insights = [`Total: ${dataSummary.totalValue.toLocaleString()}`, `Average: ${dataSummary.averageValue.toFixed(1)}`];
 		}
 
 		console.log('📈 Data summary computed:', dataSummary);
 
-		// Proceed to chart building (which will be lazy-loaded)
+		// Generate final result with summary, chart data, and lazy loading support
+		const finalResult = {
+			success: true,
+			message: dataSummary.summaryText,
+			summary: {
+				text: dataSummary.summaryText,
+				insights: dataSummary.insights,
+				statistics: {
+					totalRecords: dataSummary.totalRecords,
+					totalValue: dataSummary.totalValue,
+					averageValue: dataSummary.averageValue,
+					minValue: dataSummary.minValue,
+					maxValue: dataSummary.maxValue,
+					orgUnitCount: dataSummary.orgUnitCount,
+					periodCount: dataSummary.periodCount,
+					indicatorCount: dataSummary.indicatorCount
+				}
+			},
+			chartAvailable: !!state.chartData,
+			chartData: state.chartData,
+			metadata: state.metadata,
+			queryData: state.data,
+			orgUnitsMetadata: state.orgUnitsMetadata,
+			dataSummary: dataSummary,
+			type: 'analytics',
+			chartRendered: false, // Flag to indicate chart is not yet rendered
+			actions: [{
+				type: 'view_chart',
+				label: '📊 View Chart',
+				description: 'Show the data as an interactive chart',
+				actionId: 'render_chart'
+			}]
+		};
+
+		// Save analytics data directly to localStorage for follow-up queries
+		saveAnalyticsDataDirectly(finalResult);
+
+		// Also add to conversation context as backup
+		const dataContext = createAnalyticsDataContext(finalResult);
+		addConversation(state.query, 'analytics', finalResult, dataContext);
+
+		console.log('📈 Analytics summary completed with lazy chart loading');
+
 		return {
-			dataSummary,
-			step: 'build_chart'
+			step: 'completed',
+			finalResult
 		};
 
 	} catch (error) {
@@ -879,25 +964,17 @@ Keep it concise but informative. Return just the summary text.`;
 
 async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
-		console.log('📊 Preparing analytics summary with lazy chart loading');
+		console.log('📊 Processing analytics data and building chart');
 
 		// Check if we have analytics data
 		if (!state.data?.data) {
 			console.warn('📊 No analytics data available');
-
-			const noDataResult = {
-				success: false,
-				message: 'No analytics data available for analysis',
-				type: 'analytics'
-			};
-
 			return {
-				step: 'completed',
-				finalResult: noDataResult
+				step: 'summarize_analytics_data' // Continue to summarization even with no data
 			};
 		}
 
-		// Build the chart data but DON'T render it yet - store it for lazy loading
+		// Build the chart data to process the raw data into usable format
 		const chartResult = await buildAnalyticsChart.invoke({
 			userQuery: state.query,
 			analyticsData: state.data.data,
@@ -911,96 +988,95 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 		});
 
 		const chartData = JSON.parse(chartResult);
-		console.log('📊 Chart data prepared for lazy loading');
+		console.log('📊 Chart data processed successfully');
 
-		// Create summary result with chart option - don't auto-render chart
-		const summaryResult = {
-			success: true,
-			message: state.dataSummary?.summaryText || 'Analytics data summarized successfully',
-			summary: {
-				text: state.dataSummary?.summaryText,
-				insights: state.dataSummary?.insights || [],
-				statistics: {
-					totalRecords: state.dataSummary?.totalRecords,
-					totalValue: state.dataSummary?.totalValue,
-					averageValue: state.dataSummary?.averageValue,
-					minValue: state.dataSummary?.minValue,
-					maxValue: state.dataSummary?.maxValue,
-					orgUnitCount: state.dataSummary?.orgUnitCount,
-					periodCount: state.dataSummary?.periodCount,
-					indicatorCount: state.dataSummary?.indicatorCount
-				}
-			},
-			chartAvailable: true,
-			chartData: chartData, // Store chart data for lazy loading
-			metadata: state.metadata,
-			queryData: state.data,
-			orgUnitsMetadata: state.orgUnitsMetadata,
-			dataSummary: state.dataSummary,
-			type: 'analytics',
-			chartRendered: false, // Flag to indicate chart is not yet rendered
-			actions: [{
-				type: 'view_chart',
-				label: '📊 View Chart',
-				description: 'Show the data as an interactive chart',
-				actionId: 'render_chart'
-			}]
-		};
+		// Extract actual values from processed chart data for summarization
+		const series = chartData.echarts_option?.series || [];
+		const chartValues: number[] = [];
 
-		// Add to conversation context without rendering chart
-		const dataContext = createAnalyticsDataContext(summaryResult);
-		addConversation(state.query, 'analytics', summaryResult, dataContext);
+		series.forEach((s: any) => {
+			if (s.data && Array.isArray(s.data)) {
+				s.data.forEach((val: any) => {
+					if (typeof val === 'number' && !isNaN(val)) {
+						chartValues.push(val);
+					}
+				});
+			}
+		});
 
-		// Show summary result through orchestrator
-		if (state.orchestrator) {
-			state.orchestrator.addAssistantMessage(summaryResult.message, 'response', summaryResult);
-			// Note: We don't call renderChart() here - chart is lazy-loaded on user click
+		// Initialize dataSummary if it doesn't exist
+		if (!state.dataSummary) {
+			state.dataSummary = {
+				totalRecords: 0,
+				totalValue: 0,
+				averageValue: 0,
+				minValue: 0,
+				maxValue: 0,
+				nonZeroCount: 0,
+				orgUnitCount: state.orgUnitsMetadata?.suggestions?.length || 0,
+				periodCount: state.datePeriodsMetadata?.periods?.length || 1,
+				indicatorCount: state.metadata?.suggestions?.length || 0,
+				summaryText: '',
+				insights: []
+			};
 		}
 
-		console.log('📈 Analytics summary prepared with lazy chart loading option');
+		// Update dataSummary with actual chart values
+		const totalValue = chartValues.reduce((sum, val) => sum + val, 0);
+		const averageValue = chartValues.length > 0 ? totalValue / chartValues.length : 0;
+		const minValue = chartValues.length > 0 ? Math.min(...chartValues) : 0;
+		const maxValue = chartValues.length > 0 ? Math.max(...chartValues) : 0;
+		const nonZeroCount = chartValues.filter(v => v > 0).length;
 
+		// Update the dataSummary with correct values from processed data
+		state.dataSummary.totalRecords = chartValues.length;
+		state.dataSummary.totalValue = totalValue;
+		state.dataSummary.averageValue = averageValue;
+		state.dataSummary.minValue = minValue;
+		state.dataSummary.maxValue = maxValue;
+		state.dataSummary.nonZeroCount = nonZeroCount;
+
+		console.log('📊 Updated dataSummary with processed chart values:', {
+			totalRecords: chartValues.length,
+			totalValue,
+			averageValue,
+			minValue,
+			maxValue,
+			nonZeroCount
+		});
+
+		// Store chart data and updated dataSummary for summarization
 		return {
-			chart: chartData, // Store chart data for potential lazy loading
-			step: 'completed',
-			finalResult: summaryResult
+			chartData, // Pass chart data to next step
+			dataSummary: state.dataSummary, // Pass updated statistics to next step
+			step: 'summarize_analytics_data'
 		};
 
 	} catch (chartError) {
-		console.error('❌ Chart preparation failed:', chartError);
+		console.error('❌ Chart processing failed:', chartError);
 
-		// Even if chart preparation fails, we can still show the summary
-		const fallbackResult = {
-			success: true,
-			message: state.dataSummary?.summaryText || 'Analytics data summarized (chart preparation failed)',
-			summary: {
-				text: state.dataSummary?.summaryText,
-				insights: state.dataSummary?.insights || [],
-				statistics: {
-					totalRecords: state.dataSummary?.totalRecords,
-					totalValue: state.dataSummary?.totalValue,
-					averageValue: state.dataSummary?.averageValue,
-					minValue: state.dataSummary?.minValue,
-					maxValue: state.dataSummary?.maxValue,
-					orgUnitCount: state.dataSummary?.orgUnitCount,
-					periodCount: state.dataSummary?.periodCount,
-					indicatorCount: state.dataSummary?.indicatorCount
-				}
-			},
-			chartAvailable: false,
-			chartError: chartError.message,
-			metadata: state.metadata,
-			queryData: state.data,
-			orgUnitsMetadata: state.orgUnitsMetadata,
-			dataSummary: state.dataSummary,
-			type: 'analytics',
-			chartRendered: false
-		};
+		// Initialize basic dataSummary even if chart processing fails
+		if (!state.dataSummary) {
+			state.dataSummary = {
+				totalRecords: 0,
+				totalValue: 0,
+				averageValue: 0,
+				minValue: 0,
+				maxValue: 0,
+				nonZeroCount: 0,
+				orgUnitCount: state.orgUnitsMetadata?.suggestions?.length || 0,
+				periodCount: state.datePeriodsMetadata?.periods?.length || 1,
+				indicatorCount: state.metadata?.suggestions?.length || 0,
+				summaryText: '',
+				insights: []
+			};
+		}
 
-		addConversation(state.query, 'analytics', fallbackResult);
-
+		// Continue to summarization even if chart processing fails
 		return {
-			step: 'completed',
-			finalResult: fallbackResult
+			chartData: null,
+			chartError: chartError.message,
+			step: 'summarize_analytics_data'
 		};
 	}
 }
@@ -1916,13 +1992,9 @@ workflow.addEdge('search_org_units', 'search_disaggregations'); // Always try di
 // @ts-ignore
 workflow.addEdge('search_disaggregations', 'query_data');   // Always proceed to data query after disaggregation attempt
 // @ts-ignore
-workflow.addEdge('query_data', 'summarize_analytics_data'); // Summarize data after query
+workflow.addEdge('query_data', 'build_chart'); // Build chart after query (processes data)
 // @ts-ignore
-workflow.addEdge('summarize_analytics_data', 'build_chart'); // Build chart after summarization
-// @ts-ignore
-workflow.addEdge('summarize_analytics_data', 'build_chart'); // Build chart after summarization
-// @ts-ignore
-workflow.addEdge('build_chart', END);
+workflow.addEdge('build_chart', 'summarize_analytics_data'); // Summarize after chart building (uses processed data)
 // @ts-ignore
 workflow.addEdge('analyze_existing_data', END);            // Follow-up analysis completes workflow
 

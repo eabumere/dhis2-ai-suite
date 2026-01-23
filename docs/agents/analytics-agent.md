@@ -2,11 +2,19 @@
 
 ## Overview
 
-The Analytics Agent is a sophisticated StateGraph-based workflow that transforms natural language queries into interactive DHIS2 data visualizations. It handles the complete analytics pipeline from query understanding to chart generation, using LLM-powered metadata extraction and intelligent data processing.
+The Analytics Agent is a sophisticated StateGraph-based workflow that transforms natural language queries into interactive DHIS2 data visualizations. It handles the complete analytics pipeline from query understanding to chart generation, using LLM-powered metadata extraction, intelligent data processing, and persistent context management for follow-up questions.
+
+**Key Features**:
+- ✅ **Natural Language Processing**: Transform queries into DHIS2 analytics
+- ✅ **Follow-up Question Support**: Context-aware analysis without re-querying
+- ✅ **Lazy Chart Loading**: Fast summaries with on-demand visualization
+- ✅ **Direct Data Persistence**: Reliable context storage across sessions
+- ✅ **Intelligent Metadata Resolution**: Multi-level LLM-powered extraction
+- ✅ **Interactive Visualizations**: ECharts-based charts with controls
 
 **File Location**: `src/agents/analytics-graph-agent.ts`
 
-**Architecture**: LangGraph StateGraph with 10+ workflow nodes
+**Architecture**: LangGraph StateGraph with 10+ workflow nodes + Direct localStorage persistence
 
 ## 🏗️ Core Architecture
 
@@ -77,14 +85,22 @@ const GraphAnnotation = Annotation.Root({
 **Purpose**: Determine if query is new analytics, follow-up analysis, or selected metadata
 
 **Key Logic**:
-- **Context Analysis**: Check conversation history for previous analytics results
+- **Direct Data Check**: First checks localStorage for recent analytics data (bypasses conversation context issues)
+- **Context Analysis**: Fallback to conversation history for previous analytics results
 - **Pattern Matching**: Detect selected metadata patterns (`indicator:X(ID:Y)`)
 - **LLM Classification**: Use LLM to classify intent type with confidence scoring
 
-**Decision Tree**:
+**Enhanced Decision Tree**:
 ```typescript
-if (intentClassification.type === 'followup_data_analysis' || hasSelectedMetadata) {
-    return { step: hasSelectedMetadata ? 'parse_selected_metadata' : 'analyze_existing_data' };
+// First check direct localStorage for analytics data
+const directAnalyticsData = getAnalyticsDataDirectly();
+const context = conversationContext.findRelevantContext(query);
+
+// Use direct data if available, otherwise check conversation context
+if (directAnalyticsData || context.lastAnalyticsData) {
+    return { step: 'analyze_existing_data' };
+} else if (hasSelectedMetadata) {
+    return { step: 'parse_selected_metadata' };
 } else {
     return { step: 'search_metadata' };
 }
@@ -385,6 +401,39 @@ Flow: classify_intent → parse_selected_metadata → query_data → summarize �
 - Implement trend detection algorithms
 - Create comparative analysis features
 - Add predictive analytics capabilities
+
+## 🔄 **Recent Implementation Updates**
+
+### **Direct localStorage Persistence**
+- **Problem**: Conversation context failing due to storage quota limits
+- **Solution**: Added direct localStorage functions for analytics data persistence
+- **Functions**: `saveAnalyticsDataDirectly()`, `getAnalyticsDataDirectly()`
+- **Features**: Compressed data storage, TTL management, graceful fallbacks
+
+### **Enhanced Follow-up Question Support**
+- **Context Retrieval**: Checks localStorage first, then conversation context
+- **Data Analysis**: Uses stored chart data for answering follow-up questions
+- **No Re-querying**: Follow-ups analyze existing data without DHIS2 API calls
+
+### **Dedicated Analytics Message Rendering**
+- **Problem**: Actions displayed as unwanted table/grid
+- **Solution**: Separate rendering path for analytics messages in MessageRenderer
+- **Features**: Action buttons render as proper UI elements, not table data
+
+### **Lazy Chart Loading Implementation**
+- **Chart Preparation**: Charts generated but not rendered initially
+- **On-Demand Display**: "View Chart" button triggers chart rendering
+- **State Management**: React state controls chart visibility
+
+### **Workflow Reordering & Data Accuracy**
+- **Fixed Order**: `query → build → summarize` instead of `query → summarize → build`
+- **Accurate Stats**: Summaries use processed chart data values
+- **Consistent Results**: Chart and summary display same data
+
+### **Enhanced Error Handling**
+- **Storage Resilience**: Graceful handling of localStorage quota issues
+- **Fallback Mechanisms**: Multiple persistence strategies
+- **Recovery Options**: User-friendly error recovery workflows
 
 ---
 

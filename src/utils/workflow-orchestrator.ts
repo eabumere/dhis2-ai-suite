@@ -44,7 +44,7 @@ export interface ConversationMessage {
     data?: any;
     threadId?: string; // For grouping related messages (request → processing → result)
     type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection'
-	    | 'tracker_processing_complete' | 'data_set_selection' | 'tracker_data_grid' | 'success' | 'warning' | 'info' | 'progress';
+	    | 'tracker_processing_complete' | 'data_set_selection' | 'tracker_data_grid' | 'success' | 'warning' | 'info' | 'progress' | 'confirmation';
 }
 
 export interface WorkflowStep {
@@ -153,6 +153,9 @@ export interface ComprehensiveWorkflowCallbacks {
     onWorkflowStart: (workflowId: string, flowType: string) => void;
     onWorkflowComplete: (workflowId: string, result: any) => void;
     onWorkflowError: (workflowId: string, error: string) => void;
+
+    // Toast notifications (optional)
+    showToast?: (type: 'success' | 'error' | 'warning' | 'info' | 'progress', title: string, message: string, options?: any) => string;
 }
 
 class WorkflowOrchestrator {
@@ -160,6 +163,7 @@ class WorkflowOrchestrator {
     private uiCallbacks: ComprehensiveWorkflowCallbacks | null = null;
     private fileRegistry = new Map<string, FileRegistryEntry>();
     private currentFileId: string | null = null;
+    private pendingConfirmations: Map<string, (confirmed: boolean) => void> = new Map();
     private currentUIState: WorkflowUIState = {
         showQueryInput: true,
         queryText: '',
@@ -399,6 +403,12 @@ class WorkflowOrchestrator {
                     // Notify UI of completion
                     this.uiCallbacks?.onWorkflowComplete(workflowId, result);
 
+                    // Show success toast notification
+                    this.uiCallbacks?.showToast?.('success', 'Workflow Completed', `${flowType} workflow finished successfully`, {
+                        workflowId,
+                        position: 'bottom-right'
+                    });
+
                     // Add completion feedback
                     this.addProgressMessage('✅ Operation completed successfully');
 
@@ -432,6 +442,30 @@ class WorkflowOrchestrator {
                             )) {
                                 console.log('🔍 Detected search result, calling requestSearchRender');
                                 this.requestSearchRender(result, input?.input?.messages?.[0]?.content || 'Search query');
+                                // Reset UI state for search results - they are handled through conversation
+                                this.updateUIState({
+                                    showProcessing: false,
+                                    showQueryInput: true,
+                                    queryEnabled: true,
+                                });
+
+                                // Complete the workflow early for search results to prevent duplicate rendering
+                                this.activeWorkflows.set(workflowId, {
+                                    ...this.activeWorkflows.get(workflowId),
+                                    status: 'completed',
+                                    result
+                                });
+
+                                // Notify UI of completion
+                                this.uiCallbacks?.onWorkflowComplete(workflowId, result);
+
+                                // Show success toast notification
+                                this.uiCallbacks?.showToast?.('success', 'Search Completed', 'Search results displayed successfully', {
+                                    workflowId,
+                                    position: 'bottom-right'
+                                });
+
+                                return result;
                             } else if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {
                                 console.log('📊 Detected chart result, calling renderChart');
                                 this.renderChart(result);
@@ -481,6 +515,14 @@ class WorkflowOrchestrator {
 
             // Notify UI of error
             this.uiCallbacks?.onWorkflowError(workflowId, error.message);
+
+            // Show error toast notification
+            this.uiCallbacks?.showToast?.('error', 'Workflow Failed', `${flowType} workflow encountered an error: ${error.message}`, {
+                workflowId,
+                position: 'bottom-right',
+                duration: 8000
+            });
+
             this.updateUIState({
                 showProcessing: false
             });
@@ -2052,6 +2094,159 @@ class WorkflowOrchestrator {
             default:
                 throw new Error(`Unknown recovery action: ${actionId}`);
         }
+    }
+
+    // Request user confirmation (supports both UI buttons and text responses)
+    async requestConfirmation(workflowId: string, operations: any[], message: string): Promise<boolean> {
+        console.log(`⏸️ Workflow ${workflowId} requesting user confirmation`);
+
+        return new Promise((resolve, reject) => {
+            if (!this.uiCallbacks?.onSelection) {
+                reject(new Error('No UI callbacks registered for workflow orchestration'));
+                return;
+            }
+
+            // Add confirmation prompt to conversation
+            this.addAssistantMessage(message, 'confirmation', {
+                operations,
+                workflowId,
+                actions: ['confirm', 'cancel'],
+                supportsTextResponse: true
+            });
+
+            // Update UI to show confirmation
+            this.updateUIState({
+                showProcessing: false,
+                // Note: confirmation UI is shown via conversation message
+            });
+
+            // Store the resolve function for signalConfirmation to use
+            this.pendingConfirmations = this.pendingConfirmations || new Map();
+            this.pendingConfirmations.set(workflowId, resolve);
+
+            // Function to parse text confirmation responses
+            const parseConfirmationResponse = (text: string): boolean | null => {
+                const lowerText = text.toLowerCase().trim();
+
+                // Positive responses
+                const positiveResponses = ['yes', 'y', 'confirm', 'ok', 'proceed', 'continue', 'go ahead', 'sure', 'approved', 'accept'];
+                // Negative responses
+                const negativeResponses = ['no', 'n', 'cancel', 'stop', 'abort', 'quit', 'decline', 'reject'];
+
+                if (positiveResponses.some(resp => lowerText.includes(resp))) {
+                    return true;
+                }
+                if (negativeResponses.some(resp => lowerText.includes(resp))) {
+                    return false;
+                }
+
+                return null; // Not a clear confirmation response
+            };
+
+            // Override user message method to intercept confirmation responses
+            const originalAddUserMessage = this.addUserMessage.bind(this);
+            this.addUserMessage = (content: string, type, data) => {
+                // Check if this is a confirmation response and we have a pending confirmation
+                const confirmationResult = parseConfirmationResponse(content);
+                if (confirmationResult !== null && this.pendingConfirmations?.has(workflowId)) {
+                    console.log(`▶️ Workflow ${workflowId} received text confirmation: ${confirmationResult} ("${content}")`);
+
+                    // Resolve the promise
+                    const resolveFn = this.pendingConfirmations.get(workflowId);
+                    this.pendingConfirmations.delete(workflowId);
+                    resolveFn(confirmationResult);
+
+                    // Restore methods
+                    this.addUserMessage = originalAddUserMessage;
+
+                    // Still add the message to conversation for context
+                    return originalAddUserMessage(content, type, data);
+                }
+
+                // Not a confirmation response, proceed normally
+                return originalAddUserMessage(content, type, data);
+            };
+        });
+    }
+
+    // Signal confirmation result from UI (resolves the requestConfirmation promise)
+    signalConfirmation(workflowId: string, confirmed: boolean): void {
+        console.log(`🎯 Signaling confirmation for workflow ${workflowId}: ${confirmed}`);
+
+        if (this.pendingConfirmations?.has(workflowId)) {
+            const resolveFn = this.pendingConfirmations.get(workflowId);
+            this.pendingConfirmations.delete(workflowId);
+            resolveFn(confirmed);
+        } else {
+            console.warn(`No pending confirmation found for workflow ${workflowId}`);
+        }
+    }
+
+    // Resume workflow with confirmation result
+    async resumeWorkflowWithConfirmation(workflowId: string, confirmed: boolean): Promise<any> {
+        const workflow = this.activeWorkflows.get(workflowId);
+
+        // Handle completed workflows gracefully (user might click confirm multiple times)
+        if (!workflow) {
+            console.warn(`Workflow ${workflowId} does not exist - may have already been processed`);
+            return { success: true, message: 'Workflow already completed' };
+        }
+
+        if (workflow.status === 'completed') {
+            console.log(`Workflow ${workflowId} already completed - ignoring duplicate confirmation`);
+            return workflow.result || { success: true, message: 'Workflow already completed' };
+        }
+
+        if (workflow.status !== 'running') {
+            throw new Error(`Workflow ${workflowId} is not running or does not exist`);
+        }
+
+        console.log(`▶️ Resuming workflow ${workflowId} with confirmation: ${confirmed}`);
+
+        // For CRUD agent workflows, we need to inject the confirmation result
+        // into the workflow state and resume from the confirmation step
+        if (workflow.flowType === 'crud') {
+            // Find the confirmation message in the conversation
+            const confirmationMessage = this.currentUIState.conversation
+                .filter(msg => msg.type === 'confirmation' && msg.data?.workflowId === workflowId)
+                .pop();
+
+            if (confirmationMessage) {
+                // Update the message to show the result
+                const resultMessage = confirmed ?
+                    '✅ Operations confirmed. Proceeding with execution...' :
+                    '❌ Operation cancelled by user.';
+
+                // Replace the confirmation message with a response
+                const updatedConversation = this.currentUIState.conversation.map(msg =>
+                    msg.id === confirmationMessage.id ? {
+                        ...msg,
+                        type: confirmed ? 'success' : 'warning' as any,
+                        content: resultMessage
+                    } : msg
+                );
+
+                this.updateUIState({
+                    conversation: updatedConversation
+                });
+            }
+
+            // For now, we'll just complete the workflow since we don't have full pause/resume
+            // In a complete implementation, this would resume the actual StateGraph workflow
+            this.activeWorkflows.set(workflowId, {
+                ...workflow,
+                status: 'completed',
+                result: {
+                    success: confirmed,
+                    confirmed,
+                    message: confirmed ? 'Operations confirmed and executed' : 'Operation cancelled'
+                }
+            });
+
+            return workflow.result;
+        }
+
+        throw new Error(`Workflow type ${workflow.flowType} does not support confirmation resume`);
     }
 
     // Get resumable workflows

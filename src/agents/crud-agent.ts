@@ -44,6 +44,104 @@ import {
 	resolveResourceReference,
 } from '../utils/tools/metadata';
 import {llmClassificationService} from "../utils/llm-classification-service";
+import { Dhis2Schemas } from '../utils/tools/metadata/schemas';
+
+// Schema introspection utility to dynamically identify reference fields
+function getReferenceFieldsForResource(resourceType: string): string[] {
+	const schema = Dhis2Schemas[resourceType as keyof typeof Dhis2Schemas];
+	if (!schema) return [];
+
+	const referenceFields: string[] = [];
+
+	try {
+		// Analyze the Zod schema to find reference fields
+		const schemaDef = (schema as any)._def;
+		if (!schemaDef || !schemaDef.shape) return [];
+
+		const shape = schemaDef.shape;
+
+		// Known reference field patterns in DHIS2
+		const knownReferenceFields = [
+			'categoryCombo', 'dataElements', 'categories', 'categoryOptions',
+			'organisationUnits', 'organisationUnitGroups', 'programs', 'programStages',
+			'trackedEntityTypes', 'trackedEntityAttributes', 'optionSet', 'indicatorType',
+			'user', 'trackedEntityType', 'program', 'validationRules', 'indicators',
+			'programIndicators', 'programRules', 'sections', 'dataSetElements',
+			'compulsoryDataElementOperands', 'userRoles', 'userCredentials',
+			'userAccesses', 'userGroupAccesses', 'dashboardItems', 'mapViews',
+			'programStageDataElements', 'programStageSections', 'programRuleActions',
+			'trackedEntityTypeAttributes', 'dataDimensionItems', 'relationships',
+			'relationshipType', 'enrollments', 'events', 'attributes', 'dataValues'
+		];
+
+		for (const [fieldName, fieldSchema] of Object.entries(shape)) {
+			const fieldDef = (fieldSchema as any)._def;
+
+			// Check if this field name is a known reference field
+			if (knownReferenceFields.includes(fieldName)) {
+				referenceFields.push(fieldName);
+				continue;
+			}
+
+			// Check for direct object references: z.object({ id: z.string() })
+			if (fieldDef.typeName === 'ZodObject') {
+				const objShape = fieldDef.shape;
+				if (objShape.id && (objShape.id as any)._def.typeName === 'ZodString') {
+					referenceFields.push(fieldName);
+				}
+			}
+			// Check for array references: z.array(z.object({ id: z.string() }))
+			else if (fieldDef.typeName === 'ZodArray') {
+				const elementDef = (fieldDef.type as any)._def;
+				if (elementDef.typeName === 'ZodObject') {
+					const objShape = elementDef.shape;
+					if (objShape.id && (objShape.id as any)._def.typeName === 'ZodString') {
+						referenceFields.push(fieldName);
+					}
+				}
+			}
+			// Check for optional references: z.object({ id: z.string() }).optional()
+			else if (fieldDef.typeName === 'ZodOptional') {
+				const innerDef = (fieldDef.innerType as any)._def;
+				if (innerDef.typeName === 'ZodObject') {
+					const objShape = innerDef.shape;
+					if (objShape.id && (objShape.id as any)._def.typeName === 'ZodString') {
+						referenceFields.push(fieldName);
+					}
+				}
+			}
+			// Check for nested array references: z.array(z.object({ ...references... }))
+			else if (fieldDef.typeName === 'ZodArray') {
+				const elementDef = (fieldDef.type as any)._def;
+				if (elementDef.typeName === 'ZodObject' && elementDef.shape) {
+					// Check if array elements contain reference fields
+					const elementShape = elementDef.shape;
+					for (const [nestedField, nestedSchema] of Object.entries(elementShape)) {
+						const nestedDef = (nestedSchema as any)._def;
+						if (nestedDef.typeName === 'ZodObject') {
+							const nestedObjShape = nestedDef.shape;
+							if (nestedObjShape.id && (nestedObjShape.id as any)._def.typeName === 'ZodString') {
+								// Found nested reference like dataSetElements[].dataElement
+								referenceFields.push(fieldName);
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+	} catch (error) {
+		console.warn(`Failed to introspect schema for ${resourceType}:`, error);
+	}
+
+	return referenceFields;
+}
+
+// Build dynamic reference fields mapping
+const REFERENCE_FIELDS: Record<string, string[]> = {};
+for (const [resourceType] of Object.entries(Dhis2Schemas)) {
+	REFERENCE_FIELDS[resourceType] = getReferenceFieldsForResource(resourceType);
+}
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
@@ -266,6 +364,17 @@ const CrudAnnotation = Annotation.Root({
 		default: () => false,
 	}),
 
+	// Workflow pause state (for user interaction)
+	workflowPaused: Annotation<boolean>({
+		reducer: (left, right) => right ?? left,
+		default: () => false,
+	}),
+
+	pauseReason: Annotation<string>({
+		reducer: (left, right) => right || left,
+		default: () => '',
+	}),
+
 	confirmationSummary: Annotation<{
 		operations: Array<{
 			type: string;
@@ -273,12 +382,22 @@ const CrudAnnotation = Annotation.Root({
 			resourceName: string;
 			willCreate: boolean;
 			dependenciesResolved: boolean;
+			exists: boolean;
+			existingId?: string;
 		}>;
 		autoCreations: Array<{ type: string; name: string }>;
 		totalOperations: number;
+		existingCount: number;
+		newCount: number;
 		message: string;
 	} | null>({
 		reducer: (left, right) => right || left,
+		default: () => null,
+	}),
+
+	// User confirmation result
+	userConfirmed: Annotation<boolean | null>({
+		reducer: (left, right) => right ?? left,
 		default: () => null,
 	}),
 
@@ -321,6 +440,10 @@ function updateProgress(step: number, stepName: string, message: string, isIndet
 // 1. Plan CRUD operations (parse request and identify operations)
 async function plan_crud_operations(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
 	console.log('📋 CRUD Agent: Planning operations');
+
+	// Update progress to show we're now in CRUD mode
+	updateProgress(1, 'CRUD Operations', 'Processing CRUD request...', false);
+	state.orchestrator?.addProgressMessage('Processing CRUD request...');
 
 	updateProgress(2, 'Planning Operations', 'Analyzing request and planning operations...', false);
 	state.orchestrator?.addProgressMessage('Analyzing request and planning operations...');
@@ -399,8 +522,11 @@ async function generate_resource_ids(state: typeof CrudAnnotation.State): Promis
 	updateProgress(3, 'Generating IDs', 'Generating unique IDs for new resources...', false);
 	state.orchestrator?.addProgressMessage('Generating unique IDs for new resources...');
 
-	const updatedOperations = await Promise.all(
-		state.plannedOperations.map(async (operation) => {
+	let updatedOperations = [...state.plannedOperations];
+
+	// First pass: Generate IDs for all operations
+	const operationsWithIds = await Promise.all(
+		updatedOperations.map(async (operation) => {
 			if (operation.type === 'create' && !operation.plannedId) {
 				try {
 					const generatedId = await generateDhis2Id();
@@ -425,8 +551,69 @@ async function generate_resource_ids(state: typeof CrudAnnotation.State): Promis
 		})
 	);
 
+	// Second pass: Handle categories with categoryOptions as strings
+	// Convert categoryOptions strings to separate operations
+	const finalOperations: typeof operationsWithIds = [];
+
+	for (const operation of operationsWithIds) {
+		if (operation.type === 'create' && operation.resourceType === 'categories' && operation.data.categoryOptions) {
+			// Check if categoryOptions are strings (names) rather than objects/IDs
+			const categoryOptions = operation.data.categoryOptions;
+			if (Array.isArray(categoryOptions) && categoryOptions.length > 0 && typeof categoryOptions[0] === 'string') {
+				console.log(`🔧 Converting categoryOptions names to operations for ${operation.resourceName}`);
+
+				// Create separate operations for each category option
+				const categoryOptionIds: string[] = [];
+				const categoryOptionOperations: typeof operation[] = [];
+
+				for (const optionName of categoryOptions) {
+					try {
+						const optionId = await generateDhis2Id();
+						console.log(`🆔 Generated ID ${optionId} for categoryOption "${optionName}"`);
+
+						categoryOptionOperations.push({
+							type: 'create' as const,
+							resourceType: 'categoryOptions',
+							resourceName: optionName,
+							data: {
+								name: optionName,
+								shortName: optionName.length > 50 ? optionName.substring(0, 50) : optionName
+							},
+							dependencies: [],
+							status: 'id_generated' as const,
+							plannedId: optionId
+						});
+
+						categoryOptionIds.push(optionId);
+					} catch (error) {
+						console.error(`❌ Failed to generate ID for categoryOption "${optionName}":`, error);
+					}
+				}
+
+				// Update the category operation to reference categoryOption IDs
+				const updatedCategoryOperation = {
+					...operation,
+					data: {
+						...operation.data,
+						categoryOptions: categoryOptionIds
+					},
+					dependencies: [...(operation.dependencies || []), ...categoryOptionOperations.map(op => op.resourceName)]
+				};
+
+				// Add categoryOption operations first, then the category
+				finalOperations.push(...categoryOptionOperations);
+				finalOperations.push(updatedCategoryOperation);
+			} else {
+				// categoryOptions are already IDs or objects, keep as-is
+				finalOperations.push(operation);
+			}
+		} else {
+			finalOperations.push(operation);
+		}
+	}
+
 	return {
-		plannedOperations: updatedOperations
+		plannedOperations: finalOperations
 	};
 }
 
@@ -439,60 +626,193 @@ async function resolve_all_references(state: typeof CrudAnnotation.State): Promi
 
 	const resolvedResources: Record<string, any> = { ...state.resolvedResources };
 	const autoCreations: Array<{ type: string; name: string }> = [];
+	let updatedOperations = [...state.plannedOperations];
 
-	// Check each operation's dependencies
-	for (const operation of state.plannedOperations) {
-		for (const dependency of operation.dependencies) {
-			if (!resolvedResources[dependency]) {
-				// Auto-create missing dependency (as requested)
-				// Note: We don't check existence since we can't determine metadata type from name alone
-				try {
-					const generatedId = await generateDhis2Id();
-					resolvedResources[dependency] = {
-						id: generatedId,
-						name: dependency,
-						type: 'auto_created',
-						exists: false,
-						autoCreated: true
+	// Check existence of all resources by name first
+	for (const operation of updatedOperations) {
+		if (operation.type === 'create') {
+			try {
+				// Check if resource already exists by name
+				const { checkResourceExists } = await import('../utils/app-runtime/dhis2-api');
+				const existsCheck = await checkResourceExists(
+					operation.resourceType,
+					operation.resourceName,
+					undefined, // Don't check by ID since we don't have one yet
+					operation.resourceType === 'dataElements' ? operation.data.code : undefined
+				);
+
+				if (existsCheck?.exists) {
+					// Resource exists - use existing ID, change to update operation
+					console.log(`🔗 Resource exists: ${operation.resourceType} '${operation.resourceName}' (ID: ${existsCheck.id})`);
+					resolvedResources[operation.resourceName] = {
+						id: existsCheck.id,
+						name: operation.resourceName,
+						type: operation.resourceType,
+						exists: true,
+						data: existsCheck.data
 					};
-					autoCreations.push({ type: 'dependency', name: dependency });
-					console.log(`🔗 Auto-created dependency: ${dependency} (ID: ${generatedId})`);
-				} catch (error) {
-					console.error(`❌ Failed to auto-create dependency ${dependency}:`, error);
-					return {
-						finalResult: {
-							success: false,
-							error: `Failed to resolve dependency: ${dependency}`,
-							errorType: 'DEPENDENCY'
-						}
+
+					// Change operation to update instead of create
+					const operationIndex = updatedOperations.findIndex(op =>
+						op.resourceType === operation.resourceType &&
+						op.resourceName === operation.resourceName &&
+						op.type === operation.type
+					);
+					if (operationIndex !== -1) {
+						updatedOperations[operationIndex] = {
+							...operation,
+							type: 'update' as const,
+							plannedId: existsCheck.id, // Use existing ID
+							status: 'ready' as const
+						};
+					}
+				} else {
+					// Resource doesn't exist - will be created
+					console.log(`🔗 Resource will be created: ${operation.resourceType} '${operation.resourceName}'`);
+					resolvedResources[operation.resourceName] = {
+						id: operation.plannedId || 'pending', // Will be set in generate_resource_ids
+						name: operation.resourceName,
+						type: operation.resourceType,
+						exists: false,
+						willCreate: true
 					};
 				}
+			} catch (error) {
+				console.error(`❌ Failed to check existence for ${operation.resourceName}:`, error);
+				return {
+					finalResult: {
+						success: false,
+						error: `Failed to check resource existence: ${operation.resourceName}`,
+						errorType: 'EXISTENCE_CHECK'
+					}
+				};
 			}
 		}
 	}
 
-	// Mark operations as ready
-	const readyOperations = state.plannedOperations.map(op => ({
-		...op,
-		status: 'ready' as const
-	}));
+	// Now that we have all resources in resolvedResources, resolve all references in operation data
+	// This handles both references within the batch and to existing resources
+	for (const operation of updatedOperations) {
+		const resolvedData = { ...operation.data };
 
-	console.log(`🔗 Resolved ${Object.keys(resolvedResources).length} resources, auto-created ${autoCreations.length}`);
+		// Get reference fields for this resource type from dynamically introspected schemas
+		const fieldsToResolve = REFERENCE_FIELDS[operation.resourceType] || [];
+
+		for (const field of fieldsToResolve) {
+			if (resolvedData[field]) {
+				if (Array.isArray(resolvedData[field])) {
+					// Handle array references (e.g., dataElements, categories, categoryOptions)
+					const resolvedArray = [];
+					for (const item of resolvedData[field]) {
+						if (typeof item === 'string') {
+							if (resolvedResources[item]) {
+								// Reference to resource in this batch (now includes ALL batch resources)
+								resolvedArray.push({ id: resolvedResources[item].id });
+								console.log(`🔗 Resolved batch array reference ${item} → ${resolvedResources[item].id} for field ${field}`);
+							} else {
+								// Reference to existing resource - need to resolve it
+								try {
+									// Determine the resource type for resolution
+									let refResourceType = field.replace(/s$/, ''); // Remove plural 's'
+									if (field === 'dataElements' && operation.resourceType === 'dataSets') {
+										refResourceType = 'dataElement';
+									}
+
+									const resolvedRef = await resolveResourceReference.invoke({
+										resourceType: refResourceType,
+										reference: item,
+										context: `Referenced in ${operation.resourceType} ${operation.resourceName}`
+									});
+
+									if (resolvedRef?.id) {
+										resolvedData[field] = { id: resolvedRef.id };
+										console.log(`🔗 Resolved external single reference ${item} → ${resolvedRef.id} for field ${field}`);
+									} else {
+										console.warn(`⚠️ Could not resolve single reference: ${item} in ${operation.resourceName} field ${field}`);
+										// Keep original if resolution fails - might be an ID already
+									}
+								} catch (error) {
+									console.error(`❌ Error resolving array reference ${item}:`, error);
+									resolvedArray.push(item); // Keep original on error
+								}
+							}
+						} else {
+							// Already resolved or not a string
+							resolvedArray.push(item);
+						}
+					}
+					resolvedData[field] = resolvedArray;
+				} else if (typeof resolvedData[field] === 'string') {
+					// Handle single reference (e.g., categoryCombo)
+					if (resolvedResources[resolvedData[field]]) {
+						// Reference to resource in this batch (now includes ALL batch resources)
+						resolvedData[field] = { id: resolvedResources[resolvedData[field]].id };
+						console.log(`🔗 Resolved batch single reference ${resolvedData[field]} → ${resolvedResources[resolvedData[field]].id} for field ${field}`);
+					} else {
+						// Reference to existing resource - need to resolve it
+						try {
+							const resolvedRef = await resolveResourceReference.invoke({
+								resourceType: field,
+								reference: resolvedData[field],
+								context: `Referenced in ${operation.resourceType} ${operation.resourceName}`
+							});
+
+							if (resolvedRef?.id) {
+								const originalValue = resolvedData[field];
+								resolvedData[field] = { id: resolvedRef.id };
+								console.log(`🔗 Resolved external single reference ${originalValue} → ${resolvedRef.id} for field ${field}`);
+							} else {
+								console.warn(`⚠️ Could not resolve single reference: ${resolvedData[field]} in ${operation.resourceName} field ${field}`);
+								// Keep original if resolution fails - might be an ID already
+							}
+						} catch (error) {
+							console.error(`❌ Error resolving single reference ${resolvedData[field]}:`, error);
+							// Keep original on error - might be an ID already
+						}
+					}
+				}
+			}
+		}
+
+		// Update operation with resolved data
+		const operationIndex = updatedOperations.findIndex(op =>
+			op.resourceType === operation.resourceType &&
+			op.resourceName === operation.resourceName &&
+			op.type === operation.type
+		);
+		if (operationIndex !== -1) {
+			updatedOperations[operationIndex] = {
+				...operation,
+				data: resolvedData,
+				status: 'ready' as const
+			};
+		}
+	}
+
+	// Count operations that will be created vs updated
+	const createOperations = updatedOperations.filter(op => op.type === 'create');
+	const updateOperations = updatedOperations.filter(op => op.type === 'update');
+
+	console.log(`🔗 Resolved ${Object.keys(resolvedResources).length} resources: ${createOperations.length} to create, ${updateOperations.length} to update`);
 
 	return {
-		plannedOperations: readyOperations,
+		plannedOperations: updatedOperations,
 		resolvedResources,
 		confirmationSummary: {
-			operations: readyOperations.map(op => ({
+			operations: updatedOperations.map(op => ({
 				type: op.type,
 				resourceType: op.resourceType,
 				resourceName: op.resourceName,
 				willCreate: op.type === 'create',
-				dependenciesResolved: op.dependencies.every(dep => resolvedResources[dep])
+				dependenciesResolved: true, // All dependencies checked and resolved
+				exists: resolvedResources[op.resourceName]?.exists || false,
+				existingId: resolvedResources[op.resourceName]?.id || undefined
 			})),
-			autoCreations,
-			totalOperations: readyOperations.length,
-			message: `Ready to execute ${readyOperations.length} operations${autoCreations.length > 0 ? ` (including ${autoCreations.length} auto-created dependencies)` : ''}`
+			autoCreations: [], // No more auto-creations - we check existence properly
+			totalOperations: updatedOperations.length,
+			existingCount: updateOperations.length,
+			newCount: createOperations.length,
+			message: `Ready to execute ${updatedOperations.length} operations (${createOperations.length} create, ${updateOperations.length} update)`
 		}
 	};
 }
@@ -514,13 +834,45 @@ async function confirm_operations(state: typeof CrudAnnotation.State): Promise<P
 	updateProgress(5, 'Awaiting Confirmation', 'Please confirm the planned operations...', true);
 	state.orchestrator?.addProgressMessage('Please confirm the planned operations...');
 
-	// For now, auto-confirm since we don't have interactive UI yet
-	// In a full implementation, this would wait for user input
-	console.log('✅ Operations confirmed (auto-confirmation for now)');
+		// Check if confirmation is required
+		if (state.confirmationRequired) {
+			console.log('✅ Confirmation required, requesting user confirmation');
 
-	return {
-		confirmationRequired: false
-	};
+			// Request confirmation through orchestrator (this will show UI and wait)
+			const confirmed = await state.orchestrator.requestConfirmation(
+				state.messages[0]?.metadata?.workflowId || `workflow_${Date.now()}`,
+				state.confirmationSummary.operations,
+				`Please confirm the following operations:\n\n${state.confirmationSummary.message}\n\n${state.confirmationSummary.operations.map(op => `- ${op.type} ${op.resourceType}: ${op.resourceName}`).join('\n')}${state.confirmationSummary.autoCreations.length > 0 ? `\n\nAuto-created dependencies:\n${state.confirmationSummary.autoCreations.map(ac => `- ${ac.type}: ${ac.name}`).join('\n')}` : ''}`
+			);
+
+			console.log(`▶️ Received confirmation result: ${confirmed}`);
+
+			if (confirmed) {
+				// User confirmed - proceed to execution
+				console.log('✅ User confirmed operations, proceeding to execution');
+				return {
+					confirmationRequired: false,
+					userConfirmed: true
+				};
+			} else {
+				// User cancelled - end workflow
+				console.log('❌ User cancelled operations');
+				return {
+					confirmationRequired: false,
+					userConfirmed: false,
+					finalResult: {
+						success: false,
+						message: 'Operation cancelled by user',
+						cancelled: true
+					}
+				};
+			}
+		} else {
+			console.log('✅ Confirmation not required, proceeding...');
+			return {
+				confirmationRequired: false
+			};
+		}
 }
 
 // 5. Execute operations using DHIS2 aggregated API
@@ -534,7 +886,56 @@ async function execute_operations(state: typeof CrudAnnotation.State): Promise<P
 		// Build aggregated payload for all create operations
 		const aggregatedPayload: Record<string, any[]> = {};
 
-		// Collect all planned operations with their generated IDs
+		// Create mapping of resource names to generated IDs for reference resolution
+		const resourceNameToIdMap: Record<string, string> = {};
+		for (const operation of state.plannedOperations) {
+			if (operation.plannedId) {
+				resourceNameToIdMap[operation.resourceName] = operation.plannedId;
+			}
+		}
+
+		// Function to resolve references in operation data
+		const resolveReferences = (data: any): any => {
+			if (!data || typeof data !== 'object') return data;
+
+			const resolved = { ...data };
+
+			const resourceType = resolved.resourceType || resolved.type;
+			const fieldsToResolve = REFERENCE_FIELDS[resourceType] || [];
+
+			for (const field of fieldsToResolve) {
+				if (resolved[field]) {
+					if (Array.isArray(resolved[field])) {
+						// Handle array references (e.g., dataElements, categories, categoryOptions)
+						// DHIS2 expects: [{"id": "ID1"}, {"id": "ID2"}]
+						resolved[field] = resolved[field].map((item: any) => {
+							if (typeof item === 'string') {
+								if (resourceNameToIdMap[item]) {
+									return { id: resourceNameToIdMap[item] };
+								} else {
+									// Assume it's already an ID string, convert to object
+									return { id: item };
+								}
+							}
+							return item;
+						});
+					} else if (typeof resolved[field] === 'string') {
+						// Handle single reference (e.g., categoryCombo)
+						// DHIS2 expects: {"id": "ID"}
+						if (resourceNameToIdMap[resolved[field]]) {
+							resolved[field] = { id: resourceNameToIdMap[resolved[field]] };
+						} else {
+							// Assume it's already an ID string, convert to object
+							resolved[field] = { id: resolved[field] };
+						}
+					}
+				}
+			}
+
+			return resolved;
+		};
+
+		// Collect all create operations with their generated IDs
 		const createOperations = state.plannedOperations.filter(op => op.type === 'create');
 
 		for (const operation of createOperations) {
@@ -543,13 +944,18 @@ async function execute_operations(state: typeof CrudAnnotation.State): Promise<P
 				aggregatedPayload[resourceType] = [];
 			}
 
-			// Add operation data with generated ID
+			// Resolve references in operation data and add with generated ID
+			const resolvedData = resolveReferences(operation.data);
 			aggregatedPayload[resourceType].push({
-				...operation.data,
+				...resolvedData,
 				id: operation.plannedId,
 				name: operation.resourceName
 			});
 		}
+
+		// Note: Update operations are not included in aggregated payload
+		// They would need to be handled separately or through individual API calls
+		// For now, we focus on create operations in the aggregated API
 
 		console.log('📦 Aggregated payload:', JSON.stringify(aggregatedPayload, null, 2));
 
@@ -632,6 +1038,11 @@ async function execute_operations(state: typeof CrudAnnotation.State): Promise<P
 	} catch (error) {
 		console.error('❌ Aggregated API execution failed:', error);
 
+		// Notify user about the aggregated API failure
+		if (state.orchestrator) {
+			state.orchestrator.addProgressMessage(`⚠️ Aggregated API failed (${error.message}), falling back to individual operations...`);
+		}
+
 		// Fallback to individual operations if aggregated fails
 		console.log('🔄 Falling back to individual operations...');
 
@@ -679,16 +1090,41 @@ async function execute_operations(state: typeof CrudAnnotation.State): Promise<P
 			}
 		}
 
+		const successfulCount = executedOperations.filter(op => op.status === 'completed').length;
+		const failedCount = executedOperations.filter(op => op.status === 'failed').length;
+		const fallbackSuccess = failedCount === 0;
+
+		// Strict success criteria: operations are only successful if primary API succeeded
+		// Fallback success does not change the result to successful
+		const overallSuccess = !error && fallbackSuccess; // Only successful if no primary API error AND all operations succeeded
+
+		// Craft appropriate message based on outcome
+		let finalMessage: string;
+		if (overallSuccess) {
+			finalMessage = `All operations completed successfully`;
+		} else if (error && fallbackSuccess) {
+			finalMessage = `Primary API failed - operations completed via fallback but system issues remain`;
+		} else if (error && !fallbackSuccess) {
+			finalMessage = `Primary API failed and fallback operations also failed`;
+		} else {
+			finalMessage = `Operations failed during execution`;
+		}
+
 		return {
 			plannedOperations: executedOperations,
 			results,
 			finalResult: {
-				success: results.every(r => r.success !== false),
+				success: overallSuccess, // Only true if primary API succeeded AND operations completed
 				operations: executedOperations.length,
 				results,
 				aggregatedApiUsed: false,
 				fallbackUsed: true,
-				summary: `${executedOperations.filter(op => op.status === 'completed').length} successful, ${executedOperations.filter(op => op.status === 'failed').length} failed`
+				aggregatedApiFailed: true,
+				aggregatedApiError: error.message,
+				summary: `${successfulCount} successful, ${failedCount} failed`,
+				message: finalMessage,
+				error: error ? `Primary API Error: ${error.message}` : undefined,
+				systemIssue: error ? 'Underlying API issues detected - please contact support if problems persist' : undefined
 			}
 		};
 	}
@@ -760,6 +1196,7 @@ async function executeCreateOperation(operation: any) {
 		organisationUnits: createDhis2OrganisationUnit,
 		categories: createDhis2Category,
 		categoryCombos: createDhis2CategoryCombo,
+		categoryOptions: createDhis2CategoryOption, // Fix: was missing, causing fallback failures
 		dataSets: createDhis2DataSet,
 		indicators: createDhis2Indicator,
 		optionSets: createDhis2OptionSet,
@@ -1344,8 +1781,27 @@ crudWorkflow.addEdge('plan_crud_operations', 'generate_resource_ids');
 crudWorkflow.addEdge('generate_resource_ids', 'resolve_all_references');
 // @ts-ignore
 crudWorkflow.addEdge('resolve_all_references', 'confirm_operations');
+
+// Conditional edge from confirm_operations based on user decision
 // @ts-ignore
-crudWorkflow.addEdge('confirm_operations', 'execute_operations');
+crudWorkflow.addConditionalEdges('confirm_operations', (state) => {
+	// If user cancelled, end the workflow
+	if (state.finalResult?.cancelled) {
+		console.log('❌ User cancelled operations - ending workflow');
+		return END;
+	}
+
+	// If user confirmed, proceed to execution
+	if (state.userConfirmed) {
+		console.log('✅ User confirmed operations - proceeding to execution');
+		return 'execute_operations';
+	}
+
+	// Default fallback - should not happen
+	console.log('⚠️ Unexpected state in confirm_operations - ending workflow');
+	return END;
+});
+
 // @ts-ignore
 crudWorkflow.addEdge('execute_operations', 'store_conversation_context');
 // @ts-ignore

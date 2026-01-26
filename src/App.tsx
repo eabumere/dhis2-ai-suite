@@ -14,6 +14,9 @@ import TrackerDataGrid from './components/TrackerDataGrid';
 import {workflowOrchestrator, WorkflowUIState, ConversationMessage} from './utils/workflow-orchestrator';
 import {createContextRouterAgent} from './agents/router-agent'
 
+// Import toast notification system
+import { ToastProvider, useToast } from './components/ToastNotification';
+
 interface QueryResults {
 	me: {
 		name: string
@@ -27,8 +30,35 @@ const query = {
 	},
 }
 
+// Toast Manager Component to handle toast notifications
+const ToastManager: FC = () => {
+	const { showToast } = useToast();
+
+	// Register toast callback with workflow orchestrator
+	useEffect(() => {
+		// Update orchestrator callbacks to include toast functionality
+		const currentCallbacks = workflowOrchestrator['uiCallbacks'];
+		if (currentCallbacks) {
+			workflowOrchestrator.registerCallbacks({
+				...currentCallbacks,
+				showToast: (type, title, message, options) => {
+					return showToast({
+						type,
+						title,
+						message,
+						...options
+					});
+				}
+			});
+		}
+	}, [showToast]);
+
+	return null; // This component only manages toasts, doesn't render anything
+};
+
 const MyApp: FC = () => {
 	const {error, loading, data} = useDataQuery<QueryResults>(query)
+	const { showToast } = useToast();
 
 	// Add spin animation CSS for loading indicator
 	const spinKeyframes = `
@@ -626,50 +656,113 @@ const MyApp: FC = () => {
 						}}>
 							<MessageContainer messages={uiState.conversation}/>
 
-							{/* Processing overlay - shows progress messages */}
+							{/* Enhanced Processing Overlay */}
 							{uiState.showProcessing && (
-								<div style={{
+								<div className="processing-overlay-elegant" style={{
 									position: 'absolute',
-									bottom: '80px', // Above input area
+									bottom: '100px', // Above input area
 									right: '20px',
 									zIndex: 10,
-									backgroundColor: 'rgba(255, 255, 255, 0.95)',
-									borderRadius: '12px',
-									padding: '16px',
-									boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-									border: '1px solid #e0e0e0',
-									minWidth: '200px',
-									maxWidth: '300px'
+									background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95))',
+									borderRadius: '16px',
+									padding: '20px',
+									boxShadow: '0 20px 40px rgba(0, 0, 0, 0.15), 0 8px 16px rgba(0, 0, 0, 0.1)',
+									border: '1px solid rgba(33, 150, 243, 0.2)',
+									minWidth: '280px',
+									maxWidth: '400px',
+									backdropFilter: 'blur(12px)',
+									animation: 'slide-in-up 0.4s cubic-bezier(0.4, 0, 0.2, 1)'
 								}}>
+									{/* Animated background gradient */}
+									<div style={{
+										position: 'absolute',
+										top: 0,
+										left: 0,
+										right: 0,
+										bottom: 0,
+										background: 'linear-gradient(45deg, transparent, rgba(33, 150, 243, 0.03), transparent)',
+										backgroundSize: '200% 200%',
+										animation: 'gradient-shift 3s ease infinite',
+										borderRadius: '16px',
+										pointerEvents: 'none'
+									}} />
+
 									<div style={{
 										display: 'flex',
 										alignItems: 'center',
-										gap: '12px'
+										gap: '16px',
+										position: 'relative',
+										zIndex: 1
 									}}>
-										<div style={{
-											fontSize: '20px',
-											animation: 'spin 1s linear infinite'
+										{/* Enhanced progress indicator */}
+										<div className="progress-ring-elegant" style={{
+											position: 'relative',
+											width: '40px',
+											height: '40px',
+											display: 'flex',
+											alignItems: 'center',
+											justifyContent: 'center'
 										}}>
-											🔄
-										</div>
-										<div style={{
-											flex: 1,
-											fontSize: '14px',
-											color: '#333',
-											lineHeight: '1.4'
-										}}>
+											{/* Outer ring - gradient border */}
 											<div style={{
-												fontWeight: 'bold',
-												marginBottom: '4px',
-												color: '#2c6693'
+												position: 'absolute',
+												width: '40px',
+												height: '40px',
+												border: '3px solid transparent',
+												borderTop: '3px solid #2196f3',
+												borderRight: '3px solid #1976d2',
+												borderRadius: '50%',
+												animation: 'spin 1.5s linear infinite'
+											}} />
+
+											{/* Inner ring - pulsing effect */}
+											<div style={{
+												position: 'absolute',
+												width: '20px',
+												height: '20px',
+												border: '2px solid #e3f2fd',
+												borderRadius: '50%',
+												animation: 'pulse-ring 1.5s ease-out infinite'
+											}} />
+
+											{/* Center dot */}
+											<div style={{
+												width: '6px',
+												height: '6px',
+												backgroundColor: '#2196f3',
+												borderRadius: '50%',
+												animation: 'pulse-dot 1.5s ease-in-out infinite'
+											}} />
+										</div>
+
+										{/* Progress content */}
+										<div style={{ flex: 1 }}>
+											<div style={{
+												fontSize: '16px',
+												fontWeight: '700',
+												color: '#1976d2',
+												marginBottom: '6px',
+												letterSpacing: '-0.01em'
 											}}>
-												Processing...
+												Processing Request
 											</div>
 											<div style={{
-												fontSize: '13px',
-												color: '#666'
+												fontSize: '14px',
+												color: '#64748b',
+												lineHeight: '1.5',
+												fontWeight: '400'
 											}}>
-												{uiState.processingMessage || 'Please wait while we process your request'}
+												{uiState.processingMessage || 'Analyzing your request and preparing response...'}
+											</div>
+
+											{/* Subtle progress hint */}
+											<div style={{
+												marginTop: '8px',
+												fontSize: '12px',
+												color: '#94a3b8',
+												fontStyle: 'italic'
+											}}>
+												This may take a few moments
 											</div>
 										</div>
 									</div>
@@ -738,6 +831,9 @@ const MyApp: FC = () => {
 
 export default (props: any) => (
 	<DataEngineProvider>
-		<MyApp {...props} />
+		<ToastProvider>
+			<ToastManager />
+			<MyApp {...props} />
+		</ToastProvider>
 	</DataEngineProvider>
 )

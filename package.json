@@ -1,38 +1,51 @@
 {
-  "name": "dhis2",
-  "version": "1.0.0",
-  "description": "",
-  "license": "BSD-3-Clause",
-  "private": true,
-  "scripts": {
-    "build": "d2-app-scripts build",
-    "start": "d2-app-scripts start",
-    "test": "d2-app-scripts test",
-    "deploy": "d2-app-scripts deploy"
-  },
-  "dependencies": {
-    "@azure/ai-form-recognizer": "^5.0.0",
-    "@azure/core-auth": "^1.7.2",
-    "@azure/storage-blob": "^12.17.0",
-    "@dhis2/app-runtime": "^3.14.6",
-    "@langchain/core": "^0.3.78",
-    "@langchain/langgraph": "^0.4.9",
-    "@langchain/openai": "^0.6.16",
-    "@types/echarts": "^4.9.22",
-    "antd": "^6.1.4",
-    "echarts": "^5.5.0",
-    "echarts-for-react": "^3.0.2",
-    "file-saver": "^2.0.5",
-    "pdf-lib": "^1.17.1",
-    "react": "^18",
-    "react-dom": "^18",
-    "zod": "^4.1.12"
-  },
-  "devDependencies": {
-    "@dhis2/cli-app-scripts": "^12.8.0",
-    "@types/jest": "^30.0.0",
-    "@types/react": "^19.2.2",
-    "@types/react-dom": "^19.2.2",
-    "typescript": "^5"
-  }
+  "categoryOptions": [
+    {
+      "name": "First Visit",
+      "shortName": "First Visit",
+      "id": "b9Bn7VKuzmS"
+    },
+    {
+      "name": "Follow-up Visit",
+      "shortName": "Follow-up Visit",
+      "id": "dytEk8AngbJ"
+    }
+  ],
+  "categories": [
+    {
+      "name": "ANC Visit Type",
+      "categoryOptions": [
+        "b9Bn7VKuzmS",
+        "dytEk8AngbJ"
+      ],
+      "id": "weyNk5evFwb"
+    }
+  ],
+  "categoryCombos": [
+    {
+      "name": "ANC Visit Type Combo",
+      "categories": [
+        "ANC Visit Type"
+      ],
+      "id": "ddDOsxDWr15"
+    }
+  ],
+  "dataElements": [
+    {
+      "name": "Pregnant Women Attended ANC",
+      "valueType": "INTEGER",
+      "categoryCombo": "ANC Visit Type Combo",
+      "id": "UiC9LMvbGqO"
+    }
+  ],
+  "dataSets": [
+    {
+      "name": "Monthly Summary - TBA",
+      "periodType": "Monthly",
+      "dataElements": [
+        "Pregnant Women Attended ANC"
+      ],
+      "id": "shwFk3Ij29c"
+    }
+  ]
 }

@@ -260,7 +260,7 @@ const GraphAnnotation = Annotation.Root({
 });
 
 // LLM-based intent classification with conversation context awareness
-// Progress tracking helper
+// Progress tracking helper with improved step management
 function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof GraphAnnotation.State> {
     return {
         workflowProgress: {
@@ -271,6 +271,24 @@ function updateProgress(step: number, stepName: string, message: string, isIndet
             isIndeterminate
         }
     };
+}
+
+// Helper to advance progress and send UI updates
+function advanceProgress(state: typeof GraphAnnotation.State, step: number, stepName: string, message: string, isIndeterminate = false): void {
+    // Update the workflow progress state
+    const progressUpdate = updateProgress(step, stepName, message, isIndeterminate);
+
+    // Send progress message to orchestrator for UI display
+    state.orchestrator?.addProgressMessage(message, {
+        progress: step / 8 * 100, // Convert to percentage
+        currentStep: step,
+        totalSteps: 8,
+        stepName,
+        isIndeterminate,
+        workflowId: state.workflowId
+    });
+
+    console.log(`📊 Progress: Step ${step}/8 - ${stepName}: ${message}`);
 }
 
 async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
@@ -654,6 +672,9 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 					suggestions: selectedItems,
 					status: 'user_selected'
 				};
+
+				// Progress continues after user selection - advance to next step
+				advanceProgress(state, 3, 'Processing Selection', 'Indicator selection completed, proceeding to data resolution...', false);
 
 				// Continue with query_data using selected items
 				return {
@@ -1086,9 +1107,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 	try {
 		console.log('🏥 Searching for organisation units in query using LLM extraction');
 
-		// Update progress
-		updateProgress(4, 'Finding Locations', 'Searching for relevant organisation units...', false);
-		state.orchestrator?.addProgressMessage('Searching for relevant organisation units...');
+		// Update progress - advance to org unit search step
+		advanceProgress(state, 4, 'Finding Locations', 'Searching for relevant organisation units...', false);
 
 		// Extract organisation unit keywords using LLM-powered tool
 		const llmResult = await extractOrgUnitKeywordsLLM.invoke({
@@ -1287,9 +1307,8 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 	try {
 		console.log('🔢 Searching for disaggregations in query using LLM extraction');
 
-		// Update progress
-		updateProgress(5, 'Finding Categories', 'Searching for data categories...', false);
-		state.orchestrator?.addProgressMessage('Searching for data categories...');
+		// Update progress - advance to disaggregation search step
+		advanceProgress(state, 5, 'Finding Categories', 'Searching for data categories...', false);
 
 		// Initialize cocMapping for the entire function scope
 		let cocMapping: Record<string, string[]> = state.cocMapping || {};
@@ -1596,6 +1615,9 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 async function searchDatePeriods(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
 		console.log('📅 Searching for date periods in query using LLM extraction');
+
+		// Update progress - advance to date period search step
+		advanceProgress(state, 3, 'Extracting Time Periods', 'Finding relevant time periods for your analysis...', false);
 
 		// Extract date/period references using LLM-powered tool
 		const llmResult = await extractDatePeriodLLM.invoke({

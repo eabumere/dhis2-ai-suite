@@ -10,6 +10,103 @@ import ActionButton from './ActionButton';
 // Import centralized LLM classification service
 import { llmClassificationService } from '../utils/llm-classification-service';
 
+// Enhanced CSS animations for elegant visual feedback
+const enhancedNotificationStyles = `
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    @keyframes pulse-ring {
+        0% {
+            transform: scale(0.8);
+            opacity: 1;
+        }
+        100% {
+            transform: scale(1.3);
+            opacity: 0;
+        }
+    }
+
+    @keyframes pulse-dot {
+        0%, 100% {
+            opacity: 1;
+            transform: scale(1);
+        }
+        50% {
+            opacity: 0.6;
+            transform: scale(0.9);
+        }
+    }
+
+    @keyframes gradient-shift {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+
+    @keyframes slide-in-up {
+        0% {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        100% {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes progress-fill {
+        0% { width: 0%; }
+        100% { width: var(--progress-width, 0%); }
+    }
+
+    @keyframes bounce-in {
+        0% {
+            opacity: 0;
+            transform: scale(0.3);
+        }
+        50% {
+            opacity: 1;
+            transform: scale(1.05);
+        }
+        70% {
+            transform: scale(0.9);
+        }
+        100% {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+
+    .progress-message-enhanced {
+        animation: slide-in-up 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .processing-overlay-elegant {
+        backdrop-filter: blur(8px);
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .toast-notification-elegant {
+        animation: bounce-in 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    }
+
+    .progress-ring-elegant {
+        filter: drop-shadow(0 2px 4px rgba(33, 150, 243, 0.3));
+    }
+`;
+
+// Inject enhanced styles into document head
+if (typeof document !== 'undefined' && !document.getElementById('enhanced-notification-styles')) {
+    const style = document.createElement('style');
+    style.id = 'enhanced-notification-styles';
+    style.textContent = enhancedNotificationStyles;
+    document.head.appendChild(style);
+}
+
 // Expandable Text Component for handling overflow content
 interface ExpandableTextProps {
     text: string;
@@ -217,143 +314,642 @@ interface ThreadedMessageRendererProps {
     messages: ConversationMessage[];
 }
 
+interface CrudConfirmationProps {
+    message: ConversationMessage;
+}
+
 interface ProgressMessageProps {
     message: ConversationMessage;
 }
+
+const CrudConfirmation: FC<CrudConfirmationProps> = ({ message }) => {
+    const [showDetails, setShowDetails] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+
+    const handleConfirm = async () => {
+        if (isProcessing) return;
+
+        setIsProcessing(true);
+        console.log('✅ CRUD operations confirmed by user');
+
+        try {
+            // Signal confirmation to the workflow (this will resolve the requestConfirmation promise)
+            workflowOrchestrator.signalConfirmation(message.data?.workflowId, true);
+
+            // Add confirmation response to conversation
+            workflowOrchestrator.addAssistantMessage(
+                '✅ Operations confirmed. Executing operations...',
+                'progress'
+            );
+        } catch (error) {
+            console.error('Failed to signal confirmation:', error);
+            workflowOrchestrator.addAssistantMessage(
+                '❌ Failed to process confirmation. Please try again.',
+                'error'
+            );
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleCancel = async () => {
+        if (isProcessing) return;
+
+        setIsProcessing(true);
+        console.log('❌ CRUD operations cancelled by user');
+
+        try {
+            // Signal cancellation to the workflow
+            workflowOrchestrator.signalConfirmation(message.data?.workflowId, false);
+
+            // Add cancellation response to conversation
+            workflowOrchestrator.addAssistantMessage(
+                '❌ Operation cancelled by user.',
+                'warning'
+            );
+        } catch (error) {
+            console.error('Failed to signal cancellation:', error);
+            workflowOrchestrator.addAssistantMessage(
+                '❌ Failed to process cancellation. Please try again.',
+                'error'
+            );
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const operations = message.data?.operations || [];
+    const autoCreations = message.data?.autoCreations || [];
+    const totalOperations = message.data?.totalOperations || 0;
+    const existingCount = message.data?.existingCount || 0;
+    const newCount = message.data?.newCount || 0;
+
+    // Separate existing and new operations
+    const existingOperations = operations.filter((op: any) => op.exists);
+    const newOperations = operations.filter((op: any) => !op.exists);
+
+    return (
+        <div style={{
+            background: 'linear-gradient(135deg, #fff3e0, #fff8e1)',
+            border: '2px solid #ff9800',
+            borderRadius: '12px',
+            padding: '20px',
+            margin: '12px 0',
+            position: 'relative',
+            boxShadow: '0 4px 12px rgba(255, 152, 0, 0.15)'
+        }}>
+            {/* Header */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                marginBottom: '16px'
+            }}>
+                <div style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    backgroundColor: '#ff9800',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '20px'
+                }}>
+                    ⚠️
+                </div>
+                <div>
+                    <h3 style={{
+                        margin: '0 0 4px 0',
+                        color: '#e65100',
+                        fontSize: '18px',
+                        fontWeight: 'bold'
+                    }}>
+                        Confirm CRUD Operations
+                    </h3>
+                    <p style={{
+                        margin: 0,
+                        color: '#bf360c',
+                        fontSize: '14px'
+                    }}>
+                        Please review and confirm the following metadata operations
+                    </p>
+                </div>
+            </div>
+
+            {/* Summary */}
+            <div style={{
+                backgroundColor: '#fff',
+                border: '1px solid #e0e0e0',
+                borderRadius: '8px',
+                padding: '16px',
+                marginBottom: '16px'
+            }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '12px'
+                }}>
+                    <span style={{
+                        fontSize: '16px',
+                        fontWeight: 'bold',
+                        color: '#333'
+                    }}>
+                        Operation Summary
+                    </span>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {existingCount > 0 && (
+                            <span style={{
+                                backgroundColor: '#fff3e0',
+                                color: '#ef6c00',
+                                padding: '4px 12px',
+                                borderRadius: '16px',
+                                fontSize: '14px',
+                                fontWeight: 'bold'
+                            }}>
+                                {existingCount} existing
+                            </span>
+                        )}
+                        {newCount > 0 && (
+                            <span style={{
+                                backgroundColor: '#e8f5e8',
+                                color: '#2e7d32',
+                                padding: '4px 12px',
+                                borderRadius: '16px',
+                                fontSize: '14px',
+                                fontWeight: 'bold'
+                            }}>
+                                {newCount} new
+                            </span>
+                        )}
+                    </div>
+                </div>
+
+                <div style={{ fontSize: '14px', color: '#666' }}>
+                    <p style={{ margin: '0 0 8px 0' }}>
+                        {message.data?.message || 'Ready to execute the planned operations.'}
+                    </p>
+                    {existingCount > 0 && (
+                        <p style={{
+                            margin: '8px 0 0 0',
+                            color: '#ef6c00',
+                            fontWeight: '500'
+                        }}>
+                            ⚠️ {existingCount} resource(s) already exist and will be updated if you proceed.
+                        </p>
+                    )}
+                </div>
+            </div>
+
+            {/* Operations List */}
+            <div style={{
+                backgroundColor: '#fff',
+                border: '1px solid #e0e0e0',
+                borderRadius: '8px',
+                padding: '16px',
+                marginBottom: '16px',
+                maxHeight: showDetails ? '400px' : '200px',
+                overflowY: showDetails ? 'auto' : 'hidden'
+            }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '12px'
+                }}>
+                    <h4 style={{
+                        margin: 0,
+                        color: '#333',
+                        fontSize: '16px'
+                    }}>
+                        Planned Operations
+                    </h4>
+                    <button
+                        onClick={() => setShowDetails(!showDetails)}
+                        style={{
+                            backgroundColor: 'transparent',
+                            border: '1px solid #2196f3',
+                            borderRadius: '4px',
+                            color: '#2196f3',
+                            cursor: 'pointer',
+                            padding: '4px 12px',
+                            fontSize: '12px'
+                        }}
+                    >
+                        {showDetails ? 'Show Less' : 'Show Details'}
+                    </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {operations.slice(0, showDetails ? operations.length : 3).map((op: any, index: number) => (
+                        <div
+                            key={index}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '12px',
+                                padding: '8px 12px',
+                                backgroundColor: index % 2 === 0 ? '#f9f9f9' : '#fff',
+                                borderRadius: '4px',
+                                border: '1px solid #e0e0e0'
+                            }}
+                        >
+                            <div style={{
+                                width: '24px',
+                                height: '24px',
+                                borderRadius: '50%',
+                                backgroundColor: op.willCreate ? '#4caf50' : '#2196f3',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '12px',
+                                color: 'white',
+                                fontWeight: 'bold'
+                            }}>
+                                {op.type === 'create' ? '+' : op.type === 'update' ? '↑' : op.type === 'delete' ? '×' : '?'}
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <div style={{
+                                    fontSize: '14px',
+                                    fontWeight: 'bold',
+                                    color: '#333',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px'
+                                }}>
+                                    {op.resourceType}: {op.resourceName}
+                                    {op.exists ? (
+                                        <span style={{
+                                            fontSize: '10px',
+                                            backgroundColor: '#fff3e0',
+                                            color: '#ef6c00',
+                                            padding: '2px 6px',
+                                            borderRadius: '8px',
+                                            fontWeight: 'bold'
+                                        }}>
+                                            EXISTS
+                                        </span>
+                                    ) : (
+                                        <span style={{
+                                            fontSize: '10px',
+                                            backgroundColor: '#e8f5e8',
+                                            color: '#2e7d32',
+                                            padding: '2px 6px',
+                                            borderRadius: '8px',
+                                            fontWeight: 'bold'
+                                        }}>
+                                            NEW
+                                        </span>
+                                    )}
+                                </div>
+                                <div style={{
+                                    fontSize: '12px',
+                                    color: '#666'
+                                }}>
+                                    {op.type} operation • Dependencies: {op.dependenciesResolved ? 'Resolved' : 'Pending'}
+                                    {op.exists && op.existingId && (
+                                        <span style={{ marginLeft: '8px', fontFamily: 'monospace', fontSize: '11px' }}>
+                                            ID: {op.existingId}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+
+                    {!showDetails && operations.length > 3 && (
+                        <div style={{
+                            textAlign: 'center',
+                            padding: '8px',
+                            color: '#666',
+                            fontSize: '12px'
+                        }}>
+                            ... and {operations.length - 3} more operations
+                        </div>
+                    )}
+                </div>
+
+                {/* Auto-creations warning */}
+                {autoCreations.length > 0 && (
+                    <div style={{
+                        marginTop: '16px',
+                        padding: '12px',
+                        backgroundColor: '#fff3e0',
+                        border: '1px solid #ff9800',
+                        borderRadius: '4px'
+                    }}>
+                        <div style={{
+                            fontSize: '14px',
+                            fontWeight: 'bold',
+                            color: '#e65100',
+                            marginBottom: '4px'
+                        }}>
+                            ⚠️ Auto-created Dependencies
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#bf360c' }}>
+                            The following dependencies will be automatically created:
+                            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                                {autoCreations.map((ac: any, index: number) => (
+                                    <li key={index}>{ac.type}: {ac.name}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Action Buttons */}
+            <div style={{
+                display: 'flex',
+                gap: '12px',
+                justifyContent: 'flex-end',
+                paddingTop: '16px',
+                borderTop: '1px solid #e0e0e0'
+            }}>
+                <button
+                    onClick={handleCancel}
+                    style={{
+                        padding: '10px 20px',
+                        backgroundColor: '#f44336',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        transition: 'background-color 0.2s'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#d32f2f'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#f44336'}
+                >
+                    ❌ Cancel
+                </button>
+                <button
+                    onClick={handleConfirm}
+                    style={{
+                        padding: '10px 20px',
+                        backgroundColor: '#4caf50',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        transition: 'background-color 0.2s'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#388e3c'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#4caf50'}
+                >
+                    ✅ Confirm & Execute
+                </button>
+            </div>
+        </div>
+    );
+};
 
 const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
     const progress = message.data?.progress || 0;
     const steps = message.data?.steps || [];
     const currentStep = message.data?.currentStep;
+    const estimatedTimeRemaining = message.data?.estimatedTimeRemaining;
+
+    // Find current active step for display
+    const activeStep = steps.find((step: any) => step.status === 'active') ||
+                      steps.find((step: any) => step.id === currentStep);
+
+    // Format time remaining
+    const formatTimeRemaining = (ms: number) => {
+        if (ms < 60000) return '< 1m';
+        const minutes = Math.ceil(ms / 60000);
+        return `~${minutes}m`;
+    };
 
     return (
-        <div style={{
-            backgroundColor: '#f3e5f5',
-            border: '1px solid #9c27b0',
-            borderRadius: '8px',
+        <div className="progress-message-enhanced" style={{
+            background: 'linear-gradient(135deg, rgba(33, 150, 243, 0.08), rgba(25, 118, 210, 0.05))',
+            border: '1px solid rgba(33, 150, 243, 0.2)',
+            borderRadius: '12px',
             padding: '16px',
-            color: '#4a148c'
+            margin: '8px 0',
+            position: 'relative',
+            overflow: 'hidden'
         }}>
-            {/* Progress Header */}
+            {/* Animated background gradient */}
+            <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'linear-gradient(45deg, transparent, rgba(33, 150, 243, 0.03), transparent)',
+                backgroundSize: '200% 200%',
+                animation: 'gradient-shift 3s ease infinite',
+                pointerEvents: 'none'
+            }} />
+
             <div style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
-                marginBottom: '12px',
-                fontSize: '16px',
-                fontWeight: 'bold'
+                gap: '16px',
+                position: 'relative',
+                zIndex: 1
             }}>
-                <span>🔄</span>
-                <span>{message.content}</span>
-                {progress > 0 && (
-                    <span style={{
-                        fontSize: '12px',
-                        color: '#666',
-                        marginLeft: 'auto'
-                    }}>
-                        {Math.round(progress)}%
-                    </span>
-                )}
-            </div>
-
-            {/* Progress Bar */}
-            {progress > 0 && (
-                <div style={{ marginBottom: '16px' }}>
+                {/* Enhanced elegant busy indicator */}
+                <div className="progress-ring-elegant" style={{
+                    position: 'relative',
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }}>
+                    {/* Outer ring - gradient border */}
                     <div style={{
-                        width: '100%',
-                        height: '8px',
-                        backgroundColor: '#e0e0e0',
-                        borderRadius: '4px',
-                        overflow: 'hidden'
-                    }}>
-                        <div style={{
-                            width: `${progress}%`,
-                            height: '100%',
-                            backgroundColor: '#9c27b0',
-                            transition: 'width 0.5s ease'
-                        }} />
-                    </div>
+                        position: 'absolute',
+                        width: '32px',
+                        height: '32px',
+                        border: '3px solid transparent',
+                        borderTop: '3px solid #2196f3',
+                        borderRight: '3px solid #1976d2',
+                        borderRadius: '50%',
+                        animation: 'spin 1.5s linear infinite'
+                    }} />
+
+                    {/* Inner ring - pulsing effect */}
+                    <div style={{
+                        position: 'absolute',
+                        width: '16px',
+                        height: '16px',
+                        border: '2px solid #e3f2fd',
+                        borderRadius: '50%',
+                        animation: 'pulse-ring 1.5s ease-out infinite'
+                    }} />
+
+                    {/* Center dot */}
+                    <div style={{
+                        width: '6px',
+                        height: '6px',
+                        backgroundColor: '#2196f3',
+                        borderRadius: '50%',
+                        animation: 'pulse-dot 1.5s ease-in-out infinite'
+                    }} />
                 </div>
-            )}
 
-            {/* Steps Progress (if available) */}
-            {steps.length > 0 && (
-                <div style={{ marginBottom: '12px' }}>
+                {/* Progress content */}
+                <div style={{ flex: 1 }}>
                     <div style={{
-                        fontSize: '12px',
-                        color: '#666',
-                        marginBottom: '8px',
-                        fontWeight: 'bold'
+                        fontSize: '15px',
+                        fontWeight: '600',
+                        color: '#1976d2',
+                        marginBottom: '4px'
                     }}>
-                        Steps:
+                        {message.content}
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {steps.map((step: any, index: number) => {
-                            const isCompleted = step.status === 'completed';
-                            const isActive = step.status === 'active';
-                            const isCurrent = step.id === currentStep;
 
-                            return (
+                    {/* Progress details */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        flexWrap: 'wrap'
+                    }}>
+                        {/* Progress percentage */}
+                        {progress > 0 && (
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '13px',
+                                color: '#1976d2',
+                                fontWeight: '500'
+                            }}>
+                                <span>Progress:</span>
+                                <span style={{
+                                    backgroundColor: '#e3f2fd',
+                                    padding: '2px 8px',
+                                    borderRadius: '10px',
+                                    fontWeight: 'bold'
+                                }}>
+                                    {Math.round(progress)}%
+                                </span>
+                            </div>
+                        )}
+
+                        {/* Current step info */}
+                        {activeStep && (
+                            <div style={{
+                                fontSize: '13px',
+                                color: '#666',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                            }}>
+                                <span>📋</span>
+                                <span>{activeStep.label}</span>
+                            </div>
+                        )}
+
+                        {/* Time remaining */}
+                        {estimatedTimeRemaining && estimatedTimeRemaining > 0 && (
+                            <div style={{
+                                fontSize: '13px',
+                                color: '#666',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                            }}>
+                                <span>⏱️</span>
+                                <span>{formatTimeRemaining(estimatedTimeRemaining)} remaining</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Enhanced progress bar */}
+                    {progress > 0 && (
+                        <div style={{
+                            marginTop: '12px',
+                            width: '100%',
+                            height: '6px',
+                            backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            position: 'relative'
+                        }}>
+                            <div style={{
+                                width: `${progress}%`,
+                                height: '100%',
+                                background: 'linear-gradient(90deg, #2196f3, #1976d2)',
+                                borderRadius: '3px',
+                                transition: 'width 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                                position: 'relative'
+                            }}>
+                                {/* Animated shine effect */}
+                                <div style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent)',
+                                    animation: 'progress-fill 2s ease-in-out infinite'
+                                }} />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Step indicators */}
+                    {steps.length > 1 && (
+                        <div style={{
+                            display: 'flex',
+                            gap: '8px',
+                            marginTop: '12px',
+                            flexWrap: 'wrap'
+                        }}>
+                            {steps.slice(0, 5).map((step: any, index: number) => (
                                 <div
                                     key={step.id}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
-                                        gap: '8px',
-                                        padding: '4px 0'
+                                        gap: '4px',
+                                        padding: '4px 8px',
+                                        borderRadius: '12px',
+                                        fontSize: '11px',
+                                        fontWeight: '500',
+                                        backgroundColor: step.status === 'completed' ? '#e8f5e8' :
+                                                       step.status === 'active' ? '#e3f2fd' : '#f5f5f5',
+                                        color: step.status === 'completed' ? '#2e7d32' :
+                                               step.status === 'active' ? '#1976d2' : '#666',
+                                        border: step.status === 'active' ? '1px solid #2196f3' : '1px solid transparent',
+                                        animation: step.status === 'active' ? 'pulse 2s infinite' : 'none'
                                     }}
                                 >
-                                    <div style={{
-                                        width: '16px',
-                                        height: '16px',
-                                        borderRadius: '50%',
-                                        backgroundColor: isCompleted ? '#4caf50' :
-                                                       isActive ? '#2196f3' : '#e0e0e0',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        fontSize: '10px',
-                                        color: 'white'
-                                    }}>
-                                        {isCompleted ? '✓' : isActive ? '●' : '○'}
-                                    </div>
-                                    <span style={{
-                                        fontSize: '12px',
-                                        color: isCompleted ? '#4caf50' :
-                                               isActive ? '#2196f3' : '#666',
-                                        fontWeight: isCurrent ? 'bold' : 'normal'
-                                    }}>
+                                    <span>
+                                        {step.status === 'completed' ? '✓' :
+                                         step.status === 'active' ? '🔄' :
+                                         step.status === 'error' ? '✗' : '○'}
+                                    </span>
+                                    <span style={{ maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                         {step.label}
                                     </span>
-                                    {step.progress !== undefined && isActive && (
-                                        <div style={{
-                                            marginLeft: 'auto',
-                                            fontSize: '10px',
-                                            color: '#666'
-                                        }}>
-                                            {step.progress}%
-                                        </div>
-                                    )}
                                 </div>
-                            );
-                        })}
-                    </div>
+                            ))}
+                            {steps.length > 5 && (
+                                <div style={{
+                                    padding: '4px 8px',
+                                    borderRadius: '12px',
+                                    fontSize: '11px',
+                                    fontWeight: '500',
+                                    backgroundColor: '#f5f5f5',
+                                    color: '#666'
+                                }}>
+                                    +{steps.length - 5} more
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
-            )}
-
-            {/* Additional Details */}
-            {message.data && Object.keys(message.data).length > 0 && (
-                <div style={{
-                    padding: '8px',
-                    backgroundColor: '#fafafa',
-                    borderRadius: '4px',
-                    border: '1px solid #e9ecef',
-                    fontSize: '11px',
-                    color: '#666'
-                }}>
-                    {message.data.details || message.data.message || 'Processing...'}
-                </div>
-            )}
+            </div>
         </div>
     );
 };
@@ -742,6 +1338,9 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
             case 'progress':
                 return <ProgressMessage message={message} />;
 
+            case 'confirmation':
+                return <CrudConfirmation message={message} />;
+
             case 'selection':
                 return (
                     <div>
@@ -1037,8 +1636,30 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
     };
 
     const renderDataContent = (data: any) => {
+        // Handle recovery options - render as simple text suggestions instead of table
+        if (data.recoveryOptions && Array.isArray(data.recoveryOptions)) {
+            return (
+                <div style={{ marginTop: '16px', fontSize: '14px', color: '#666' }}>
+                    {data.recoveryOptions.map((option: any, index: number) => (
+                        <div key={option.id || index} style={{ marginBottom: '8px' }}>
+                            • {option.description}
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
         // Handle tabular results - check for top-level object with arrays (search results) or nested results
         const resultObject = data.results || data; // Fall back to data itself if no .results
+
+        // Skip rendering if this is just a displayType flag without actual data
+        if (resultObject.displayType === 'search_results' && !Object.keys(resultObject).some(key =>
+            key !== 'displayType' && key !== 'originalQuery' && key !== 'totalResults' &&
+            Array.isArray(resultObject[key])
+        )) {
+            return null;
+        }
+
         const hasMultipleResults = resultObject &&
             typeof resultObject === 'object' &&
             !Array.isArray(resultObject) &&

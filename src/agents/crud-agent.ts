@@ -74,11 +74,16 @@ function getReferenceFieldsForResource(resourceType: string): string[] {
 			'relationshipType', 'enrollments', 'events', 'attributes', 'dataValues'
 		];
 
+		console.log(`🔍 Introspecting schema for ${resourceType}, shape keys:`, Object.keys(shape));
+
 		for (const [fieldName, fieldSchema] of Object.entries(shape)) {
 			const fieldDef = (fieldSchema as any)._def;
 
+			console.log(`🔍 Checking field ${fieldName}, typeName: ${fieldDef.typeName}`);
+
 			// Check if this field name is a known reference field
 			if (knownReferenceFields.includes(fieldName)) {
+				console.log(`🔍 Field ${fieldName} is in known reference fields`);
 				referenceFields.push(fieldName);
 				continue;
 			}
@@ -87,15 +92,19 @@ function getReferenceFieldsForResource(resourceType: string): string[] {
 			if (fieldDef.typeName === 'ZodObject') {
 				const objShape = fieldDef.shape;
 				if (objShape.id && (objShape.id as any)._def.typeName === 'ZodString') {
+					console.log(`🔍 Field ${fieldName} is direct object reference`);
 					referenceFields.push(fieldName);
 				}
 			}
 			// Check for array references: z.array(z.object({ id: z.string() }))
 			else if (fieldDef.typeName === 'ZodArray') {
 				const elementDef = (fieldDef.type as any)._def;
+				console.log(`🔍 Field ${fieldName} is array, element typeName: ${elementDef.typeName}`);
 				if (elementDef.typeName === 'ZodObject') {
 					const objShape = elementDef.shape;
+					console.log(`🔍 Array element shape:`, Object.keys(objShape));
 					if (objShape.id && (objShape.id as any)._def.typeName === 'ZodString') {
+						console.log(`🔍 Field ${fieldName} is array of object references`);
 						referenceFields.push(fieldName);
 					}
 				}
@@ -106,6 +115,7 @@ function getReferenceFieldsForResource(resourceType: string): string[] {
 				if (innerDef.typeName === 'ZodObject') {
 					const objShape = innerDef.shape;
 					if (objShape.id && (objShape.id as any)._def.typeName === 'ZodString') {
+						console.log(`🔍 Field ${fieldName} is optional object reference`);
 						referenceFields.push(fieldName);
 					}
 				}
@@ -122,6 +132,7 @@ function getReferenceFieldsForResource(resourceType: string): string[] {
 							const nestedObjShape = nestedDef.shape;
 							if (nestedObjShape.id && (nestedObjShape.id as any)._def.typeName === 'ZodString') {
 								// Found nested reference like dataSetElements[].dataElement
+								console.log(`🔍 Field ${fieldName} has nested references`);
 								referenceFields.push(fieldName);
 								break;
 							}
@@ -134,14 +145,40 @@ function getReferenceFieldsForResource(resourceType: string): string[] {
 		console.warn(`Failed to introspect schema for ${resourceType}:`, error);
 	}
 
+	console.log(`🔍 Final reference fields for ${resourceType}:`, referenceFields);
 	return referenceFields;
 }
 
-// Build dynamic reference fields mapping
-const REFERENCE_FIELDS: Record<string, string[]> = {};
-for (const [resourceType] of Object.entries(Dhis2Schemas)) {
-	REFERENCE_FIELDS[resourceType] = getReferenceFieldsForResource(resourceType);
-}
+// Build reference fields mapping - temporarily hard-coded due to schema introspection issues
+const REFERENCE_FIELDS: Record<string, string[]> = {
+	// Core metadata resources
+	dataElements: ['categoryCombo'],
+	dataSets: ['dataElements'],
+	categories: ['categoryOptions'],
+	categoryCombos: ['categories'],
+	categoryOptions: [],
+
+	// Program resources
+	programs: ['programStages', 'trackedEntityType'],
+	programStages: ['program', 'dataElements'],
+	trackedEntityTypes: ['trackedEntityAttributes'],
+
+	// Other resources
+	indicators: ['indicatorType'],
+	indicatorTypes: [],
+	optionSets: [],
+	validationRules: ['leftSide', 'rightSide'],
+	userRoles: [],
+	userGroups: [],
+	dashboards: ['dashboardItems'],
+	visualizations: [],
+
+	// Default empty for unknown types
+};
+
+
+
+
 
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
@@ -420,6 +457,8 @@ const CrudAnnotation = Annotation.Root({
 	}),
 });
 
+
+
 // Progress tracking helper
 function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof CrudAnnotation.State> {
     return {
@@ -434,6 +473,78 @@ function updateProgress(step: number, stepName: string, message: string, isIndet
 }
 
 
+
+
+
+// Function to automatically populate reference fields based on dependencies
+function populateReferenceFields(operations: any[]): any[] {
+	console.log('🔗 Populating reference fields based on dependencies');
+
+	const updatedOperations = operations.map(operation => {
+		const updatedData = { ...operation.data };
+		let hasChanges = false;
+
+		// Populate references based on resource type and dependencies
+		for (const dependency of operation.dependencies) {
+			// Find the dependency operation
+			const dependencyOp = operations.find(op => op.resourceName === dependency);
+
+			if (dependencyOp) {
+				// Based on the operation's resource type, determine what field should reference this dependency
+				switch (operation.resourceType) {
+					case 'dataElements':
+						if (dependencyOp.resourceType === 'categoryCombos') {
+							updatedData.categoryCombo = dependencyOp.resourceName;
+							hasChanges = true;
+							console.log(`🔗 Set dataElement.categoryCombo = "${dependencyOp.resourceName}"`);
+						}
+						break;
+
+					case 'dataSets':
+						if (dependencyOp.resourceType === 'dataElements') {
+							if (!updatedData.dataElements) updatedData.dataElements = [];
+							if (!updatedData.dataElements.includes(dependencyOp.resourceName)) {
+								updatedData.dataElements.push(dependencyOp.resourceName);
+								hasChanges = true;
+								console.log(`🔗 Added dataElement "${dependencyOp.resourceName}" to dataSet.dataElements`);
+							}
+						}
+						break;
+
+					case 'categories':
+						if (dependencyOp.resourceType === 'categoryOptions') {
+							if (!updatedData.categoryOptions) updatedData.categoryOptions = [];
+							if (!updatedData.categoryOptions.includes(dependencyOp.resourceName)) {
+								updatedData.categoryOptions.push(dependencyOp.resourceName);
+								hasChanges = true;
+								console.log(`🔗 Added categoryOption "${dependencyOp.resourceName}" to category.categoryOptions`);
+							}
+						}
+						break;
+
+					case 'categoryCombos':
+						if (dependencyOp.resourceType === 'categories') {
+							if (!updatedData.categories) updatedData.categories = [];
+							if (!updatedData.categories.includes(dependencyOp.resourceName)) {
+								updatedData.categories.push(dependencyOp.resourceName);
+								hasChanges = true;
+								console.log(`🔗 Added category "${dependencyOp.resourceName}" to categoryCombo.categories`);
+							}
+						}
+						break;
+				}
+			}
+		}
+
+		if (hasChanges) {
+			return { ...operation, data: updatedData };
+		}
+
+		return operation;
+	});
+
+	return updatedOperations;
+}
 
 // Enhanced CRUD Workflow Nodes
 
@@ -500,11 +611,14 @@ async function plan_crud_operations(state: typeof CrudAnnotation.State): Promise
 			status: 'planned' as const
 		})) || [];
 
-		console.log(`📋 Planned ${plannedOperations.length} operations`);
+		// Automatically populate reference fields based on dependencies
+		const operationsWithReferences = populateReferenceFields(plannedOperations);
+
+		console.log(`📋 Planned ${operationsWithReferences.length} operations with populated references`);
 
 		return {
-			plannedOperations,
-			confirmationRequired: plannedOperations.length > 1 // Require confirmation for multi-resource operations
+			plannedOperations: operationsWithReferences,
+			confirmationRequired: operationsWithReferences.length > 1 // Require confirmation for multi-resource operations
 		};
 	} catch (error) {
 		console.error('❌ Planning failed:', error);
@@ -697,6 +811,7 @@ async function resolve_all_references(state: typeof CrudAnnotation.State): Promi
 
 		// Get reference fields for this resource type from dynamically introspected schemas
 		const fieldsToResolve = REFERENCE_FIELDS[operation.resourceType] || [];
+		console.log(`🔍 Resolving references for ${operation.resourceType} ${operation.resourceName}, fields to resolve:`, fieldsToResolve);
 
 		for (const field of fieldsToResolve) {
 			if (resolvedData[field]) {
@@ -724,13 +839,13 @@ async function resolve_all_references(state: typeof CrudAnnotation.State): Promi
 										context: `Referenced in ${operation.resourceType} ${operation.resourceName}`
 									});
 
-									if (resolvedRef?.id) {
-										resolvedData[field] = { id: resolvedRef.id };
-										console.log(`🔗 Resolved external single reference ${item} → ${resolvedRef.id} for field ${field}`);
-									} else {
-										console.warn(`⚠️ Could not resolve single reference: ${item} in ${operation.resourceName} field ${field}`);
-										// Keep original if resolution fails - might be an ID already
-									}
+							if (resolvedRef?.id) {
+								resolvedData[field] = { id: resolvedRef.id };
+								console.log(`🔗 Resolved external single reference ${item} → ${resolvedRef.id} for field ${field}`);
+							} else {
+								console.warn(`⚠️ Could not resolve single reference: ${item} in ${operation.resourceName} field ${field}`);
+								// Keep original if resolution fails - might be an ID already
+							}
 								} catch (error) {
 									console.error(`❌ Error resolving array reference ${item}:`, error);
 									resolvedArray.push(item); // Keep original on error
@@ -746,8 +861,9 @@ async function resolve_all_references(state: typeof CrudAnnotation.State): Promi
 					// Handle single reference (e.g., categoryCombo)
 					if (resolvedResources[resolvedData[field]]) {
 						// Reference to resource in this batch (now includes ALL batch resources)
+						const originalValue = resolvedData[field];
 						resolvedData[field] = { id: resolvedResources[resolvedData[field]].id };
-						console.log(`🔗 Resolved batch single reference ${resolvedData[field]} → ${resolvedResources[resolvedData[field]].id} for field ${field}`);
+						console.log(`🔗 Resolved batch single reference ${originalValue} → ${resolvedResources[originalValue].id} for field ${field}`);
 					} else {
 						// Reference to existing resource - need to resolve it
 						try {
@@ -886,56 +1002,8 @@ async function execute_operations(state: typeof CrudAnnotation.State): Promise<P
 		// Build aggregated payload for all create operations
 		const aggregatedPayload: Record<string, any[]> = {};
 
-		// Create mapping of resource names to generated IDs for reference resolution
-		const resourceNameToIdMap: Record<string, string> = {};
-		for (const operation of state.plannedOperations) {
-			if (operation.plannedId) {
-				resourceNameToIdMap[operation.resourceName] = operation.plannedId;
-			}
-		}
-
-		// Function to resolve references in operation data
-		const resolveReferences = (data: any): any => {
-			if (!data || typeof data !== 'object') return data;
-
-			const resolved = { ...data };
-
-			const resourceType = resolved.resourceType || resolved.type;
-			const fieldsToResolve = REFERENCE_FIELDS[resourceType] || [];
-
-			for (const field of fieldsToResolve) {
-				if (resolved[field]) {
-					if (Array.isArray(resolved[field])) {
-						// Handle array references (e.g., dataElements, categories, categoryOptions)
-						// DHIS2 expects: [{"id": "ID1"}, {"id": "ID2"}]
-						resolved[field] = resolved[field].map((item: any) => {
-							if (typeof item === 'string') {
-								if (resourceNameToIdMap[item]) {
-									return { id: resourceNameToIdMap[item] };
-								} else {
-									// Assume it's already an ID string, convert to object
-									return { id: item };
-								}
-							}
-							return item;
-						});
-					} else if (typeof resolved[field] === 'string') {
-						// Handle single reference (e.g., categoryCombo)
-						// DHIS2 expects: {"id": "ID"}
-						if (resourceNameToIdMap[resolved[field]]) {
-							resolved[field] = { id: resourceNameToIdMap[resolved[field]] };
-						} else {
-							// Assume it's already an ID string, convert to object
-							resolved[field] = { id: resolved[field] };
-						}
-					}
-				}
-			}
-
-			return resolved;
-		};
-
 		// Collect all create operations with their generated IDs
+		// Note: operation.data is already fully resolved from resolve_all_references step
 		const createOperations = state.plannedOperations.filter(op => op.type === 'create');
 
 		for (const operation of createOperations) {
@@ -944,10 +1012,9 @@ async function execute_operations(state: typeof CrudAnnotation.State): Promise<P
 				aggregatedPayload[resourceType] = [];
 			}
 
-			// Resolve references in operation data and add with generated ID
-			const resolvedData = resolveReferences(operation.data);
+			// Use already-resolved operation data directly
 			aggregatedPayload[resourceType].push({
-				...resolvedData,
+				...operation.data, // Already resolved from resolve_all_references
 				id: operation.plannedId,
 				name: operation.resourceName
 			});

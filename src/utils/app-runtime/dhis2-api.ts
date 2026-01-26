@@ -265,55 +265,20 @@ export async function createDhis2MetadataAggregated(
 ): Promise<{ response: any; httpStatus: number; results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> }> {
     const results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> = [];
 
-    // Process each resource type - check existence first
+    // Trust that the aggregatedPayload contains only resources that need to be created
+    // (existence checks already happened in the workflow's resolve_all_references step)
     for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
         for (const resource of resources) {
-            const existsCheck = await checkResourceExists(
-                metadataType,
-                resource.name,
-                resource.id,
-                metadataType === 'dataElements' ? resource.code : undefined
-            );
-            if (existsCheck?.exists) {
-                console.log(`✅ Resource already exists: ${metadataType} '${resource.name}' with ID: ${existsCheck.id}`);
-                results.push({ type: metadataType, id: existsCheck.id, exists: true, created: false });
-                continue;
-            }
             results.push({ type: metadataType, id: resource.id, exists: false, created: true });
         }
     }
 
-    // Filter to only include resources that don't exist
-    const filteredPayload: Record<string, Record<string, any>[]> = {};
-    let hasNewResources = false;
-
-    for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
-        const newResources = resources.filter(resource => {
-            const result = results.find(r => r.type === metadataType && r.id === resource.id);
-            return !result?.exists;
-        });
-
-        if (newResources.length > 0) {
-            filteredPayload[metadataType] = newResources;
-            hasNewResources = true;
-        }
-    }
-
-    if (!hasNewResources) {
-        console.log('All resources already exist, no creation needed');
-        return {
-            response: { status: 'OK', message: 'All resources already exist' },
-            httpStatus: 200,
-            results
-        };
-    }
-
-    console.log('Creating aggregated metadata:', JSON.stringify(filteredPayload, null, 2));
+    console.log('Creating aggregated metadata:', JSON.stringify(aggregatedPayload, null, 2));
 
     const mutationConfig = {
         resource: 'metadata',
         type: 'create',
-        data: filteredPayload,
+        data: aggregatedPayload,
         params: {
             importStrategy: 'CREATE_UPDATE',
             atomic: false

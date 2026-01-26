@@ -13,10 +13,6 @@ import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 
 // Import conversation context
 import { addConversation, conversationContext, createAnalyticsDataContext } from '../utils/conversation-context';
-
-// Import centralized LLM classification service
-import { llmClassificationService } from '../utils/llm-classification-service';
-
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
@@ -53,7 +49,7 @@ function saveAnalyticsDataDirectly(analyticsResult: any): void {
         };
 
         indexedDBStorage.saveAnalytics(analyticsData);
-        console.log('💾 Analytics data saved directly to IndexedDB');
+        console.log('💾 Analytics data saved directly to IndexedDB', analyticsResult, analyticsData);
     } catch (error) {
         console.warn('Failed to save analytics data directly:', error);
     }
@@ -302,6 +298,19 @@ async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Part
 		directSummary: directAnalyticsData?.summary?.substring(0, 50) + '...'
 	});
 
+	// Leverage existing conversation context for follow-up detection
+	const hasExistingAnalytics = directAnalyticsData || context.lastAnalyticsData;
+
+	// If there's existing analytics data available, prefer follow-up analysis
+	// This leverages the system's existing multilingual context awareness
+	if (hasExistingAnalytics) {
+		console.log('🔄 Existing analytics data found, routing to follow-up analysis');
+		return {
+			query,
+			step: 'analyze_existing_data'
+		};
+	}
+
 	// Build context summary for LLM
 	let contextSummary = '';
 	if (context.lastAnalyticsData) {
@@ -407,9 +416,9 @@ Return JSON:
 	}
 }
 
-// Follow-up data analysis function for existing chart data
+// Hybrid LLM-assisted analytics analysis for follow-up questions
 async function analyzeExistingData(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
-	console.log('🔍 Analyzing existing chart data for follow-up query');
+	console.log('🔍 Analyzing existing chart data for follow-up query using hybrid approach');
 
 	const query = state.query;
 	const directAnalyticsData = await getAnalyticsDataDirectly();
@@ -425,48 +434,154 @@ async function analyzeExistingData(state: typeof GraphAnnotation.State): Promise
 		};
 	}
 
-	console.log('📊 Retrieved analytics data for follow-up:', directAnalyticsData.summary);
+	console.log('📊 Retrieved analytics data for follow-up analysis:', directAnalyticsData.summary);
 
-	// Use the stored data for analysis
-	const chartData = directAnalyticsData.rawData || {};
-	const periodData = chartData.periodData || [];
-	const valueData = chartData.valueData || [];
-	const dataSummary = directAnalyticsData.dataSummary || {};
-
-	// Use LLM to analyze the existing chart data based on the follow-up question
-	const analysisPrompt = `
-Analyze this follow-up question about existing analytics data and provide insights.
+	try {
+		// Phase 1: LLM extracts intent and parameters from the follow-up question
+		const intentPrompt = `
+Analyze this follow-up question about analytics data and extract the analysis intent and parameters.
 
 FOLLOW-UP QUESTION: "${query}"
 
-PREVIOUS ANALYTICS CONTEXT:
-- Summary: ${directAnalyticsData.summary}
-- Data points: ${directAnalyticsData.rawData?.chartValues?.length || 0}
-- Periods: ${directAnalyticsData.rawData?.periodData?.join(', ') || 'N/A'}
-- Values: ${directAnalyticsData.rawData?.valueData?.join(', ') || 'N/A'}
-- Total value: ${dataSummary.totalValue}
-- Average value: ${dataSummary.averageValue}
-- Min value: ${dataSummary.minValue}
-- Max value: ${dataSummary.maxValue}
+CONTEXT: The user is asking about previously displayed analytics data.
 
-Provide a natural language answer to the follow-up question based on the analytics data. Focus on:
-- Finding highest/lowest values
-- Identifying trends or patterns
-- Comparing different categories or time periods
-- Extracting specific insights requested
+Extract:
+1. INTENT: What type of analysis is requested? (find_max, find_min, calculate_total, calculate_average, find_trend, compare_periods, etc.)
+2. DIMENSION: What dimension to analyze? (period, value, location, etc.)
+3. METRIC: What metric to compute? (highest, lowest, total, average, etc.)
+4. FILTERS: Any specific filters mentioned? (time periods, categories, etc.)
 
-Answer directly and conversationally, as if you're explaining the data to the user.`;
+Return JSON:
+{
+  "intent": "find_max|find_min|calculate_total|calculate_average|find_trend|compare|etc",
+  "dimension": "period|value|location|category",
+  "metric": "highest|lowest|total|average|sum|etc",
+  "filters": ["filter1", "filter2"],
+  "timeframe": "specific_periods_mentioned_or_null"
+}`;
 
-	try {
-		const result = await model.invoke([new HumanMessage(analysisPrompt)]);
-		const analysis = (result.content as string).trim();
+		const intentResult = await model.invoke([new HumanMessage(intentPrompt)]);
+		const intentAnalysis = JSON.parse((intentResult.content as string).trim());
 
-		console.log('📊 Data analysis result:', analysis);
+		console.log('🤖 Extracted analysis intent:', intentAnalysis);
+
+		// Phase 2: Programmatically compute the requested metrics from stored data
+		const rawData = directAnalyticsData.rawData || {};
+		const chartValues = rawData.chartValues || {};
+		const periodData = chartValues.periodData || [];
+		const valueData = chartValues.valueData || [];
+		const dataSummary = directAnalyticsData.dataSummary || {};
+
+		let computedResult: any = {};
+
+		// Create period-value pairs for analysis
+		const periodValuePairs = periodData.map((period: string, index: number) => ({
+			period,
+			value: valueData[index] || 0
+		}));
+
+		switch (intentAnalysis.intent) {
+			case 'find_max':
+			case 'find_highest':
+				if (intentAnalysis.dimension === 'period') {
+					const maxEntry = periodValuePairs.reduce((max, current) =>
+						current.value > max.value ? current : max
+					);
+					computedResult = {
+						type: 'maximum',
+						dimension: 'period',
+						result: maxEntry.period,
+						value: maxEntry.value,
+						metric: 'highest value'
+					};
+				}
+				break;
+
+			case 'find_min':
+			case 'find_lowest':
+				if (intentAnalysis.dimension === 'period') {
+					const minEntry = periodValuePairs.reduce((min, current) =>
+						current.value < min.value ? current : min
+					);
+					computedResult = {
+						type: 'minimum',
+						dimension: 'period',
+						result: minEntry.period,
+						value: minEntry.value,
+						metric: 'lowest value'
+					};
+				}
+				break;
+
+			case 'calculate_total':
+			case 'find_sum':
+				computedResult = {
+					type: 'total',
+					result: dataSummary.totalValue || valueData.reduce((sum, val) => sum + val, 0),
+					metric: 'total value'
+				};
+				break;
+
+			case 'calculate_average':
+			case 'find_average':
+				computedResult = {
+					type: 'average',
+					result: dataSummary.averageValue || (valueData.reduce((sum, val) => sum + val, 0) / valueData.length),
+					metric: 'average value'
+				};
+				break;
+
+			case 'find_trend':
+				// Simple trend analysis
+				const trend = periodValuePairs.length >= 2 ?
+					(periodValuePairs[periodValuePairs.length - 1].value > periodValuePairs[0].value ? 'increasing' : 'decreasing') :
+					'stable';
+				computedResult = {
+					type: 'trend',
+					result: trend,
+					metric: 'overall trend'
+				};
+				break;
+
+			default:
+				// Fallback: provide general statistics
+				computedResult = {
+					type: 'general',
+					result: dataSummary,
+					metric: 'general statistics'
+				};
+		}
+
+		console.log('🔢 Computed result:', computedResult);
+
+		// Phase 3: LLM humanizes the computed results
+		const humanizePrompt = `
+Convert these computed analytics results into a natural, conversational response.
+
+QUESTION: "${query}"
+COMPUTED RESULT: ${JSON.stringify(computedResult)}
+CONTEXT: ${directAnalyticsData.summary}
+
+Provide a human-friendly answer that:
+- Directly answers the question
+- Uses conversational language
+- Includes the specific numbers/values
+- Provides brief context from the analytics summary
+- Is concise but informative
+
+Answer as if you're explaining the data to the user.`;
+
+		const humanizeResult = await model.invoke([new HumanMessage(humanizePrompt)]);
+		const humanizedResponse = (humanizeResult.content as string).trim();
+
+		console.log('💬 Humanized response:', humanizedResponse);
 
 		const analysisResult = {
 			success: true,
-			message: analysis,
-			// Include the stored data for reference
+			message: humanizedResponse,
+			computedResult,
+			intentAnalysis,
+			// Include stored data for reference
 			chartData: directAnalyticsData.chartData,
 			dataSummary: dataSummary,
 			metadata: directAnalyticsData.metadata,
@@ -484,14 +599,23 @@ Answer directly and conversationally, as if you're explaining the data to the us
 		};
 
 	} catch (error) {
-		console.error('❌ Data analysis failed:', error);
+		console.error('❌ Follow-up analysis failed:', error);
+
+		// Fallback: provide basic information about available data
+		const fallbackResult = {
+			success: true,
+			message: `I have analytics data available showing ${directAnalyticsData.summary}. The data includes ${directAnalyticsData.rawData?.chartValues?.length || 0} data points across ${directAnalyticsData.rawData?.periodData?.length || 0} time periods.`,
+			type: 'analytics',
+			isFollowUpAnalysis: true,
+			followUpQuery: query,
+			fallback: true
+		};
+
+		addConversation(query, 'analytics', fallbackResult);
+
 		return {
 			step: 'completed',
-			finalResult: {
-				success: false,
-				error: `Failed to analyze chart data: ${error.message}`,
-				type: 'analytics'
-			}
+			finalResult: fallbackResult
 		};
 	}
 }
@@ -1973,40 +2097,57 @@ workflow.addNode('handle_timeout_recovery', handle_timeout_recovery);
 workflow.addEdge(START, 'classify_intent');
 
 /**
- * Simplified Linear Flow for Analytics:
- * 1. Intent Classification
- * 2. Metadata Resolution (indicators/dataElements + orgUnits)
- * 3. Data Query (DHIS2 Analytics API)
- * 4. Chart Building (from DHIS2 data rows)
+ * Analytics Workflow Flow:
  *
- * This ensures charts always render when DHIS2 returns valid analytics data.
+ * Initial queries: classify_intent → search_metadata → search_date_periods → search_org_units →
+ *                  search_disaggregations → query_data → build_chart → summarize_analytics_data → END
+ *
+ * Follow-up queries: classify_intent → analyze_existing_data → END
+ *
+ * Selected metadata: classify_intent → parse_selected_metadata → query_data → build_chart → summarize_analytics_data → END
  */
 
 // @ts-ignore
 workflow.addConditionalEdges('classify_intent', (state) => {
+	// Initial routing based on intent
 	if (state.step === 'search_metadata') return 'search_metadata';
 	if (state.step === 'parse_selected_metadata') return 'parse_selected_metadata';
 	if (state.step === 'analyze_existing_data') return 'analyze_existing_data';
+
+	// Sequential flow for analytics pipeline
+	if (state.step === 'search_date_periods') return 'search_date_periods';
+	if (state.step === 'search_org_units') return 'search_org_units';
+	if (state.step === 'search_disaggregations') return 'search_disaggregations';
+	if (state.step === 'query_data') return 'query_data';
+	if (state.step === 'build_chart') return 'build_chart';
+	if (state.step === 'summarize_analytics_data') return 'summarize_analytics_data';
+
 	return END;
 });
 
-// Direct edges for reliable flow - always attempt next step
+// Direct sequential edges for the analytics pipeline
 // @ts-ignore
-workflow.addEdge('parse_selected_metadata', 'query_data'); // Selected metadata always goes to data query
+workflow.addEdge('search_metadata', 'search_date_periods');
 // @ts-ignore
-workflow.addEdge('search_metadata', 'search_date_periods'); // Always try date period search after metadata search
+workflow.addEdge('search_date_periods', 'search_org_units');
 // @ts-ignore
-workflow.addEdge('search_date_periods', 'search_org_units'); // Always try org unit search after date period search
+workflow.addEdge('search_org_units', 'search_disaggregations');
 // @ts-ignore
-workflow.addEdge('search_org_units', 'search_disaggregations'); // Always try disaggregation search after org unit search
+workflow.addEdge('search_disaggregations', 'query_data');
 // @ts-ignore
-workflow.addEdge('search_disaggregations', 'query_data');   // Always proceed to data query after disaggregation attempt
+workflow.addEdge('query_data', 'build_chart');
 // @ts-ignore
-workflow.addEdge('query_data', 'build_chart'); // Build chart after query (processes data)
+workflow.addEdge('build_chart', 'summarize_analytics_data');
 // @ts-ignore
-workflow.addEdge('build_chart', 'summarize_analytics_data'); // Summarize after chart building (uses processed data)
+workflow.addEdge('summarize_analytics_data', END);
+
+// Follow-up analysis bypasses the full pipeline
 // @ts-ignore
-workflow.addEdge('analyze_existing_data', END);            // Follow-up analysis completes workflow
+workflow.addEdge('analyze_existing_data', END);
+
+// Selected metadata goes directly to query (bypasses metadata resolution)
+// @ts-ignore
+workflow.addEdge('parse_selected_metadata', 'query_data');
 
 // Compile the workflow
 const stateGraphAgent = workflow.compile();

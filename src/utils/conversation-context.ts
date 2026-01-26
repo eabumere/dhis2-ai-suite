@@ -6,6 +6,7 @@
  */
 
 import { ChatModels } from './chat-model-factory';
+import { indexedDBStorage, type ConversationEntry as IDBConversationEntry, type ConversationMemory as IDBConversationMemory } from './indexeddb-storage';
 
 export interface ConversationEntry {
     id: string;
@@ -67,7 +68,10 @@ export class ConversationContextManager {
             this.llmModel = null;
         }
 
-        this.loadFromStorage();
+        // Load from storage asynchronously (fire and forget for now)
+        this.loadFromStorage().catch(error => {
+            console.warn('Failed to load conversation context on initialization:', error);
+        });
     }
 
     /**
@@ -102,8 +106,11 @@ export class ConversationContextManager {
         // Keep conversation history within limits
         this.trimConversationHistory(50); // Keep last 50 entries
 
-        // Persist to storage
-        this.saveToStorage();
+        // Persist conversation entry to IndexedDB
+        this.saveConversationEntry(entry);
+
+        // Save updated memory context
+        this.saveMemoryToStorage();
 
         return entry;
     }
@@ -629,26 +636,58 @@ Return only "true" or "false".`;
 
 
 
-    private saveToStorage(): void {
+    /**
+     * Save a conversation entry to IndexedDB
+     */
+    private async saveConversationEntry(entry: ConversationEntry): Promise<void> {
         try {
-            // Convert Map to plain object for storage
-            const storageData = this.exportConversation();
-            localStorage.setItem(this.storageKey, JSON.stringify(storageData));
+            await indexedDBStorage.saveConversation(entry);
         } catch (error) {
-            console.warn('Failed to save conversation context to storage:', error);
+            console.warn('Failed to save conversation entry to IndexedDB:', error);
         }
     }
 
-    private loadFromStorage(): void {
+    /**
+     * Save conversation memory to IndexedDB
+     */
+    private async saveMemoryToStorage(): Promise<void> {
         try {
-            const stored = localStorage.getItem(this.storageKey);
-            if (stored) {
-                const parsedData = JSON.parse(stored);
-                this.importConversation(parsedData);
+            await indexedDBStorage.saveMemory(this.storageKey, this.memory);
+        } catch (error) {
+            console.warn('Failed to save conversation memory to IndexedDB:', error);
+        }
+    }
+
+    /**
+     * Load conversation memory from IndexedDB
+     */
+    private async loadMemoryFromStorage(): Promise<void> {
+        try {
+            const loadedMemory = await indexedDBStorage.loadMemory(this.storageKey);
+            if (loadedMemory) {
+                this.memory = loadedMemory;
+                console.log('📚 Loaded conversation memory from IndexedDB');
+            }
+
+            // Also load recent conversations
+            const recentConversations = await indexedDBStorage.loadConversations(50);
+            if (recentConversations.length > 0) {
+                this.memory.conversations = recentConversations;
+                console.log(`📚 Loaded ${recentConversations.length} conversations from IndexedDB`);
             }
         } catch (error) {
-            console.warn('Failed to load conversation context from storage:', error);
+            console.warn('Failed to load conversation context from IndexedDB:', error);
         }
+    }
+
+    private saveToStorage(): void {
+        // For backward compatibility, still save to IndexedDB
+        this.saveMemoryToStorage();
+    }
+
+    private async loadFromStorage(): Promise<void> {
+        // Load from IndexedDB asynchronously
+        await this.loadMemoryFromStorage();
     }
 }
 

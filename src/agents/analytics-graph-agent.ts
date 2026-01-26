@@ -20,13 +20,14 @@ import { llmClassificationService } from '../utils/llm-classification-service';
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
-// Direct analytics data storage functions (bypassing conversation context manager)
-const ANALYTICS_STORAGE_KEY = 'dhis2_analytics_last_result';
+// Direct analytics data storage functions (using IndexedDB)
+import { indexedDBStorage } from '../utils/indexeddb-storage';
 
 function saveAnalyticsDataDirectly(analyticsResult: any): void {
     try {
         // Create a compressed version with essential data only
-        const compressedData = {
+        const analyticsData = {
+            id: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             timestamp: Date.now(),
             query: analyticsResult.query || '',
             summary: analyticsResult.message || '',
@@ -51,38 +52,25 @@ function saveAnalyticsDataDirectly(analyticsResult: any): void {
             }
         };
 
-        localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(compressedData));
-        console.log('💾 Analytics data saved directly to localStorage');
+        indexedDBStorage.saveAnalytics(analyticsData);
+        console.log('💾 Analytics data saved directly to IndexedDB');
     } catch (error) {
         console.warn('Failed to save analytics data directly:', error);
-        // Try to save minimal data if full save fails
-        try {
-            const minimalData = {
-                timestamp: Date.now(),
-                query: analyticsResult.query || '',
-                summary: analyticsResult.message || '',
-                hasData: true
-            };
-            localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(minimalData));
-        } catch (minimalError) {
-            console.warn('Failed to save even minimal analytics data:', minimalError);
-        }
     }
 }
 
-function getAnalyticsDataDirectly(): any | null {
+async function getAnalyticsDataDirectly(): Promise<any | null> {
     try {
-        const stored = localStorage.getItem(ANALYTICS_STORAGE_KEY);
-        if (stored) {
-            const data = JSON.parse(stored);
+        const data = await indexedDBStorage.loadLatestAnalytics();
+        if (data) {
             // Check if data is recent (within last hour)
             const isRecent = Date.now() - data.timestamp < 60 * 60 * 1000;
             if (isRecent) {
-                console.log('📖 Analytics data retrieved directly from localStorage');
+                console.log('📖 Analytics data retrieved directly from IndexedDB');
                 return data;
             } else {
                 console.log('⏰ Analytics data is too old, ignoring');
-                localStorage.removeItem(ANALYTICS_STORAGE_KEY);
+                // Note: Old data will be cleaned up by the storage quota management
             }
         }
     } catch (error) {
@@ -302,8 +290,8 @@ async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Part
 	const query = state.query || state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🔍 Extracted query:', query);
 
-	// First try direct localStorage for analytics data (bypasses conversation context issues)
-	const directAnalyticsData = getAnalyticsDataDirectly();
+	// First try direct IndexedDB for analytics data (bypasses conversation context issues)
+	const directAnalyticsData = await getAnalyticsDataDirectly();
 
 	// Also get conversation context as fallback
 	const context = conversationContext.findRelevantContext(query);
@@ -424,7 +412,7 @@ async function analyzeExistingData(state: typeof GraphAnnotation.State): Promise
 	console.log('🔍 Analyzing existing chart data for follow-up query');
 
 	const query = state.query;
-	const directAnalyticsData = getAnalyticsDataDirectly();
+	const directAnalyticsData = await getAnalyticsDataDirectly();
 
 	if (!directAnalyticsData) {
 		return {

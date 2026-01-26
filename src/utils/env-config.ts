@@ -165,6 +165,13 @@ export const dhis2Config = {
      */
     isDeleteToolEnabled(): boolean {
         return getEnvVarBoolean('DHIS2_ENABLE_DELETE_TOOL', false);
+    },
+
+    /**
+     * Maximum IndexedDB storage size in MB
+     */
+    getIndexedDBMaxStorageMB(): number {
+        return getEnvVarNumber('DHIS2_INDEXEDDB_MAX_STORAGE_MB', 50);
     }
 };
 

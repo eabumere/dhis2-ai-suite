@@ -876,45 +876,13 @@ function generateAnalyticsMemoryId(): string {
 export const createDhis2Category = createLLMFirstTool({
     name: "create_dhis2_category",
     description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option and are created with separate option entities.",
-    schema: z.object({
-        name: z.string().min(1).describe("The name of the data disaggregation category"),
-        categoryOptions: z.array(z.string()).min(1).describe("List of category options like ['Male', 'Female'] or ['Urban', 'Rural']"),
-        dataDimension: z.boolean().default(true).describe("Whether this category can be used in data analysis"),
-        dataDimensionType: z.enum(['DISAGGREGATION', 'ATTRIBUTE']).default('DISAGGREGATION').describe("Whether this category is for data disaggregation or attribute-based categorization")
-    }),
+    schema: Dhis2Schemas.Category,
     metadataType: "categories",
     dhis2SchemaName: "Category",
     preparePayload: async (input) => {
-        const { name, categoryOptions, dataDimension = true, dataDimensionType = 'DISAGGREGATION' } = input;
-
-        // Generate category ID
-        const categoryId = await generateDhis2Id();
-
-        // Generate option IDs and create option entities
-        const optionIds = await Promise.all(
-            categoryOptions.map(async () => await generateDhis2Id())
-        );
-
-        // Build aggregated payload for both categories and category options
         return {
-            categories: [{
-                id: categoryId,
-                name: name,
-                displayName: name,
-                shortName: name.length > 50 ? name.substring(0, 47) + '...' : name,
-                code: generateDhis2Code(name),
-                dataDimension: dataDimension,
-                dataDimensionType: dataDimensionType,
-                categoryOptions: optionIds.map((optionId: string) => ({ id: optionId }))
-            }],
-            categoryOptions: categoryOptions.map((optionName: string, index: number) => ({
-                id: optionIds[index],
-                name: optionName,
-                displayName: optionName,
-                shortName: optionName.length > 50 ? optionName.substring(0, 47) + '...' : optionName,
-                code: generateDhis2Code(optionName),
-                sortOrder: index + 1
-            }))
+            ...input,
+            dataDimensionType: input.dataDimensionType || 'DISAGGREGATION'
         };
     }
 });
@@ -922,10 +890,7 @@ export const createDhis2Category = createLLMFirstTool({
 export const createDhis2CategoryCombo = createLLMFirstTool({
     name: "create_dhis2_category_combo",
     description: "Create DHIS2 category combinations that combine multiple categories for complex disaggregation. For example, combine Age and Gender categories to get Age x Gender breakdowns. Requires at least one category.",
-    schema: z.object({
-        name: z.string().min(1).describe("The name of the category combination"),
-        categories: z.array(z.string()).min(1).describe("List of category names to combine")
-    }),
+    schema: Dhis2Schemas.CategoryCombo,
     metadataType: "categoryCombos",
     dhis2SchemaName: "CategoryCombo",
     preparePayload: async (input) => {
@@ -1012,7 +977,7 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
         return {
             ...otherInput,
             categories: resolvedCategories,
-            dataDimensionType: 'DISAGGREGATION' // Ensure proper dataDimensionType
+            dataDimensionType: input.dataDimensionType || 'DISAGGREGATION' // Ensure proper dataDimensionType
         };
     },
     dependencies: [
@@ -1037,6 +1002,7 @@ export const createDhis2DataSet = createLLMFirstTool({
     description: "Create DHIS2 data sets that define reporting forms and data collection templates. Data sets specify what indicators are collected, the reporting frequency, and which organisation units submit the data. Examples: 'Monthly Immunization Report', 'Quarterly Financial Summary', 'Weekly Surveillance Data'.",
     schema: z.object({
         name: z.string().min(1).describe("The name of the data set/reporting form"),
+        shortName: z.string().optional().describe("Short name (auto-generated from name if not provided)"),
         description: z.string().optional().describe("Description of what this data set collects"),
         periodType: z.enum(['Daily', 'Weekly', 'Monthly', 'Quarterly', 'SixMonthly', 'Yearly', 'FinancialApril', 'FinancialJuly', 'FinancialOct']).default('Monthly').describe("How often data is reported"),
         categoryComboName: z.string().optional().describe("Name of category combination to use for disaggregation (e.g., 'Age and Gender'). If not specified, uses a default category combination.")
@@ -1089,6 +1055,7 @@ export const createDhis2Program = createLLMFirstTool({
     description: "Create DHIS2 programs that define tracker or event-based data collection workflows. Programs are the top-level containers for tracker entities and their enrollment/enrollment processes. Examples: 'HIV Care Program', 'Tuberculosis Case Surveillance', 'Malaria Elimination Initiative'.",
     schema: z.object({
         name: z.string().min(1).describe("The name of the program/workflow"),
+        shortName: z.string().optional().describe("Short name (auto-generated from name if not provided)"),
         description: z.string().optional().describe("Description of the program's purpose and scope"),
         programType: z.enum(['WITH_REGISTRATION', 'WITHOUT_REGISTRATION']).default('WITH_REGISTRATION').describe("WITH_REGISTRATION for tracker programs tracking individual entities over time, WITHOUT_REGISTRATION for event-only programs"),
         version: z.number().int().min(1).default(1).describe("Version number of the program")
@@ -1102,6 +1069,7 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
     description: "Create DHIS2 indicators that calculate performance measures and KPIs from data. Indicators perform mathematical calculations on data values to produce meaningful metrics like coverage rates, completion percentages, or averages. Choose this tool for simple indicators with direct parameter specification. Examples: 'HIV Testing Coverage', 'Vaccination Rate', 'Treatment Success Rate'.",
     schema: z.object({
         name: z.string().min(1).describe("The name of the indicator/performance measure"),
+        shortName: z.string().optional().describe("Short name (auto-generated from name if not provided)"),
         description: z.string().optional().describe("Description of what this indicator measures"),
         numeratorExpression: z.string().min(1).describe("Mathematical expression for the numerator (e.g., '#{HIV_Tests_Completed}')"),
         denominatorExpression: z.string().min(1).describe("Mathematical expression for the denominator (e.g., '#{Target_Population}')"),
@@ -1309,6 +1277,7 @@ export const createDhis2Visualization = createLLMFirstTool({
     description: "Create DHIS2 visualizations (charts and data visualizations) that display data from DHIS2 for analysis and monitoring. Visualizations can show trends, comparisons, and patterns in health data. Examples: 'Monthly Malaria Cases Trend', 'Immunization Coverage by District', 'HIV Testing Monthly Bar Chart'.",
     schema: z.object({
         name: z.string().min(1).describe("The name of the visualization/chart"),
+        shortName: z.string().optional().describe("Short name (auto-generated from name if not provided)"),
         description: z.string().optional().describe("Description of what this visualization shows"),
         visualizationType: z.enum(['COLUMN', 'BAR', 'LINE', 'PIE', 'AREA', 'SINGLE_VALUE', 'PIVOT_TABLE']).default('COLUMN').describe("The type of chart or visualization"),
         dataElementIds: z.array(z.string()).min(1).describe("Array of data element IDs to include in the visualization")
@@ -3698,19 +3667,21 @@ export const createDhis2Option = createLLMFirstTool({
 export const createDhis2DataElement = createLLMFirstTool({
     name: "create_dhis2_data_element",
     description: "Create DHIS2 data elements that collect data values. Data elements are fields in forms that store measurable data like numbers, text, dates, or selections from option sets. Examples: 'HIV test result (Yes/No)', 'Number of patients', 'Age in years', 'Registration date'.",
-    schema: z.object({
-        name: z.string().min(1).describe("The name of the data element"),
-        valueType: z.enum(['TEXT', 'NUMBER', 'INTEGER', 'BOOLEAN', 'DATE', 'DATETIME']).default('TEXT').describe("The data type"),
-        domainType: z.enum(['AGGREGATE', 'TRACKER']).default('AGGREGATE').describe("Domain type"),
-        aggregationType: z.enum(['SUM', 'AVERAGE', 'COUNT', 'NONE']).optional().describe("How values are aggregated"),
-        description: z.string().optional().describe("Description of the data element"),
-        zeroIsSignificant: z.boolean().default(true).describe("Whether zero values are significant"),
-        categoryCombo: z.object({
-            id: z.string()
-        }).optional().describe("Category combination reference for disaggregation. Specify as { id: 'category-combo-uid' }")
-    }),
+    schema: Dhis2Schemas.DataElement,
     metadataType: "dataElements",
-    dhis2SchemaName: "DataElement" // Validates against actual DHIS2 DataElement schema
+    dhis2SchemaName: "DataElement",
+    preparePayload: async (input) => {
+		console.log('Data element preparePayload', input,  {
+			...input,
+			domainType: input.domainType || 'AGGREGATE',
+			aggregationType: input.aggregationType || 'SUM'
+		});
+        return {
+            ...input,
+            domainType: input.domainType || 'AGGREGATE',
+            aggregationType: input.aggregationType || 'SUM'
+        };
+    }
 });
 
 export const createDhis2OptionSet = createLLMFirstTool({

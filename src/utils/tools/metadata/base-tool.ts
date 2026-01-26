@@ -13,6 +13,64 @@ import {
 import { dhis2Api } from '../../app-runtime/dhis2-api';
 
 /**
+ * Extract required field names from a Zod schema for LLM prompting
+ */
+function getRequiredFieldsFromSchema(schema: z.ZodSchema): string[] {
+    // For known schemas that were failing, return hardcoded required fields
+    // This ensures the LLM gets explicit instructions about required fields
+    try {
+        // Try to detect which schema this is by checking for known field patterns
+        const schemaDef = (schema as any)._def;
+
+        if (schemaDef.typeName === 'ZodObject' && schemaDef.shape) {
+            // Check for DataElement schema (has valueType, domainType, aggregationType)
+            if (schemaDef.shape.valueType && schemaDef.shape.domainType && schemaDef.shape.aggregationType) {
+                return ['name', 'valueType', 'domainType', 'aggregationType', 'shortName'];
+            }
+
+            // Check for Category schema (has dataDimension, categoryOptions array)
+            if (schemaDef.shape.dataDimension && schemaDef.shape.categoryOptions && Array.isArray(schemaDef.shape.categoryOptions._def.type._def.shape)) {
+                return ['name', 'shortName', 'dataDimensionType', 'categoryOptions'];
+            }
+
+            // Check for CategoryCombo schema (has categories array, dataDimensionType)
+            if (schemaDef.shape.categories && schemaDef.shape.dataDimensionType && Array.isArray(schemaDef.shape.categories._def.type._def.shape)) {
+                return ['name', 'shortName', 'dataDimensionType', 'categories'];
+            }
+
+            // Check for DataSet schema (has periodType, dataSetElements)
+            if (schemaDef.shape.periodType && schemaDef.shape.dataSetElements) {
+                return ['name', 'shortName', 'periodType', 'dataSetElements'];
+            }
+
+            // Fallback: try to extract dynamically
+            const requiredFields: string[] = [];
+
+            for (const [fieldName, fieldSchema] of Object.entries(schemaDef.shape)) {
+                const fieldDef = (fieldSchema as any)._def;
+
+                // Check if field is required (not optional or nullable by default)
+                const isOptional = fieldDef.typeName === 'ZodOptional' ||
+                                  fieldDef.typeName === 'ZodNullable' ||
+                                  fieldDef.typeName === 'ZodDefault';
+
+                if (!isOptional) {
+                    requiredFields.push(fieldName);
+                }
+            }
+
+            return requiredFields;
+        }
+
+        return [];
+    } catch (error) {
+        console.warn('Failed to extract required fields from schema:', error);
+        // Return common required fields as fallback
+        return ['name', 'shortName'];
+    }
+}
+
+/**
  * New LLM-First Tool Configuration
  * Pure tool calling: LLM selects tool + extracts parameters from schema
  * No custom NL processing in tools - let LLM handle everything
@@ -48,8 +106,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 const transformedInput = config.preparePayload ?
                     await config.preparePayload(llmInput) : llmInput;
 
+
+
                 // 2. Transform LLM input to full DHIS2 object
-                const dhis2Object = {
+                let dhis2Object = {
                     // LLM-provided fields
                     ...transformedInput,
 
@@ -64,6 +124,31 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                         transformedInput.name.toUpperCase().replace(/[^A-Z0-9]/g, '_') :
                         `CODE_${Date.now()}`)
                 };
+
+                // Always populate DHIS2-required fields with defaults based on schema type
+                if (config.dhis2SchemaName) {
+                    switch (config.dhis2SchemaName) {
+                        case 'DataElement':
+                            dhis2Object = {
+                                ...dhis2Object,
+                                domainType: dhis2Object.domainType || 'AGGREGATE',
+                                aggregationType: dhis2Object.aggregationType || 'SUM'
+                            };
+                            break;
+                        case 'Category':
+                            dhis2Object = {
+                                ...dhis2Object,
+                                dataDimensionType: dhis2Object.dataDimensionType || 'DISAGGREGATION'
+                            };
+                            break;
+                        case 'CategoryCombo':
+                            dhis2Object = {
+                                ...dhis2Object,
+                                dataDimensionType: dhis2Object.dataDimensionType || 'DISAGGREGATION'
+                            };
+                            break;
+                    }
+                }
 
                 // 2. Use DLHIS2 schema for validation if provided
                 const schemaToUse = config.dhis2SchemaName ?
@@ -144,10 +229,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
         },
         {
             name: config.name,
-            description: config.description,
+            description: `${config.description}\n\nIMPORTANT: You MUST provide ALL required fields from the schema. The following fields are REQUIRED and cannot be omitted: ${getRequiredFieldsFromSchema(config.schema).join(', ')}. Do not omit any required fields - this will cause API errors.`,
             schema: z.object({
                 resource: config.schema
-            }).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with these properties`),
+            }).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with ALL required properties specified. Required fields: ${getRequiredFieldsFromSchema(config.schema).join(', ')}`),
         }
     );
 }

@@ -724,10 +724,29 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
         return `~${minutes}m`;
     };
 
+    // Check if this progress message indicates completion
+    const isCompleted = message.content.includes('✅') ||
+                       message.content.toLowerCase().includes('completed') ||
+                       message.content.toLowerCase().includes('finished') ||
+                       message.content.toLowerCase().includes('success');
+
+    // Check if this is an error state
+    const isError = message.content.toLowerCase().includes('error') ||
+                   message.content.toLowerCase().includes('failed') ||
+                   message.content.toLowerCase().includes('❌');
+
     return (
         <div className="progress-message-enhanced" style={{
-            background: 'linear-gradient(135deg, rgba(33, 150, 243, 0.08), rgba(25, 118, 210, 0.05))',
-            border: '1px solid rgba(33, 150, 243, 0.2)',
+            background: isCompleted
+                ? 'linear-gradient(135deg, rgba(76, 175, 80, 0.08), rgba(56, 142, 60, 0.05))'
+                : isError
+                ? 'linear-gradient(135deg, rgba(244, 67, 54, 0.08), rgba(211, 47, 47, 0.05))'
+                : 'linear-gradient(135deg, rgba(33, 150, 243, 0.08), rgba(25, 118, 210, 0.05))',
+            border: isCompleted
+                ? '1px solid rgba(76, 175, 80, 0.2)'
+                : isError
+                ? '1px solid rgba(244, 67, 54, 0.2)'
+                : '1px solid rgba(33, 150, 243, 0.2)',
             borderRadius: '12px',
             padding: '16px',
             margin: '8px 0',
@@ -741,9 +760,13 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
                 left: 0,
                 right: 0,
                 bottom: 0,
-                background: 'linear-gradient(45deg, transparent, rgba(33, 150, 243, 0.03), transparent)',
+                backgroundImage: isCompleted
+                    ? 'linear-gradient(45deg, transparent, rgba(76, 175, 80, 0.03), transparent)'
+                    : isError
+                    ? 'linear-gradient(45deg, transparent, rgba(244, 67, 54, 0.03), transparent)'
+                    : 'linear-gradient(45deg, transparent, rgba(33, 150, 243, 0.03), transparent)',
                 backgroundSize: '200% 200%',
-                animation: 'gradient-shift 3s ease infinite',
+                animation: isCompleted || isError ? 'none' : 'gradient-shift 3s ease infinite',
                 pointerEvents: 'none'
             }} />
 
@@ -754,7 +777,7 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
                 position: 'relative',
                 zIndex: 1
             }}>
-                {/* Enhanced elegant busy indicator */}
+                {/* Enhanced status indicator - changes based on completion state */}
                 <div className="progress-ring-elegant" style={{
                     position: 'relative',
                     width: '32px',
@@ -763,36 +786,59 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
                     alignItems: 'center',
                     justifyContent: 'center'
                 }}>
-                    {/* Outer ring - gradient border */}
-                    <div style={{
-                        position: 'absolute',
-                        width: '32px',
-                        height: '32px',
-                        border: '3px solid transparent',
-                        borderTop: '3px solid #2196f3',
-                        borderRight: '3px solid #1976d2',
-                        borderRadius: '50%',
-                        animation: 'spin 1.5s linear infinite'
-                    }} />
+                    {isCompleted ? (
+                        // Completed state - static checkmark
+                        <div style={{
+                            fontSize: '20px',
+                            color: '#4caf50',
+                            fontWeight: 'bold'
+                        }}>
+                            ✓
+                        </div>
+                    ) : isError ? (
+                        // Error state - static X
+                        <div style={{
+                            fontSize: '20px',
+                            color: '#f44336',
+                            fontWeight: 'bold'
+                        }}>
+                            ✗
+                        </div>
+                    ) : (
+                        // In progress state - spinning animation
+                        <>
+                            {/* Outer ring - gradient border */}
+                            <div style={{
+                                position: 'absolute',
+                                width: '32px',
+                                height: '32px',
+                                border: '3px solid transparent',
+                                borderTop: '3px solid #2196f3',
+                                borderRight: '3px solid #1976d2',
+                                borderRadius: '50%',
+                                animation: 'spin 1.5s linear infinite'
+                            }} />
 
-                    {/* Inner ring - pulsing effect */}
-                    <div style={{
-                        position: 'absolute',
-                        width: '16px',
-                        height: '16px',
-                        border: '2px solid #e3f2fd',
-                        borderRadius: '50%',
-                        animation: 'pulse-ring 1.5s ease-out infinite'
-                    }} />
+                            {/* Inner ring - pulsing effect */}
+                            <div style={{
+                                position: 'absolute',
+                                width: '16px',
+                                height: '16px',
+                                border: '2px solid #e3f2fd',
+                                borderRadius: '50%',
+                                animation: 'pulse-ring 1.5s ease-out infinite'
+                            }} />
 
-                    {/* Center dot */}
-                    <div style={{
-                        width: '6px',
-                        height: '6px',
-                        backgroundColor: '#2196f3',
-                        borderRadius: '50%',
-                        animation: 'pulse-dot 1.5s ease-in-out infinite'
-                    }} />
+                            {/* Center dot */}
+                            <div style={{
+                                width: '6px',
+                                height: '6px',
+                                backgroundColor: '#2196f3',
+                                borderRadius: '50%',
+                                animation: 'pulse-dot 1.5s ease-in-out infinite'
+                            }} />
+                        </>
+                    )}
                 </div>
 
                 {/* Progress content */}

@@ -915,7 +915,6 @@ const TrackerDataGrid: React.FC<TrackerDataGridProps> = ({
                             }
                         }}
                         style={{ minWidth: '120px' }}
-                        disabled={modifiedRows.size === 0}
                     >
                         ✅ Save to DHIS2 {modifiedRows.size > 0 && `(${modifiedRows.size} edited)`}
                     </Button>

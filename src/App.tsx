@@ -289,12 +289,24 @@ const MyApp: FC = () => {
 							console.log(`📄 Read text file: ${attachment.name} (${fileContent.length} characters)`);
 						}
 
-						// Add file content to messages with proper typing
+						// Register file with orchestrator for agents to access
+						const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+						await workflowOrchestrator.registerFile(fileId, fileContent, {
+							name: attachment.name,
+							type: attachment.type,
+							size: attachment.size,
+							isBinary: isBinary
+						});
+
+						// Set as current file for agents that need it
+						workflowOrchestrator['currentFileId'] = fileId;
+
+						// Add file reference to messages with proper typing
 						const fileMessage: any = {
 							role: 'user',
 							content: `File: ${attachment.name}`,
 							attachments: [{
-								id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+								id: fileId,
 								name: attachment.name,
 								type: attachment.type,
 								size: attachment.size
@@ -309,6 +321,7 @@ const MyApp: FC = () => {
 						}
 
 						messages.push(fileMessage);
+						console.log(`📋 Registered file ${attachment.name} with orchestrator as ${fileId}`);
 					} catch (fileError) {
 						console.warn(`Could not read file ${attachment.name}:`, fileError);
 						// Still include the message but without file content

@@ -387,16 +387,26 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
 
     // First, check the orchestrator's file registry for uploaded CSV files
     if (state.orchestrator && typeof state.orchestrator.getCurrentFile === 'function') {
-        const currentFile = state.orchestrator.getCurrentFile();
-        if (currentFile && !currentFile.isBinary && currentFile.type === 'text/csv') {
-            try {
-                console.log(`📊 Aggregate Data Agent: Found CSV file in registry: ${currentFile.name} (${currentFile.content.length} chars)`);
-                csvData = parseCSV(currentFile.content as string);
-                hasCSVFile = true;
-                console.log('📊 Aggregate Data Agent: Successfully parsed CSV from file registry');
-            } catch (error) {
-                console.warn('📊 Aggregate Data Agent: Failed to parse CSV from file registry:', error);
+        try {
+            const currentFile = await state.orchestrator.getCurrentFile();
+            if (currentFile && !currentFile.isBinary && currentFile.type === 'text/csv') {
+                try {
+                    console.log(`📊 Aggregate Data Agent: Found CSV file in registry: ${currentFile.name} (${currentFile.content.length} chars)`);
+                    csvData = parseCSV(currentFile.content as string);
+                    hasCSVFile = true;
+                    console.log('📊 Aggregate Data Agent: Successfully parsed CSV from file registry');
+                } catch (error) {
+                    console.warn('📊 Aggregate Data Agent: Failed to parse CSV from file registry:', error);
+                }
+            } else if (!currentFile) {
+                console.log('📊 Aggregate Data Agent: No current file found in orchestrator');
+            } else if (currentFile.isBinary) {
+                console.log('📊 Aggregate Data Agent: Current file is binary, not processing as CSV');
+            } else if (currentFile.type !== 'text/csv') {
+                console.log(`📊 Aggregate Data Agent: Current file is not CSV (type: ${currentFile.type}), not processing`);
             }
+        } catch (error) {
+            console.warn('📊 Aggregate Data Agent: Failed to get current file:', error);
         }
     }
 

@@ -174,13 +174,41 @@ async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnota
 				}
 			};
 		} else if (actionIntent === 'update_data_value') {
-			console.log('🔄 Detected data value update request, routing to aggregate agent');
-			// For data value updates, set the flag and route to aggregate agent
-			return {
-				dataEntryCategory: 'aggregate_data',
-				originalQuery: query,
-				isDataValueUpdate: true
-			};
+			console.log('🔄 Detected data value update request, handling directly via orchestrator');
+
+			// Parse the update request to identify what to update
+			const updateDetails = await parseDataValueUpdateRequest(query, state.orchestrator);
+			if (updateDetails) {
+				console.log('🔄 Parsed update details:', updateDetails);
+
+				// Call orchestrator's data grid interaction to update the value
+				const updateResult = await state.orchestrator.handleDataValueUpdate(updateDetails);
+				if (updateResult.success) {
+					return {
+						finalResult: {
+							success: true,
+							message: updateResult.message,
+							action: 'data_value_updated'
+						}
+					};
+				} else {
+					return {
+						finalResult: {
+							success: false,
+							error: updateResult.error || 'Failed to update data value',
+							action: 'data_value_update_failed'
+						}
+					};
+				}
+			} else {
+				return {
+					finalResult: {
+						success: false,
+						error: 'Could not parse the data value update request. Please specify which row and what value to update.',
+						action: 'data_value_update_parse_failed'
+					}
+				};
+			}
 		}
 	}
 
@@ -528,6 +556,82 @@ Examples:
 		console.log('🔄 Data Entry Router: Falling back to enhanced keyword-based selection options');
 
 		return generateFallbackDataEntrySelectionOptions(query);
+	}
+}
+
+// Parse data value update request to extract update details
+async function parseDataValueUpdateRequest(query: string, orchestrator: any): Promise<{
+	rowIndex: number;
+	colIndex: number;
+	newValue: string;
+	reasoning: string;
+} | null> {
+	try {
+		console.log('🔍 Parsing data value update request:', query);
+
+		// Get the current data grid to understand the structure
+		const currentDataGrid = orchestrator?.currentUIState?.conversation
+			?.filter((msg: any) => msg.type === 'data_grid')
+			?.pop();
+
+		if (!currentDataGrid?.data) {
+			console.warn('No current data grid found for update parsing');
+			return null;
+		}
+
+		const { headers, rows } = currentDataGrid.data;
+		const valueColumnIndex = headers?.findIndex((h: string) => h.toLowerCase().includes('value'));
+
+		if (valueColumnIndex === undefined || valueColumnIndex < 0) {
+			console.warn('No value column found in data grid');
+			return null;
+		}
+
+		// Use LLM to parse the update request
+		const parsePrompt = `
+You are parsing a data value update request for a DHIS2 data grid.
+
+DATA GRID STRUCTURE:
+- Headers: [${headers?.join(', ')}]
+- Number of rows: ${rows?.length || 0}
+- Value column index: ${valueColumnIndex}
+
+USER REQUEST: "${query}"
+
+EXTRACT:
+1. Which row to update (0-based index, or "first", "second", "last", etc.)
+2. What the new value should be
+3. Reasoning for your interpretation
+
+Return JSON:
+{
+  "rowIndex": number,
+  "newValue": string,
+  "reasoning": "explanation"
+}
+
+Examples:
+- "update the first row to 10" → {"rowIndex": 0, "newValue": "10", "reasoning": "User specified first row"}
+- "change second entry to 25" → {"rowIndex": 1, "newValue": "25", "reasoning": "User said second entry"}
+- "set last value to 8" → {"rowIndex": ${rows?.length ? rows.length - 1 : 0}, "newValue": "8", "reasoning": "User said last value"}
+`;
+
+		const result = await model.invoke([new HumanMessage(parsePrompt)]);
+		const parsed = JSON.parse(result.content as string);
+
+		if (parsed.rowIndex !== undefined && parsed.newValue !== undefined) {
+			return {
+				rowIndex: parsed.rowIndex,
+				colIndex: valueColumnIndex,
+				newValue: parsed.newValue,
+				reasoning: parsed.reasoning || 'Parsed from user request'
+			};
+		}
+
+		return null;
+	} catch (error) {
+		console.error('Failed to parse data value update request:', error);
+		return null;
 	}
 }
 

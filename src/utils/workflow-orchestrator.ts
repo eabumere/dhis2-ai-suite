@@ -1,6 +1,7 @@
 // Workflow Orchestrator - complete UI and workflow lifecycle management
 import { startNewSession } from './conversation-context';
 import { llmClassificationService } from './llm-classification-service';
+import { indexedDBStorage, FileData } from './indexeddb-storage';
 
 export interface SelectionOptions {
     name: string;
@@ -1636,12 +1637,12 @@ class WorkflowOrchestrator {
     // File management methods for proper file handling
 
     // Register a file in the orchestrator's file registry
-    registerFile(fileId: string, content: Uint8Array | string, metadata: {
+    async registerFile(fileId: string, content: Uint8Array | string, metadata: {
         name: string;
         type: string;
         size: number;
         isBinary?: boolean;
-    }): void {
+    }): Promise<void> {
         // Determine if content is binary based on type or explicit flag
         const isBinary = metadata.isBinary !== undefined ?
             metadata.isBinary :
@@ -1657,17 +1658,74 @@ class WorkflowOrchestrator {
             uploadedAt: Date.now()
         };
 
+        // Store in memory registry for immediate access
         this.fileRegistry.set(fileId, entry);
-        console.log(`📁 Registered file: ${fileId} (${metadata.size} bytes, ${isBinary ? 'binary' : 'text'})`);
+
+        // Set as current file for agents to access
+        this.currentFileId = fileId;
+
+        // Persist to IndexedDB for long-term storage
+        try {
+            const fileData: FileData = {
+                id: fileId,
+                name: metadata.name,
+                type: metadata.type,
+                size: metadata.size,
+                content: content,
+                isBinary: isBinary,
+                uploadedAt: entry.uploadedAt,
+                lastAccessed: entry.uploadedAt
+            };
+
+            await indexedDBStorage.saveFile(fileData);
+            console.log(`📁 Registered and saved file: ${fileId} (${metadata.size} bytes, ${isBinary ? 'binary' : 'text'}) as current file`);
+        } catch (error) {
+            console.error('Failed to save file to IndexedDB:', error);
+            // Continue with in-memory storage only
+        }
     }
 
     // Get file content by ID
-    getFile(fileId: string): FileRegistryEntry | null {
-        const entry = this.fileRegistry.get(fileId);
+    async getFile(fileId: string): Promise<FileRegistryEntry | null> {
+        // First check in-memory registry
+        let entry = this.fileRegistry.get(fileId);
         if (entry) {
             entry.lastAccessed = Date.now();
+            return entry;
         }
-        return entry || null;
+
+        // If not in memory, try to load from IndexedDB
+        try {
+            const fileData = await indexedDBStorage.loadFile(fileId);
+            if (fileData) {
+                // Create FileRegistryEntry from FileData
+                entry = {
+                    id: fileData.id,
+                    name: fileData.name,
+                    type: fileData.type,
+                    size: fileData.size,
+                    content: fileData.content,
+                    isBinary: fileData.isBinary,
+                    uploadedAt: fileData.uploadedAt,
+                    lastAccessed: Date.now()
+                };
+
+                // Store in memory for future access
+                this.fileRegistry.set(fileId, entry);
+
+                // Update last accessed timestamp in IndexedDB
+                indexedDBStorage.updateFileAccess(fileId).catch(error => {
+                    console.warn('Failed to update file access timestamp:', error);
+                });
+
+                console.log(`📁 Loaded file from IndexedDB: ${fileId}`);
+                return entry;
+            }
+        } catch (error) {
+            console.warn('Failed to load file from IndexedDB:', error);
+        }
+
+        return null;
     }
 
     // Check if file exists
@@ -1690,11 +1748,50 @@ class WorkflowOrchestrator {
     }
 
     // Get the current file being processed (for agents that need file access)
-    getCurrentFile(): FileRegistryEntry | null {
+    async getCurrentFile(): Promise<FileRegistryEntry | null> {
         if (!this.currentFileId) {
             return null;
         }
-        return this.getFile(this.currentFileId);
+
+        // First check in-memory registry
+        let entry = this.fileRegistry.get(this.currentFileId);
+        if (entry) {
+            entry.lastAccessed = Date.now();
+            return entry;
+        }
+
+        // If not in memory, try to load from IndexedDB
+        try {
+            const fileData = await indexedDBStorage.loadFile(this.currentFileId);
+            if (fileData) {
+                // Create FileRegistryEntry from FileData
+                entry = {
+                    id: fileData.id,
+                    name: fileData.name,
+                    type: fileData.type,
+                    size: fileData.size,
+                    content: fileData.content,
+                    isBinary: fileData.isBinary,
+                    uploadedAt: fileData.uploadedAt,
+                    lastAccessed: Date.now()
+                };
+
+                // Store in memory for future access
+                this.fileRegistry.set(this.currentFileId, entry);
+
+                // Update last accessed timestamp in IndexedDB
+                indexedDBStorage.updateFileAccess(this.currentFileId).catch(error => {
+                    console.warn('Failed to update file access timestamp:', error);
+                });
+
+                console.log(`📁 Loaded current file from IndexedDB: ${this.currentFileId}`);
+                return entry;
+            }
+        } catch (error) {
+            console.warn('Failed to load current file from IndexedDB:', error);
+        }
+
+        return null;
     }
 
     // Convert file content in messages to file references
@@ -2945,6 +3042,168 @@ class WorkflowOrchestrator {
             reviewMode: false,
             error: 'Save cancelled by user'
         });
+    }
+
+    // Handle data value update requests
+    async handleDataValueUpdate(updateDetails: {
+        rowIndex: number;
+        colIndex: number;
+        newValue: string;
+        reasoning: string;
+    }): Promise<{ success: boolean; message?: string; error?: string }> {
+        console.log('🔄 Handling data value update:', updateDetails);
+
+        try {
+            // Find the current data grid in conversation
+            const dataGridMessage = this.currentUIState.conversation
+                .filter(msg => msg.type === 'data_grid')
+                .pop();
+
+            if (!dataGridMessage?.data) {
+                return {
+                    success: false,
+                    error: 'No data grid found to update'
+                };
+            }
+
+            const { data } = dataGridMessage;
+            const { headers, rows, dataSetId, dataSetName } = data;
+
+            // Validate the update request
+            if (updateDetails.rowIndex < 0 || updateDetails.rowIndex >= rows.length) {
+                return {
+                    success: false,
+                    error: `Invalid row index: ${updateDetails.rowIndex}. Grid has ${rows.length} rows.`
+                };
+            }
+
+            if (updateDetails.colIndex < 0 || updateDetails.colIndex >= headers.length) {
+                return {
+                    success: false,
+                    error: `Invalid column index: ${updateDetails.colIndex}. Grid has ${headers.length} columns.`
+                };
+            }
+
+            // Get the original value for comparison
+            const originalValue = rows[updateDetails.rowIndex][updateDetails.colIndex];
+
+            // Update the data grid
+            const updatedRows = [...rows];
+            updatedRows[updateDetails.rowIndex] = [...rows[updateDetails.rowIndex]];
+            updatedRows[updateDetails.rowIndex][updateDetails.colIndex] = updateDetails.newValue;
+
+            // Update the conversation with the new data
+            const updatedData = {
+                ...data,
+                rows: updatedRows
+            };
+
+            const updatedConversation = this.currentUIState.conversation.map(msg =>
+                msg.id === dataGridMessage.id ? { ...msg, data: updatedData } : msg
+            );
+
+            this.updateUIState({
+                conversation: updatedConversation
+            });
+
+            // Submit the update to DHIS2
+            if (dataSetId) {
+                console.log('📤 Submitting data value update to DHIS2...');
+
+                // Build the data value object for DHIS2
+                const dataValue: any = {};
+
+                // Map grid columns to DHIS2 fields
+                headers.forEach((header: string, colIndex: number) => {
+                    const value = updatedRows[updateDetails.rowIndex][colIndex];
+
+                    // Skip the updated column since we're only updating that specific value
+                    if (colIndex === updateDetails.colIndex) {
+                        // Use the new value for the updated column
+                        switch (header) {
+                            case 'dataElement':
+                                dataValue.dataElement = value;
+                                break;
+                            case 'orgUnit':
+                                dataValue.orgUnit = value;
+                                break;
+                            case 'period':
+                                dataValue.period = value;
+                                break;
+                            case 'categoryOptionCombos':
+                                if (value) dataValue.categoryOptionCombo = value;
+                                break;
+                            case 'attributeOptionCombos':
+                                if (value) dataValue.attributeOptionCombo = value;
+                                break;
+                            case 'value':
+                                dataValue.value = isNaN(Number(value)) ? value : Number(value);
+                                break;
+                        }
+                    } else {
+                        // Use existing values for other columns
+                        switch (header) {
+                            case 'dataElement':
+                                dataValue.dataElement = value;
+                                break;
+                            case 'orgUnit':
+                                dataValue.orgUnit = value;
+                                break;
+                            case 'period':
+                                dataValue.period = value;
+                                break;
+                            case 'categoryOptionCombos':
+                                if (value) dataValue.categoryOptionCombo = value;
+                                break;
+                            case 'attributeOptionCombos':
+                                if (value) dataValue.attributeOptionCombo = value;
+                                break;
+                            case 'value':
+                                dataValue.value = isNaN(Number(value)) ? value : Number(value);
+                                break;
+                        }
+                    }
+                });
+
+                // Submit to DHIS2
+                const { Dhis2Api } = await import('./app-runtime/dhis2-api');
+                const mutationConfig = {
+                    resource: 'dataValues',
+                    type: 'create', // DHIS2 uses 'create' for data values (upsert behavior)
+                    data: dataValue
+                };
+
+                const response = await Dhis2Api.mutate(mutationConfig);
+
+                if (response.success) {
+                    console.log('✅ Data value update successful in DHIS2');
+                    return {
+                        success: true,
+                        message: `Successfully updated value from "${originalValue}" to "${updateDetails.newValue}" in row ${updateDetails.rowIndex + 1}.`
+                    };
+                } else {
+                    console.error('❌ DHIS2 update failed:', response.error);
+                    return {
+                        success: false,
+                        error: `DHIS2 update failed: ${response.error || 'Unknown error'}`
+                    };
+                }
+            } else {
+                // No data set ID, just update the UI
+                console.log('⚠️ No data set ID found, updated UI only');
+                return {
+                    success: true,
+                    message: `Updated value from "${originalValue}" to "${updateDetails.newValue}" in row ${updateDetails.rowIndex + 1} (UI only - no DHIS2 sync).`
+                };
+            }
+
+        } catch (error) {
+            console.error('❌ Data value update failed:', error);
+            return {
+                success: false,
+                error: `Update failed: ${error.message}`
+            };
+        }
     }
 
     // Submit data to DHIS2

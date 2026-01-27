@@ -211,10 +211,49 @@ async function handle_document_upload(state: typeof TrackerDataAnnotation.State)
             filename = fileEntry.name;
             console.log(`📄 Tracker Data Agent: Retrieved current file from orchestrator: ${filename} (${fileBuffer.length} bytes, ${fileEntry.isBinary ? 'binary' : 'text'})`);
         } else {
-            console.warn('📄 Tracker Data Agent: No current file available in orchestrator');
+            console.warn('📄 Tracker Data Agent: No current file available in orchestrator, trying file registry fallback');
         }
     } else {
-        console.warn('📄 Tracker Data Agent: Orchestrator does not support current file retrieval');
+        console.warn('📄 Tracker Data Agent: Orchestrator does not support current file retrieval, trying file registry fallback');
+    }
+
+    // Fallback: Get file from registry directly if getCurrentFile failed
+    if (!fileBuffer && state.orchestrator && typeof state.orchestrator.listFiles === 'function') {
+        const allFiles = state.orchestrator.listFiles();
+        console.log(`📄 Tracker Data Agent: Found ${allFiles.length} files in registry`);
+
+        // Find the most recent PDF or image file (by uploadedAt timestamp)
+        const documentFiles = allFiles
+            .filter(file => {
+                const mimeType = file.type.toLowerCase();
+                return mimeType.includes('pdf') ||
+                       mimeType.includes('image/') ||
+                       mimeType.includes('jpeg') ||
+                       mimeType.includes('png') ||
+                       mimeType.includes('jpg') ||
+                       mimeType.includes('tiff') ||
+                       mimeType.includes('bmp');
+            })
+            .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0)); // Most recent first
+
+        if (documentFiles.length > 0) {
+            const latestFile = documentFiles[0];
+            console.log(`📄 Tracker Data Agent: Using most recent document file from registry: ${latestFile.name} (${latestFile.size} bytes, uploaded at ${new Date(latestFile.uploadedAt || 0).toISOString()})`);
+
+            // Handle binary vs text files appropriately
+            if (latestFile.isBinary) {
+                // For binary files, content should be Uint8Array
+                fileBuffer = latestFile.content as Uint8Array;
+            } else {
+                // For text files, content is string - encode to UTF-8 bytes
+                fileBuffer = typeof latestFile.content === 'string'
+                    ? new TextEncoder().encode(latestFile.content)
+                    : latestFile.content as Uint8Array;
+            }
+            filename = latestFile.name;
+        } else {
+            console.warn('📄 Tracker Data Agent: No PDF or image files found in registry');
+        }
     }
 
     // Fallback: Check for file references in messages (for backward compatibility)

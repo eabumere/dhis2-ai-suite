@@ -56,7 +56,7 @@ export class Dhis2Api {
                 search: {
                     resource: metadataType,
                     params: {
-                        filter: `name:ilike:${encodeURIComponent(query)}`,
+                        filter: `name:ilike:${query}`,
                         fields: 'id,name,code,displayName'
                     }
                 }

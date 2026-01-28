@@ -7,13 +7,13 @@ import {ChatModels} from '../../chat-model-factory';
 
 // Local imports (alphabetically by module)
 import {
-	addResourceToContext,
+	addResourceToContext, callExternalSearchApi,
 	createDhis2Metadata,
 	createDhis2MetadataAggregated,
-	createDhis2MetadataDirect,
+	createDhis2MetadataDirect, filterExternalResultsByType,
 	generateDhis2Code,
 	generateDhis2Id,
-	searchDhis2Metadata
+	searchDhis2Metadata, transformExternalResults
 } from './helpers';
 import {createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool} from './base-tool';
 import type { ProcessedDocumentData } from '../../azure-document-intelligence';
@@ -4076,8 +4076,464 @@ export const deleteDhis2Relationship = createDhis2UpdateTool({
     metadataType: "relationships",
 });
 
+// =============================================================================
+// ENHANCED UPDATE TOOLS - WITH EXACT MATCH AND METADATA SELECTOR FALLBACK
+// =============================================================================
+
+/**
+ * Enhanced Update Tool with Exact Match Logic and Metadata Selector Fallback
+ * Handles user update requests with intelligent matching, change preview, and confirmation workflows
+ */
+export const updateDhis2Resource = tool(
+    async (input: {
+        resourceType: string;
+        resourceName: string;
+        updates: Record<string, any>;
+        confirmUpdate?: boolean;
+        showSelector?: boolean;
+    }) => {
+        try {
+            console.log(`🔄 Enhanced update requested for: ${input.resourceType} "${input.resourceName}" with updates:`, input.updates);
+
+            const { resourceType, resourceName, updates, confirmUpdate = false, showSelector = false } = input;
+
+            // Map resource type to search function
+            const searchFunctionMap: Record<string, any> = {
+                'dataElements': searchDhis2DataElements,
+                'organisationUnits': searchDhis2OrganisationUnits,
+                'categories': searchDhis2Categories,
+                'categoryCombos': searchDhis2CategoryCombos,
+                'categoryOptions': searchDhis2CategoryOptions,
+                'dataSets': searchDhis2DataSets,
+                'programs': searchDhis2Programs,
+                'indicators': searchDhis2Indicators,
+                'users': searchDhis2Users,
+                'relationshipTypes': searchDhis2RelationshipTypes,
+                'optionSets': searchDhis2OptionSets,
+                'validationRules': searchDhis2Validations,
+                'visualizations': searchDhis2Visualizations,
+                'dashboards': searchDhis2Dashboards,
+            };
+
+            const searchFunction = searchFunctionMap[resourceType];
+            if (!searchFunction) {
+                return JSON.stringify({
+                    success: false,
+                    error: `Unsupported resource type for update: ${resourceType}`,
+                    supportedTypes: Object.keys(searchFunctionMap)
+                });
+            }
+
+            // STEP 1: Search for exact matches using unified 2-level search
+            const matches = await searchDhis2Metadata(resourceType, resourceName, 10);
+
+            // If search failed completely, return graceful error
+            if (matches.length === 0) {
+                return JSON.stringify({
+                    success: true,
+                    action: 'SEARCH_FAILED',
+                    message: `No ${resourceType} found matching "${resourceName}". You can still proceed by providing the resource ID directly.`,
+                    resourceType,
+                    resourceName,
+                    alternative: 'manual_id_entry',
+                    suggestion: 'Try searching with partial names or check if the resource exists.'
+                });
+            }
+
+            // STEP 2: Look for exact name match
+            const exactMatches = matches.filter((item: any) =>
+                item.name.toLowerCase() === resourceName.toLowerCase()
+            );
+
+            if (exactMatches.length === 1) {
+                // Single exact match found
+                const exactMatch = exactMatches[0];
+
+                if (!confirmUpdate) {
+                    // Show update preview instead of updating immediately
+                    return JSON.stringify({
+                        success: true,
+                        action: 'UPDATE_PREVIEW',
+                        message: `Found exact match for "${resourceName}". Update requires confirmation.`,
+                        resourceType,
+                        resourceName,
+                        exactMatch: {
+                            id: exactMatch.id,
+                            name: exactMatch.name,
+                            type: resourceType
+                        },
+                        updates: updates,
+                        confirmUpdate: true,
+                        preview: {
+                            currentValues: exactMatch,
+                            proposedChanges: updates,
+                            willChange: Object.keys(updates)
+                        },
+                        impact: `This will update the ${resourceType.slice(0, -1)} "${exactMatch.name}" with the provided changes.`
+                    });
+                }
+
+                // Confirmed update - proceed with actual update
+                const updateFunctionMap: Record<string, any> = {
+                    'dataElements': updateDhis2DataElement,
+                    'organisationUnits': updateDhis2OrganisationUnit,
+                    'categories': updateDhis2Category,
+                    'categoryCombos': updateDhis2CategoryCombo,
+                    'categoryOptions': updateDhis2CategoryOption,
+                    'dataSets': updateDhis2DataSet,
+                    'programs': updateDhis2Program,
+                    'indicators': updateDhis2Indicator,
+                    'users': updateDhis2User,
+                    'relationshipTypes': updateDhis2RelationshipType,
+                    'optionSets': updateDhis2OptionSet,
+                    'validationRules': updateDhis2ValidationRule,
+                    'visualizations': updateDhis2Visualization,
+                    'dashboards': updateDhis2Dashboard,
+                };
+
+                const updateFunction = updateFunctionMap[resourceType];
+                if (!updateFunction) {
+                    return JSON.stringify({
+                        success: false,
+                        error: `Update not supported for resource type: ${resourceType}`
+                    });
+                }
+
+                const updateResult = await updateFunction({
+                    id: exactMatch.id,
+                    resource: { ...exactMatch, ...updates } // Merge existing with updates
+                });
+
+                return JSON.stringify({
+                    success: updateResult.success,
+                    message: updateResult.success
+                        ? `Successfully updated ${resourceType.slice(0, -1)} "${exactMatch.name}"`
+                        : `Failed to update ${resourceType.slice(0, -1)}: ${updateResult.error}`,
+                    resourceType,
+                    resourceName,
+                    updatedResource: updateResult.success ? { ...exactMatch, ...updates } : exactMatch,
+                    changesApplied: Object.keys(updates),
+                    apiResponse: updateResult
+                });
+
+            } else if (exactMatches.length > 1) {
+                // Multiple exact matches - this is unusual but possible
+                return JSON.stringify({
+                    success: false,
+                    error: `Multiple exact matches found for "${resourceName}". Please be more specific.`,
+                    resourceType,
+                    resourceName,
+                    matches: exactMatches,
+                    suggestion: 'Use the resource ID or provide more context to identify the specific resource to update.'
+                });
+
+            } else {
+                // No exact matches found
+                if (matches.length === 0) {
+                    return JSON.stringify({
+                        success: true,
+                        action: 'RESOURCE_NOT_FOUND',
+                        message: `No ${resourceType} found with name "${resourceName}". Nothing to update.`,
+                        resourceType,
+                        resourceName,
+                        suggestion: 'Try searching with partial names or check if the resource exists.'
+                    });
+                }
+
+                // Similar matches found - show selector
+                if (showSelector) {
+                    // Format matches for MetadataSelector
+                    const selectorOptions = matches.map((item: any, index: number) => ({
+                        name: item.name,
+                        id: item.id,
+                        type: resourceType.slice(0, -1) as any // Remove 's' from plural
+                    }));
+
+                    return JSON.stringify({
+                        success: true,
+                        action: 'SHOW_SELECTOR',
+                        message: `No exact match found for "${resourceName}". ${matches.length} similar ${resourceType} found.`,
+                        resourceType,
+                        resourceName,
+                        selectorOptions,
+                        updates: updates,
+                        originalQuery: resourceName,
+                        suggestion: 'Please select the specific resource you want to update from the list below.'
+                    });
+                } else {
+                    // Show possible matches without selector
+                    return JSON.stringify({
+                        success: true,
+                        action: 'SHOW_SIMILAR',
+                        message: `No exact match found for "${resourceName}". Found ${matches.length} similar ${resourceType}:`,
+                        resourceType,
+                        resourceName,
+                        updates: updates,
+                        similarMatches: matches.map((item: any) => ({
+                            id: item.id,
+                            name: item.name
+                        })),
+                        showSelector: true,
+                        suggestion: 'Click to show selector and choose which resource to update.'
+                    });
+                }
+            }
+
+        } catch (error) {
+            console.error('Error in enhanced update:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Update failed: ${error.message}`,
+                resourceType: input.resourceType,
+                resourceName: input.resourceName,
+                updates: input.updates
+            });
+        }
+    },
+    {
+        name: "update_dhis2_resource",
+        description: "Enhanced update tool that first tries exact matching, then falls back to metadata selector if no exact match is found. Shows change preview and requires confirmation before updating.",
+        schema: z.object({
+            resourceType: z.enum([
+                'dataElements', 'organisationUnits', 'categories', 'categoryCombos',
+                'categoryOptions', 'dataSets', 'programs', 'indicators', 'users',
+                'relationshipTypes', 'optionSets', 'validationRules', 'visualizations', 'dashboards'
+            ]).describe("The type of DHIS2 resource to update"),
+            resourceName: z.string().describe("The name of the resource to update (exact match preferred)"),
+            updates: z.record(z.string(), z.any()).describe("The updates to apply to the resource"),
+            confirmUpdate: z.boolean().default(false).describe("Whether update is already confirmed by user"),
+            showSelector: z.boolean().default(false).describe("Whether to show metadata selector for ambiguous matches")
+        })
+    }
+);
+
+// =============================================================================
+// ENHANCED DELETION TOOLS - WITH EXACT MATCH AND METADATA SELECTOR FALLBACK
+// =============================================================================
+
+/**
+ * Enhanced Deletion Tool with Exact Match Logic and Metadata Selector Fallback
+ * Handles user deletion requests with intelligent matching and confirmation workflows
+ */
+export const deleteDhis2Resource = tool(
+    async (input: {
+        resourceType: string;
+        resourceName: string;
+        confirmDeletion?: boolean;
+        showSelector?: boolean;
+    }) => {
+        try {
+            console.log(`🗑️ Enhanced deletion requested for: ${input.resourceType} "${input.resourceName}"`);
+
+            const { resourceType, resourceName, confirmDeletion = false, showSelector = false } = input;
+
+            // Map resource type to search function
+            const searchFunctionMap: Record<string, any> = {
+                'dataElements': searchDhis2DataElements,
+                'organisationUnits': searchDhis2OrganisationUnits,
+                'categories': searchDhis2Categories,
+                'categoryCombos': searchDhis2CategoryCombos,
+                'categoryOptions': searchDhis2CategoryOptions,
+                'dataSets': searchDhis2DataSets,
+                'programs': searchDhis2Programs,
+                'indicators': searchDhis2Indicators,
+                'users': searchDhis2Users,
+                'relationshipTypes': searchDhis2RelationshipTypes,
+                'optionSets': searchDhis2OptionSets,
+                'validationRules': searchDhis2Validations,
+                'visualizations': searchDhis2Visualizations,
+                'dashboards': searchDhis2Dashboards,
+            };
+
+            const searchFunction = searchFunctionMap[resourceType];
+            if (!searchFunction) {
+                return JSON.stringify({
+                    success: false,
+                    error: `Unsupported resource type for deletion: ${resourceType}`,
+                    supportedTypes: Object.keys(searchFunctionMap)
+                });
+            }
+
+            // STEP 1: Search for exact matches using unified 2-level search
+            const matches = await searchDhis2Metadata(resourceType, resourceName, 10);
+
+            // If search failed completely, return graceful error
+            if (matches.length === 0) {
+                return JSON.stringify({
+                    success: true,
+                    action: 'SEARCH_FAILED',
+                    message: `No ${resourceType} found matching "${resourceName}". You can still proceed by providing the resource ID directly.`,
+                    resourceType,
+                    resourceName,
+                    alternative: 'manual_id_entry',
+                    suggestion: 'Try searching with partial names or check if the resource exists.'
+                });
+            }
+
+            // STEP 2: Look for exact name match
+            const exactMatches = matches.filter((item: any) =>
+                item.name.toLowerCase() === resourceName.toLowerCase()
+            );
+
+            if (exactMatches.length === 1) {
+                // Single exact match found
+                const exactMatch = exactMatches[0];
+
+                if (!confirmDeletion) {
+                    // Show confirmation dialog instead of deleting
+                    return JSON.stringify({
+                        success: true,
+                        action: 'CONFIRMATION_REQUIRED',
+                        message: `Found exact match for "${resourceName}". Deletion requires confirmation.`,
+                        resourceType,
+                        resourceName,
+                        exactMatch: {
+                            id: exactMatch.id,
+                            name: exactMatch.name,
+                            type: resourceType
+                        },
+                        confirmDeletion: true,
+                        impact: `This will permanently delete the ${resourceType.slice(0, -1)} "${exactMatch.name}" and may affect related data.`
+                    });
+                }
+
+                // Confirmed deletion - proceed with actual deletion
+                const deleteFunctionMap: Record<string, any> = {
+                    'dataElements': deleteDhis2DataElement,
+                    'organisationUnits': deleteDhis2OrganisationUnit,
+                    'categories': deleteDhis2Category,
+                    'categoryCombos': deleteDhis2CategoryCombo,
+                    'categoryOptions': deleteDhis2CategoryOption,
+                    'dataSets': deleteDhis2DataSet,
+                    'programs': deleteDhis2Program,
+                    'indicators': deleteDhis2Indicator,
+                    'users': deleteDhis2User,
+                    'relationshipTypes': deleteDhis2RelationshipType,
+                    'optionSets': deleteDhis2OptionSet,
+                    'validationRules': deleteDhis2ValidationRule,
+                    'visualizations': () => ({ success: false, error: 'Visualization deletion not implemented' }),
+                    'dashboards': deleteDhis2Dashboard,
+                };
+
+                const deleteFunction = deleteFunctionMap[resourceType];
+                if (!deleteFunction) {
+                    return JSON.stringify({
+                        success: false,
+                        error: `Deletion not supported for resource type: ${resourceType}`
+                    });
+                }
+
+                const deleteResult = await deleteFunction({
+                    id: exactMatch.id,
+                    resource: exactMatch
+                });
+
+                return JSON.stringify({
+                    success: deleteResult.success,
+                    message: deleteResult.success
+                        ? `Successfully deleted ${resourceType.slice(0, -1)} "${exactMatch.name}"`
+                        : `Failed to delete ${resourceType.slice(0, -1)}: ${deleteResult.error}`,
+                    resourceType,
+                    resourceName,
+                    deletedResource: exactMatch,
+                    apiResponse: deleteResult
+                });
+
+            } else if (exactMatches.length > 1) {
+                // Multiple exact matches - this is unusual but possible
+                return JSON.stringify({
+                    success: false,
+                    error: `Multiple exact matches found for "${resourceName}". Please be more specific.`,
+                    resourceType,
+                    resourceName,
+                    matches: exactMatches,
+                    suggestion: 'Use the resource ID or provide more context to identify the specific resource to delete.'
+                });
+
+            } else {
+                // No exact matches found
+                if (matches.length === 0) {
+                    return JSON.stringify({
+                        success: true,
+                        action: 'RESOURCE_NOT_FOUND',
+                        message: `No ${resourceType} found with name "${resourceName}". Nothing to delete.`,
+                        resourceType,
+                        resourceName,
+                        suggestion: 'Try searching with partial names or check if the resource exists.'
+                    });
+                }
+
+                // Similar matches found - show selector
+                if (showSelector) {
+                    // Format matches for MetadataSelector
+                    const selectorOptions = matches.map((item: any, index: number) => ({
+                        name: item.name,
+                        id: item.id,
+                        type: resourceType.slice(0, -1) as any // Remove 's' from plural
+                    }));
+
+                    return JSON.stringify({
+                        success: true,
+                        action: 'SHOW_SELECTOR',
+                        message: `No exact match found for "${resourceName}". ${matches.length} similar ${resourceType} found.`,
+                        resourceType,
+                        resourceName,
+                        selectorOptions,
+                        originalQuery: resourceName,
+                        suggestion: 'Please select the specific resource you want to delete from the list below.'
+                    });
+                } else {
+                    // Show possible matches without selector
+                    return JSON.stringify({
+                        success: true,
+                        action: 'SHOW_SIMILAR',
+                        message: `No exact match found for "${resourceName}". Found ${matches.length} similar ${resourceType}:`,
+                        resourceType,
+                        resourceName,
+                        similarMatches: matches.map((item: any) => ({
+                            id: item.id,
+                            name: item.name
+                        })),
+                        showSelector: true,
+                        suggestion: 'Click to show selector and choose which resource to delete.'
+                    });
+                }
+            }
+
+        } catch (error) {
+            console.error('Error in enhanced deletion:', error);
+            return JSON.stringify({
+                success: false,
+                error: `Deletion failed: ${error.message}`,
+                resourceType: input.resourceType,
+                resourceName: input.resourceName
+            });
+        }
+    },
+    {
+        name: "delete_dhis2_resource",
+        description: "Enhanced deletion tool that first tries exact matching, then falls back to metadata selector if no exact match is found. Always requires confirmation before deletion.",
+        schema: z.object({
+            resourceType: z.enum([
+                'dataElements', 'organisationUnits', 'categories', 'categoryCombos',
+                'categoryOptions', 'dataSets', 'programs', 'indicators', 'users',
+                'relationshipTypes', 'optionSets', 'validationRules', 'visualizations', 'dashboards'
+            ]).describe("The type of DHIS2 resource to delete"),
+            resourceName: z.string().describe("The name of the resource to delete (exact match preferred)"),
+            confirmDeletion: z.boolean().default(false).describe("Whether deletion is already confirmed by user"),
+            showSelector: z.boolean().default(false).describe("Whether to show metadata selector for ambiguous matches")
+        })
+    }
+);
+
 // Export all tools - TEMPORARY: Only including currently migrated LLM-first tools
 export const Dhis2StructuredTools = {
+    // Enhanced Update Tool
+    updateDhis2Resource,
+
+    // Enhanced Deletion Tool
+    deleteDhis2Resource,
+
     // LLM-First Creation Tools (Migrated)
     createDhis2DataElement,
     createDhis2OrganisationUnit,

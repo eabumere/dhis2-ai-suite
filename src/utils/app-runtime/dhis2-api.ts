@@ -57,8 +57,7 @@ export class Dhis2Api {
                     resource: metadataType,
                     params: {
                         filter: `name:ilike:${encodeURIComponent(query)}`,
-                        fields: 'id,name,code,displayName',
-                        paging: false
+                        fields: 'id,name,code,displayName'
                     }
                 }
             });
@@ -231,8 +230,7 @@ export async function checkResourceExists(
                         resource: metadataType,
                         params: {
                             filter: `code:eq:${encodeURIComponent(code)}`,
-                            fields: 'id,name,code,displayName',
-                            paging: false
+                            fields: 'id,name,code,displayName'
                         }
                     }
                 });

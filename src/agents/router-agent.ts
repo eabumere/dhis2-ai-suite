@@ -2,7 +2,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { ChatModels } from '../utils/chat-model-factory';
 import { HumanMessage } from '@langchain/core/messages';
 import { searchAgent } from './search-agent';
-import { crudAgent } from './crud-agent';
+import { createCrudAgent, crudAgent } from './crud-agent';
 import { analyticsGraphAgent } from './analytics-graph-agent';
 import { createRoutedDataEntryAgent } from './routed-data-entry-agent';
 import { addConversation, createMutationDataContext, createSearchDataContext, findCurrentSessionContext } from '../utils/conversation-context';

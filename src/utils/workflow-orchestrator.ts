@@ -1400,11 +1400,8 @@ class WorkflowOrchestrator {
 
             case 'update_data_set':
                 console.log('📝 Updating data set:', data.dataSetId);
-                // TODO: Implement data set update workflow
-                this.addAssistantMessage(
-                    'Data set update functionality will be implemented soon.',
-                    'response'
-                );
+                // For follow-up data entry, submit the data to update existing values
+                this.submitDataToDHIS2();
                 break;
 
             case 'add_row':

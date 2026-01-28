@@ -288,7 +288,8 @@ async function invoke_aggregate_agent(state: typeof DataEntryRouterAnnotation.St
 		// Use the StateGraph-based agent for data import workflows
 		const aggregateDataAgent = createAggregateDataAgent(state.orchestrator);
 		const result = await aggregateDataAgent.invoke({
-			messages: state.messages
+			messages: state.messages,
+			dataEntryType: state.dataEntryType // Pass follow-up context
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;

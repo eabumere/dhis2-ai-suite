@@ -130,14 +130,8 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 
 	// No clarification needed - FIRST: Classify intent properly (new task vs follow-up)
 	const fullConversationHistory = state.orchestrator?.currentUIState?.conversation || state.messages;
-	// Use session-aware context for better intent classification
-	const sessionContext = findCurrentSessionContext(query);
-	const recentSessionMessages = sessionContext.recentConversations.map(entry => ({
-		role: entry.agent === 'router' ? 'user' : 'assistant',
-		content: entry.query,
-		type: entry.agent === 'router' ? 'query' : 'response'
-	}));
-	const intentClassification = await classifyIntentType(query, recentSessionMessages);
+	// Use full conversation history for intent classification (includes UI conversation with data grids)
+	const intentClassification = await classifyIntentType(query, fullConversationHistory);
 	console.log(`🔍 Router: Intent classification: ${intentClassification.type} (${intentClassification.confidence})`, intentClassification);
 
 	// SECOND: Handle based on intent type
@@ -152,7 +146,7 @@ async function classify_intent(state: typeof RouterAnnotation.State): Promise<Pa
 		};
 	} else if (intentClassification.type === 'follow_up') {
 		// This is a follow-up - determine which agent to route to
-		const followUpInfo = await determineFollowUpAgent(query, recentSessionMessages, intentClassification);
+		const followUpInfo = await determineFollowUpAgent(query, fullConversationHistory, intentClassification);
 		console.log(`🔄 Router: Follow-up detected, routing to ${followUpInfo.targetAgent}${followUpInfo.dataEntryType ? ` (${followUpInfo.dataEntryType})` : ''}`);
 
 		return {
@@ -320,10 +314,26 @@ async function invoke_data_entry_router(state: typeof RouterAnnotation.State): P
 	try {
 		// Pass full conversation history for context-aware data entry routing
 		const fullConversationHistory = state.orchestrator?.currentUIState?.conversation || state.messages;
+
+		// Check for recent follow-up data grids to provide dataEntryType context
+		let dataEntryType = state.dataEntryType;
+		if (!dataEntryType) {
+			// Look for recent data grids that indicate follow-up operations
+			const recentDataGrid = fullConversationHistory
+				.filter((msg: any) => msg.type === 'data_grid' && msg.data?.isExistingData)
+				.pop(); // Get most recent follow-up data grid
+
+			if (recentDataGrid?.data?.isExistingData) {
+				// This is a follow-up operation on existing data
+				dataEntryType = 'aggregate'; // Assume aggregate for now, could be extended for tracker
+				console.log('📝 Router: Detected follow-up context from recent data grid, setting dataEntryType:', dataEntryType);
+			}
+		}
+
 		const dataEntryAgent = createRoutedDataEntryAgent(state.orchestrator);
 		const result = await dataEntryAgent.invoke({
 			messages: fullConversationHistory,
-			dataEntryType: state.dataEntryType // Pass data entry type context
+			dataEntryType: dataEntryType // Pass data entry type context
 		});
 
 		const responseContent = result.messages[result.messages.length - 1].content as string;

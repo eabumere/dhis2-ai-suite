@@ -428,6 +428,40 @@ export async function updateDhis2Metadata(
 }
 
 /**
+ * Delete DHIS2 metadata using unified batch API (for multiple resources at once)
+ */
+export async function deleteDhis2Metadata(
+    metadataType: string,
+    payload: Record<string, any> | Record<string, any>[]
+): Promise<any> {
+    const { getUnifiedMetadataManager } = await import('./batch-manager');
+
+    const manager = getUnifiedMetadataManager();
+    manager.clear(); // Clear any pending operations
+
+    // Add delete operations to the batch
+    const items = Array.isArray(payload)
+        ? payload.map(data => ({ type: metadataType, id: data.id, data }))
+        : [{ type: metadataType, id: payload.id, data: payload }];
+
+    for (const item of items) {
+        await manager.addOperation(metadataType, 'DELETE', item.data, { id: item.id });
+    }
+
+    // Execute the batch delete
+    const result = await manager.executeBatch({
+        importStrategy: 'DELETE',
+        atomic: false // Allow partial success for backward compatibility
+    });
+
+    if (!result.success) {
+        throw new Error(`Failed to delete metadata: ${result.errors?.join(', ')}`);
+    }
+
+    return result.apiResponse;
+}
+
+/**
  * Registry of default dependencies for each metadata type
  * This enables recursive dependency resolution
  */

@@ -223,6 +223,12 @@ const AggregateDataAnnotation = Annotation.Root({
         reducer: (left, right) => right || left,
         default: () => null
     }),
+
+    // Follow-up context (passed from router)
+    dataEntryType: Annotation<'tracker' | 'aggregate' | null>({
+        reducer: (left, right) => right || left,
+        default: () => null
+    }),
 });
 
 // Initialize the ChatOpenAI model with Azure configuration
@@ -246,6 +252,10 @@ function updateProgress(step: number, stepName: string, message: string, isIndet
 // 1. Parse CSV upload or initialize empty grid for data entry
 async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
     console.log('📊 Aggregate Data Agent: Processing data entry request');
+
+    // Check if this is follow-up data entry
+    const isFollowUp = state.dataEntryType === 'aggregate';
+    console.log(`📊 Aggregate Data Agent: Follow-up context - dataEntryType: ${state.dataEntryType}, isFollowUp: ${isFollowUp}`);
 
     // Update progress
     updateProgress(1, 'Parsing Request', 'Processing your data entry request...', false);
@@ -1089,6 +1099,9 @@ async function display_data_grid(state: typeof AggregateDataAnnotation.State): P
     console.log('📊 Display Headers:', state.displayHeaders);
     console.log('📊 Dataset:', state.dataSet);
 
+    // Check if this is follow-up data entry
+    const isFollowUp = state.dataEntryType === 'aggregate';
+
     // If we have batch validation results, include them for enhanced tooltips
     let resourceDetails = undefined;
     if (state.resourceDetails) {
@@ -1113,7 +1126,10 @@ async function display_data_grid(state: typeof AggregateDataAnnotation.State): P
             displayNames: displayNames, // Include display names for showing names in cells
             dataSetId: state.dataSet?.id, // Include dataset ID for submission
             dataSetName: state.dataSet?.name, // Include dataset name for display
-            actions: ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit']
+            isExistingData: isFollowUp, // Mark as existing data if this is follow-up
+            actions: isFollowUp
+                ? ['resolve_all', 'edit_cell', 'delete_row', 'update_data_set'] // Follow-up actions
+                : ['resolve_all', 'edit_cell', 'delete_row', 'confirm_submit'] // New data actions
         }
     };
 
@@ -3168,7 +3184,8 @@ export function createAggregateDataAgent(orchestrator: any) {
                 uiAction: '',
                 resourceDetails: new Map(),
                 displayNames: new Map(),
-                finalResult: null
+                finalResult: null,
+                dataEntryType: input.dataEntryType || null // Include follow-up context
             };
 
             try {

@@ -492,6 +492,7 @@ export class UnifiedMetadataManager {
                     success: false,
                     error: error.message,
                 })),
+                apiResponse: null,
                 errors: [error.message],
             };
         }
@@ -564,18 +565,33 @@ export class UnifiedMetadataManager {
                     if (success) successful++;
                     else failed++;
                 } else {
-                    // No specific report found, assume success if no errors at type level
+                    // No specific report found, check success based on operation type and stats
+                    let success = false;
+                    let error = typeStats.errorReports?.[0]?.message;
+
+                    if (item.operation === 'DELETE') {
+                        // For DELETE operations, check if the type stats show successful deletions
+                        success = (typeStats.stats?.deleted > 0 && !typeStats.errorReports?.length) ||
+                                 (typeStats.stats?.total > 0 && typeStats.stats?.deleted === typeStats.stats?.total);
+                        if (!success && !error) {
+                            error = 'Delete operation completed but no detailed confirmation available';
+                        }
+                    } else {
+                        // For other operations, assume success if no errors at type level
+                        success = !typeStats.errorReports?.length;
+                    }
+
                     results.push({
                         type: item.type,
                         operation: item.operation,
                         id: item.id,
-                        success: !typeStats.errorReports?.length,
+                        success,
                         data: item.data,
-                        error: typeStats.errorReports?.[0]?.message,
+                        error,
                         apiResponse: typeStats,
                     });
 
-                    if (!typeStats.errorReports?.length) successful++;
+                    if (success) successful++;
                     else failed++;
                 }
             } else {

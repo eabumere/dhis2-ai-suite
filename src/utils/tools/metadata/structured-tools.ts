@@ -7,7 +7,7 @@ import {ChatModels} from '../../chat-model-factory';
 
 // Local imports (alphabetically by module)
 import {
-	addResourceToContext, callExternalSearchApi,
+	addResourceToContext, callExternalSearchApi, checkResourceExists,
 	createDhis2Metadata,
 	createDhis2MetadataAggregated,
 	createDhis2MetadataDirect, filterExternalResultsByType,
@@ -15,7 +15,7 @@ import {
 	generateDhis2Id,
 	searchDhis2Metadata, transformExternalResults
 } from './helpers';
-import {createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createLLMFirstTool} from './base-tool';
+import {createDhis2GetByIdTool, createDhis2SearchTool, createDhis2UpdateTool, createDhis2DeleteTool, createLLMFirstTool} from './base-tool';
 import type { ProcessedDocumentData } from '../../azure-document-intelligence';
 
 // Schemas
@@ -1647,30 +1647,48 @@ async function createDhis2ReportingFormAggregated({
     periodType?: 'Monthly' | 'Weekly' | 'Daily' | 'Quarterly' | 'Yearly';
 }) {
     try {
-        // Generate all IDs upfront
-        const categoryOptionIds = await Promise.all(
+        // Check for existing resources to avoid 409 conflicts
+        console.log(`Checking for existing resources before creating ${formName} reporting form...`);
+
+        // Check if category already exists
+        const existingCategory = await checkResourceExists('categories', categoryName);
+        console.log(`Category "${categoryName}": ${existingCategory.exists ? 'EXISTS' : 'DOES NOT EXIST'}${existingCategory.exists ? ` (ID: ${existingCategory.id})` : ''}`);
+
+        // Check if data element already exists
+        const existingDataElement = await checkResourceExists('dataElements', dataElementName);
+        console.log(`Data Element "${dataElementName}": ${existingDataElement.exists ? 'EXISTS' : 'DOES NOT EXIST'}${existingDataElement.exists ? ` (ID: ${existingDataElement.id})` : ''}`);
+
+        // Generate IDs only for resources that don't exist
+        const categoryOptionIds = existingCategory.exists ? [] : await Promise.all(
             categoryOptions.map(async (_, index) => ({
                 id: await generateDhis2Id(),
                 index
             }))
         );
 
-        const categoryId = await generateDhis2Id();
-        const categoryComboId = await generateDhis2Id();
-        const dataElementId = await generateDhis2Id();
+        const categoryId = existingCategory.exists ? existingCategory.id! : await generateDhis2Id();
+        const categoryComboId = await generateDhis2Id(); // Category combo is always created new
+        const dataElementId = existingDataElement.exists ? existingDataElement.id! : await generateDhis2Id();
         const dataSetId = await generateDhis2Id();
 
-        // Build complete payload for DHIS2 aggregation
-        const aggregatedPayload = {
-            categoryOptions: categoryOptions.map((option, index) => ({
+        // Build filtered payload - only include resources that don't exist
+        const aggregatedPayload: Record<string, any[]> = {};
+
+        // Only include category options if category doesn't exist
+        if (!existingCategory.exists && categoryOptions.length > 0) {
+            aggregatedPayload.categoryOptions = categoryOptions.map((option, index) => ({
                 id: categoryOptionIds[index].id,
                 name: option,
                 displayName: option,
                 shortName: option.length > 50 ? option.substring(0, 47) + '...' : option,
                 code: generateDhis2Code(option),
                 sortOrder: index + 1,
-            })),
-            categories: [{
+            }));
+        }
+
+        // Only include category if it doesn't exist
+        if (!existingCategory.exists) {
+            aggregatedPayload.categories = [{
                 id: categoryId,
                 name: categoryName,
                 displayName: categoryName,
@@ -1678,16 +1696,22 @@ async function createDhis2ReportingFormAggregated({
                 dataDimension: true,
                 dataDimensionType: 'DISAGGREGATION',
                 categoryOptions: categoryOptionIds.map(item => ({ id: item.id })),
-            }],
-            categoryCombos: [{
-                id: categoryComboId,
-                name: `${categoryName} Combo`,
-                displayName: `${categoryName} Combo`,
-                shortName: `${categoryName} Combo`.substring(0, 50),
-                dataDimensionType: 'DISAGGREGATION',
-                categories: [{ id: categoryId }],
-            }],
-            dataElements: [{
+            }];
+        }
+
+        // Always include category combo (new resource)
+        aggregatedPayload.categoryCombos = [{
+            id: categoryComboId,
+            name: `${categoryName} Combo`,
+            displayName: `${categoryName} Combo`,
+            shortName: `${categoryName} Combo`.substring(0, 50),
+            dataDimensionType: 'DISAGGREGATION',
+            categories: [{ id: categoryId }],
+        }];
+
+        // Only include data element if it doesn't exist
+        if (!existingDataElement.exists) {
+            aggregatedPayload.dataElements = [{
                 id: dataElementId,
                 name: dataElementName,
                 displayName: dataElementName,
@@ -1698,23 +1722,28 @@ async function createDhis2ReportingFormAggregated({
                 zeroIsSignificant: true,
                 categoryCombo: { id: categoryComboId },
                 description: dataElementDescription || `${dataElementName} tracked by ${categoryName}`,
+            }];
+        }
+
+        // Always include data set (new resource)
+        aggregatedPayload.dataSets = [{
+            id: dataSetId,
+            name: formName,
+            displayName: formName,
+            shortName: formName.length > 50 ? formName.substring(0, 47) + '...' : formName,
+            periodType,
+            openFuturePeriods: 1,
+            dataSetElements: [{
+                dataElement: { id: dataElementId },
+                categoryCombo: { id: categoryComboId },
+                sortOrder: 1,
             }],
-            dataSets: [{
-                id: dataSetId,
-                name: formName,
-                displayName: formName,
-                shortName: formName.length > 50 ? formName.substring(0, 47) + '...' : formName,
-                periodType,
-                openFuturePeriods: 1,
-                dataSetElements: [{
-                    dataElement: { id: dataElementId },
-                    categoryCombo: { id: categoryComboId },
-                    sortOrder: 1,
-                }],
-                organisationUnits: [], // Will need to be set based on context
-                description: `Monthly reporting form for ${formName}`,
-            }],
-        };
+            organisationUnits: [], // Will need to be set based on context
+            description: `Monthly reporting form for ${formName}`,
+        }];
+
+        const totalResourcesToCreate = Object.values(aggregatedPayload).reduce((sum, arr) => sum + arr.length, 0);
+        console.log(`Creating ${totalResourcesToCreate} new resources (skipping ${existingCategory.exists && existingDataElement.exists ? 2 : existingCategory.exists || existingDataElement.exists ? 1 : 0} existing resources)`);
 
         // Use the aggregated creation function
         const result = await createDhis2MetadataAggregated(aggregatedPayload);
@@ -1730,6 +1759,10 @@ async function createDhis2ReportingFormAggregated({
             }
         }
 
+        // Calculate created vs existing counts
+        const actuallyCreated = result.results.filter(r => r.created).length;
+        const alreadyExisted = (existingCategory.exists ? 1 : 0) + (existingDataElement.exists ? 1 : 0);
+
         return JSON.stringify({
             success: true,
             message: `Successfully created ${formName} reporting form using aggregated approach (1 API call)`,
@@ -1738,8 +1771,8 @@ async function createDhis2ReportingFormAggregated({
             categoryId,
             categoryOptionIds: categoryOptionIds.map(item => item.id),
             categoryComboId,
-            created: result.results.filter(r => r.created).length, // Actually created count from existence check
-            existing: result.results.filter(r => !r.created).length, // Already existed count
+            created: actuallyCreated, // Actually created count from API response
+            existing: alreadyExisted, // Resources that were skipped because they already existed
             total: result.results.length,
             apiCalls: 1, // Always 1 for aggregated mode
             results: result.results,
@@ -3671,11 +3704,20 @@ export const createDhis2DataElement = createLLMFirstTool({
     metadataType: "dataElements",
     dhis2SchemaName: "DataElement",
     preparePayload: async (input) => {
-		console.log('Data element preparePayload', input,  {
-			...input,
-			domainType: input.domainType || 'AGGREGATE',
-			aggregationType: input.aggregationType || 'SUM'
-		});
+        // Check if data element already exists
+        const existing = await checkResourceExists('dataElements', input.name);
+        if (existing.exists) {
+            console.log(`Data element "${input.name}" already exists (ID: ${existing.id})`);
+            // Return a special marker to indicate resource already exists
+            return {
+                ...input,
+                _exists: true,
+                _existingId: existing.id,
+                domainType: input.domainType || 'AGGREGATE',
+                aggregationType: input.aggregationType || 'SUM'
+            };
+        }
+
         return {
             ...input,
             domainType: input.domainType || 'AGGREGATE',
@@ -3915,163 +3957,163 @@ export const createDhis2DashboardItem = createLLMFirstTool({
 });
 
 // Delete tools - Core
-export const deleteDhis2DataElement = createDhis2UpdateTool({
+export const deleteDhis2DataElement = createDhis2DeleteTool({
     name: "delete_dhis2_data_element",
-    description: "Delete DHIS2 data elements using schema-compliant properties",
+    description: "Delete DHIS2 data elements",
     schema: Dhis2Schemas.DataElement,
     metadataType: "dataElements",
 });
 
-export const deleteDhis2OrganisationUnit = createDhis2UpdateTool({
+export const deleteDhis2OrganisationUnit = createDhis2DeleteTool({
     name: "delete_dhis2_organisation_unit",
-    description: "Delete DHIS2 organisation units using schema-compliant properties",
+    description: "Delete DHIS2 organisation units",
     schema: Dhis2Schemas.OrganisationUnit,
     metadataType: "organisationUnits",
 });
 
-export const deleteDhis2Category = createDhis2UpdateTool({
+export const deleteDhis2Category = createDhis2DeleteTool({
     name: "delete_dhis2_category",
-    description: "Delete DHIS2 categories using schema-compliant properties",
+    description: "Delete DHIS2 categories",
     schema: Dhis2Schemas.Category,
     metadataType: "categories",
 });
 
-export const deleteDhis2CategoryCombo = createDhis2UpdateTool({
+export const deleteDhis2CategoryCombo = createDhis2DeleteTool({
     name: "delete_dhis2_category_combo",
-    description: "Delete DHIS2 category combinations using schema-compliant properties",
+    description: "Delete DHIS2 category combinations",
     schema: Dhis2Schemas.CategoryCombo,
     metadataType: "categoryCombos",
 });
 
-export const deleteDhis2CategoryOption = createDhis2UpdateTool({
+export const deleteDhis2CategoryOption = createDhis2DeleteTool({
     name: "delete_dhis2_category_option",
-    description: "Delete DHIS2 category options using schema-compliant properties",
+    description: "Delete DHIS2 category options",
     schema: Dhis2Schemas.CategoryOption,
     metadataType: "categoryOptions",
 });
 
-export const deleteDhis2DataSet = createDhis2UpdateTool({
+export const deleteDhis2DataSet = createDhis2DeleteTool({
     name: "delete_dhis2_data_set",
-    description: "Delete DHIS2 data sets using schema-compliant properties",
+    description: "Delete DHIS2 data sets",
     schema: Dhis2Schemas.DataSet,
     metadataType: "dataSets",
 });
 
-export const deleteDhis2OrganisationUnitGroup = createDhis2UpdateTool({
+export const deleteDhis2OrganisationUnitGroup = createDhis2DeleteTool({
     name: "delete_dhis2_organisation_unit_group",
-    description: "Delete DHIS2 organisation unit groups using schema-compliant properties",
+    description: "Delete DHIS2 organisation unit groups",
     schema: Dhis2Schemas.OrganisationUnitGroup,
     metadataType: "organisationUnitGroups",
 });
 
-export const deleteDhis2OrganisationUnitGroupSet = createDhis2UpdateTool({
+export const deleteDhis2OrganisationUnitGroupSet = createDhis2DeleteTool({
     name: "delete_dhis2_organisation_unit_group_set",
-    description: "Delete DHIS2 organisation unit group sets using schema-compliant properties",
+    description: "Delete DHIS2 organisation unit group sets",
     schema: Dhis2Schemas.OrganisationUnitGroupSet,
     metadataType: "organisationUnitGroupSets",
 });
 
-export const deleteDhis2Program = createDhis2UpdateTool({
+export const deleteDhis2Program = createDhis2DeleteTool({
     name: "delete_dhis2_program",
-    description: "Delete DHIS2 programs using schema-compliant properties",
+    description: "Delete DHIS2 programs",
     schema: Dhis2Schemas.Program,
     metadataType: "programs",
 });
 
-export const deleteDhis2TrackedEntityType = createDhis2UpdateTool({
+export const deleteDhis2TrackedEntityType = createDhis2DeleteTool({
     name: "delete_dhis2_tracked_entity_type",
-    description: "Delete DHIS2 tracked entity types using schema-compliant properties",
+    description: "Delete DHIS2 tracked entity types",
     schema: Dhis2Schemas.TrackedEntityType,
     metadataType: "trackedEntityTypes",
 });
 
-export const deleteDhis2TrackedEntityAttribute = createDhis2UpdateTool({
+export const deleteDhis2TrackedEntityAttribute = createDhis2DeleteTool({
     name: "delete_dhis2_tracked_entity_attribute",
-    description: "Delete DHIS2 tracked entity attributes using schema-compliant properties",
+    description: "Delete DHIS2 tracked entity attributes",
     schema: Dhis2Schemas.TrackedEntityAttribute,
     metadataType: "trackedEntityAttributes",
 });
 
-export const deleteDhis2Indicator = createDhis2UpdateTool({
+export const deleteDhis2Indicator = createDhis2DeleteTool({
     name: "delete_dhis2_indicator",
-    description: "Delete DHIS2 indicators using schema-compliant properties",
+    description: "Delete DHIS2 indicators",
     schema: Dhis2Schemas.Indicator,
     metadataType: "indicators",
 });
 
-export const deleteDhis2IndicatorType = createDhis2UpdateTool({
+export const deleteDhis2IndicatorType = createDhis2DeleteTool({
     name: "delete_dhis2_indicator_type",
-    description: "Delete DHIS2 indicator types using schema-compliant properties",
+    description: "Delete DHIS2 indicator types",
     schema: Dhis2Schemas.IndicatorType,
     metadataType: "indicatorTypes",
 });
 
-export const deleteDhis2ValidationRule = createDhis2UpdateTool({
+export const deleteDhis2ValidationRule = createDhis2DeleteTool({
     name: "delete_dhis2_validation_rule",
-    description: "Delete DHIS2 validation rules using schema-compliant properties",
+    description: "Delete DHIS2 validation rules",
     schema: Dhis2Schemas.ValidationRule,
     metadataType: "validationRules",
 });
 
-export const deleteDhis2Option = createDhis2UpdateTool({
+export const deleteDhis2Option = createDhis2DeleteTool({
     name: "delete_dhis2_option",
-    description: "Delete DHIS2 options using schema-compliant properties",
+    description: "Delete DHIS2 options",
     schema: Dhis2Schemas.Option,
     metadataType: "options",
 });
 
-export const deleteDhis2OptionSet = createDhis2UpdateTool({
+export const deleteDhis2OptionSet = createDhis2DeleteTool({
     name: "delete_dhis2_option_set",
-    description: "Delete DHIS2 option sets using schema-compliant properties",
+    description: "Delete DHIS2 option sets",
     schema: Dhis2Schemas.OptionSet,
     metadataType: "optionSets",
 });
 
-export const deleteDhis2Dashboard = createDhis2UpdateTool({
+export const deleteDhis2Dashboard = createDhis2DeleteTool({
     name: "delete_dhis2_dashboard",
-    description: "Delete DHIS2 dashboards using schema-compliant properties",
+    description: "Delete DHIS2 dashboards",
     schema: Dhis2Schemas.Dashboard,
     metadataType: "dashboards",
 });
 
-export const deleteDhis2TrackedEntityInstance = createDhis2UpdateTool({
+export const deleteDhis2TrackedEntityInstance = createDhis2DeleteTool({
     name: "delete_dhis2_tracked_entity_instance",
-    description: "Delete DHIS2 tracked entity instances using schema-compliant properties",
+    description: "Delete DHIS2 tracked entity instances",
     schema: Dhis2Schemas.TrackedEntityInstance,
     metadataType: "trackedEntityInstances",
 });
 
-export const deleteDhis2Enrollment = createDhis2UpdateTool({
+export const deleteDhis2Enrollment = createDhis2DeleteTool({
     name: "delete_dhis2_enrollment",
-    description: "Delete DHIS2 enrollments using schema-compliant properties",
+    description: "Delete DHIS2 enrollments",
     schema: Dhis2Schemas.Enrollment,
     metadataType: "enrollments",
 });
 
-export const deleteDhis2Event = createDhis2UpdateTool({
+export const deleteDhis2Event = createDhis2DeleteTool({
     name: "delete_dhis2_event",
-    description: "Delete DHIS2 events using schema-compliant properties",
+    description: "Delete DHIS2 events",
     schema: Dhis2Schemas.Event,
     metadataType: "events",
 });
 
-export const deleteDhis2User = createDhis2UpdateTool({
+export const deleteDhis2User = createDhis2DeleteTool({
     name: "delete_dhis2_user",
-    description: "Delete DHIS2 users using schema-compliant properties",
+    description: "Delete DHIS2 users",
     schema: Dhis2Schemas.User,
     metadataType: "users",
 });
 
-export const deleteDhis2RelationshipType = createDhis2UpdateTool({
+export const deleteDhis2RelationshipType = createDhis2DeleteTool({
     name: "delete_dhis2_relationship_type",
-    description: "Delete DHIS2 relationship types using schema-compliant properties",
+    description: "Delete DHIS2 relationship types",
     schema: Dhis2Schemas.RelationshipType,
     metadataType: "relationshipTypes",
 });
 
-export const deleteDhis2Relationship = createDhis2UpdateTool({
+export const deleteDhis2Relationship = createDhis2DeleteTool({
     name: "delete_dhis2_relationship",
-    description: "Delete DHIS2 relationships using schema-compliant properties",
+    description: "Delete DHIS2 relationships",
     schema: Dhis2Schemas.Relationship,
     metadataType: "relationships",
 });
@@ -4199,7 +4241,7 @@ export const updateDhis2Resource = tool(
                     });
                 }
 
-                const updateResult = await updateFunction({
+                const updateResult = await updateFunction.invoke({
                     id: exactMatch.id,
                     resource: { ...exactMatch, ...updates } // Merge existing with updates
                 });
@@ -4423,9 +4465,8 @@ export const deleteDhis2Resource = tool(
                     });
                 }
 
-                const deleteResult = await deleteFunction({
-                    id: exactMatch.id,
-                    resource: exactMatch
+                const deleteResult = await deleteFunction.invoke({
+                    id: exactMatch.id
                 });
 
                 return JSON.stringify({

@@ -9,6 +9,7 @@ import {
     validateResourceData,
     addResourceToContext,
     updateDhis2Metadata,
+    deleteDhis2Metadata,
 } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
 
@@ -106,7 +107,19 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 const transformedInput = config.preparePayload ?
                     await config.preparePayload(llmInput) : llmInput;
 
-
+                // 1.5. Check if resource already exists (set by preparePayload)
+                if ((transformedInput as any)._exists) {
+                    console.log(`Resource "${llmInput.name}" already exists (ID: ${(transformedInput as any)._existingId}) - skipping creation`);
+                    return JSON.stringify({
+                        success: true,
+                        message: `${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists`,
+                        id: (transformedInput as any)._existingId,
+                        name: llmInput.name,
+                        exists: true,
+                        action: 'skipped_creation',
+                        llm_input: llmInput
+                    });
+                }
 
                 // 2. Transform LLM input to full DHIS2 object
                 let dhis2Object = {
@@ -426,6 +439,69 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                     "Dependencies that need to be resolved before updating"
                 ),
             }).describe(`Update DHIS2 ${config.metadataType} resource with schema objects`),
+        }
+    );
+}
+
+/**
+ * Create a delete tool for DHIS2 resources
+ * Allows deleting existing resources by ID
+ */
+export function createDhis2DeleteTool<T extends z.ZodSchema>(
+    config: LLMToolConfig<T>
+) {
+    return tool(
+        async ({
+            id,
+            resource
+        }: {
+            id?: string;
+            resource?: Record<string, any>;
+        }) => {
+            try {
+                if (!id && !resource?.id) {
+                    throw new Error('Must provide either id parameter or include id in resource object');
+                }
+
+                const resourceId = id || resource!.id;
+
+                // Prepare the resource data for deletion
+                const deleteData = {
+                    id: resourceId,
+                    ...resource
+                };
+
+                // Delete from DHIS2 using the new delete function
+                const deleteResult = await deleteDhis2Metadata(
+                    config.metadataType,
+                    [deleteData]
+                );
+
+                return JSON.stringify({
+                    success: true,
+                    message: `${config.metadataType.slice(0, -1)} deleted successfully`,
+                    id: resourceId,
+                    apiResponse: deleteResult
+                });
+
+            } catch (error) {
+                console.error(`Error deleting ${config.name}:`, error);
+                return JSON.stringify({
+                    success: false,
+                    error: `Failed to delete resource: ${error.message}`,
+                    id
+                });
+            }
+        },
+        {
+            name: `delete_dhis2_${config.metadataType.toLowerCase()}`,
+            description: `Delete an existing DHIS2 ${config.description.split(' ')[0]} resource`,
+            schema: z.object({
+                id: z.string().optional().describe("The ID of the resource to delete"),
+                resource: config.schema.optional().describe(
+                    "Resource object containing the ID to delete"
+                ),
+            }).describe(`Delete DHIS2 ${config.metadataType.slice(0, -1)} resource`),
         }
     );
 }

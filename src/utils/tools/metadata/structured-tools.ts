@@ -1363,9 +1363,9 @@ export const updateDhis2Dashboard = createDhis2UpdateTool({
 });
 
 /**
- * Create DHIS2 metadata using aggregated single payload for related resources
- * Reduces API calls by creating multiple related metadata types in one request
- * Automatically checks for existence to avoid duplicates
+ * Create DHIS2 metadata using aggregated approach by orchestrating individual tools
+ * Each resource is created using its individual tool, which handles existence checking
+ * This provides proper validation and prevents 409 conflicts
  */
 export const createDhis2AggregatedMetadata = tool(
     async ({
@@ -1374,47 +1374,138 @@ export const createDhis2AggregatedMetadata = tool(
         metadata: Record<string, Record<string, any>[]>;
     }) => {
         try {
-            console.log('Creating aggregated metadata:', JSON.stringify(metadata, null, 2));
+            console.log('Creating aggregated metadata using individual tools:', JSON.stringify(metadata, null, 2));
 
-            // Pre-process: Generate IDs for resources that don't have them
-            for (const [metadataType, resources] of Object.entries(metadata)) {
+            // Map resource types to their individual creation tools
+            const toolMap: Record<string, any> = {
+                'dataElements': createDhis2DataElement,
+                'categories': createDhis2Category,
+                'categoryOptions': createDhis2CategoryOption,
+                'categoryCombos': createDhis2CategoryCombo,
+                'dataSets': createDhis2DataSet,
+                'indicators': createDhis2Indicator,
+                'indicatorTypes': createDhis2IndicatorType,
+                'optionSets': createDhis2OptionSet,
+                'options': createDhis2Option,
+                'organisationUnits': createDhis2OrganisationUnit,
+                'organisationUnitGroups': createDhis2OrganisationUnitGroup,
+                'organisationUnitGroupSets': createDhis2OrganisationUnitGroupSet,
+                'programs': createDhis2Program,
+                'trackedEntityTypes': createDhis2TrackedEntityType,
+                'trackedEntityAttributes': createDhis2TrackedEntityAttribute,
+                'programStages': createDhis2ProgramStage,
+                'programRules': createDhis2ProgramRule,
+                'programIndicators': createDhis2ProgramIndicator,
+                'validationRules': createDhis2ValidationRule,
+                'users': createDhis2User,
+                'visualizations': createDhis2Visualization,
+                'dashboards': createDhis2Dashboard,
+                'relationshipTypes': createDhis2RelationshipType,
+                'relationships': createDhis2Relationship,
+            };
+
+            const results: any[] = [];
+            let totalCreated = 0;
+            let totalExisting = 0;
+            let totalErrors = 0;
+
+            // Process each resource type
+            for (const [resourceType, resources] of Object.entries(metadata)) {
+                console.log(`Processing ${resources.length} ${resourceType}...`);
+
+                const tool = toolMap[resourceType];
+                if (!tool) {
+                    console.warn(`No tool available for resource type: ${resourceType}`);
+                    totalErrors++;
+                    results.push({
+                        type: resourceType,
+                        success: false,
+                        error: `No tool available for resource type: ${resourceType}`,
+                        resources: resources.length
+                    });
+                    continue;
+                }
+
+                // Process each resource of this type using its individual tool
                 for (const resource of resources) {
-                    if (!resource.id) {
-                        resource.id = await generateDhis2Id();
+                    try {
+                        console.log(`Creating ${resourceType.slice(0, -1)}: ${resource.name || 'Unnamed'}`);
+
+                        // Call the individual tool for this resource
+                        const result = await tool.invoke({ resource });
+
+                        // Parse the result
+                        let parsedResult;
+                        try {
+                            parsedResult = JSON.parse(result);
+                        } catch (parseError) {
+                            parsedResult = { success: false, error: `Invalid JSON response: ${result}` };
+                        }
+
+                        if (parsedResult.success) {
+                            if (parsedResult.exists) {
+                                // Resource already existed
+                                totalExisting++;
+                                console.log(`✅ ${resourceType.slice(0, -1)} "${resource.name}" already exists`);
+                            } else {
+                                // Resource was created
+                                totalCreated++;
+                                console.log(`✅ Created ${resourceType.slice(0, -1)}: ${parsedResult.name || resource.name}`);
+                            }
+                        } else {
+                            // Creation failed
+                            totalErrors++;
+                            console.error(`❌ Failed to create ${resourceType.slice(0, -1)} "${resource.name}": ${parsedResult.error}`);
+                        }
+
+                        results.push({
+                            type: resourceType,
+                            name: resource.name,
+                            success: parsedResult.success,
+                            exists: parsedResult.exists,
+                            created: !parsedResult.exists && parsedResult.success,
+                            id: parsedResult.id,
+                            error: parsedResult.error,
+                            result: parsedResult
+                        });
+
+                    } catch (error) {
+                        console.error(`Error processing ${resourceType.slice(0, -1)} "${resource.name}":`, error);
+                        totalErrors++;
+                        results.push({
+                            type: resourceType,
+                            name: resource.name,
+                            success: false,
+                            error: error.message,
+                            result: null
+                        });
                     }
                 }
             }
 
-            const result = await createDhis2MetadataAggregated(metadata);
-
-            // Add successfully created resources to context
-            for (const r of result.results) {
-                if (r.created) {
-                    const resource = metadata[r.type]?.find(res => res.id === r.id);
-                    if (resource) {
-                        addResourceToContext(r.id!, r.type, resource.name || `Unnamed ${r.type}`, 'created');
-                    }
-                }
-            }
-
-            const createdCount = result.results.filter(r => r.created).length;
-            const existingCount = result.results.filter(r => !r.created).length;
+            const totalProcessed = results.length;
 
             return JSON.stringify({
-                success: true,
-                message: `Processed ${result.results.length} resources: ${createdCount} created, ${existingCount} already existed`,
-                total: result.results.length,
-                created: createdCount,
-                existing: existingCount,
-                results: result.results,
-                apiResponse: result.response,
+                success: totalErrors === 0,
+                message: `Processed ${totalProcessed} resources: ${totalCreated} created, ${totalExisting} already existed, ${totalErrors} errors`,
+                total: totalProcessed,
+                created: totalCreated,
+                existing: totalExisting,
+                errors: totalErrors,
+                results: results,
+                method: 'individual_tools_orchestration'
             });
 
         } catch (error) {
-            console.error('Error creating aggregated metadata:', error);
+            console.error('Error in aggregated metadata creation:', error);
             return JSON.stringify({
                 success: false,
                 error: `Failed to create aggregated metadata: ${error.message}`,
+                total: 0,
+                created: 0,
+                existing: 0,
+                errors: 1,
+                results: []
             });
         }
     },

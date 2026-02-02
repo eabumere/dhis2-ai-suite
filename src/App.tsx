@@ -246,7 +246,7 @@ const MyApp: FC = () => {
 	};
 
 	// Handle enhanced query submission with file attachments
-	const handleEnhancedQuerySubmit = async (text: string, attachments: FileAttachment[]) => {
+	const handleEnhancedQuerySubmit = async (text: string, attachments: FileAttachment[], selectedAgent: string) => {
 		if (!text.trim() && attachments.length === 0) {
 			workflowOrchestrator.addAssistantMessage(
 				'No input provided. Please either type a question or attach a file for processing. Supported file types: CSV, PDF, images. Try: "Upload my data file" or "Process this document".',
@@ -258,8 +258,8 @@ const MyApp: FC = () => {
 		const queryText = text.trim();
 
 		try {
-			// Add user message to conversation with attachments
-			workflowOrchestrator.addUserMessage(queryText, 'query', {attachments});
+			// Add user message to conversation with attachments and selected agent info
+			workflowOrchestrator.addUserMessage(queryText, 'query', {attachments, selectedAgent});
 
 			// Clear the query input
 			setUiState(prevState => ({...prevState, queryText: ''}));
@@ -333,16 +333,14 @@ const MyApp: FC = () => {
 				}
 			}
 
-			// Start workflow with enhanced input
-			const result = await workflowOrchestrator.startWorkflow(
-				'analytics',
-				{
-					flow: 'analytics_query',
-					input: {messages},
-					orchestrator: workflowOrchestrator
-				},
-				async (input) => {
-					// Router agent routes to appropriate agent based on content + files
+			// Determine flow type and agent function based on selected agent
+			let flowType: string;
+			let agentFunction: (input: any) => Promise<any>;
+
+			if (selectedAgent === 'auto') {
+				// Use router agent for intelligent routing
+				flowType = 'router';
+				agentFunction = async (input) => {
 					console.log('🚀 Invoking context-aware router agent with messages and attachments:', input.input?.messages);
 					const agentResult = await contextRouterAgent?.invoke({messages: input.input?.messages});
 					console.log('📦 Router agent result:', agentResult);
@@ -363,7 +361,52 @@ const MyApp: FC = () => {
 							type: 'parse_error'
 						};
 					}
-				}
+				};
+			} else {
+				// Use selected agent directly
+				flowType = selectedAgent;
+				agentFunction = async (input) => {
+					console.log(`🎯 Invoking ${selectedAgent} agent directly with messages:`, input.input?.messages);
+
+					// Map selectedAgent to actual agent function
+					switch (selectedAgent) {
+						case 'search':
+							const { searchAgent } = await import('./agents/search-agent');
+							return searchAgent.invoke(input);
+						case 'analytics':
+							const { analyticsGraphAgent } = await import('./agents/analytics-graph-agent');
+							return analyticsGraphAgent.invoke(input);
+						case 'metadata':
+							const { createCrudAgent } = await import('./agents/crud-agent');
+							const crudAgent = createCrudAgent();
+							return crudAgent.invoke(input);
+						case 'aggregate-data-entry':
+							const { createRoutedDataEntryAgent } = await import('./agents/routed-data-entry-agent');
+							const dataEntryAgent = createRoutedDataEntryAgent(workflowOrchestrator);
+							return dataEntryAgent.invoke(input);
+						case 'tracker-data-entry':
+							const { createTrackerDataAgent } = await import('./agents/tracker-agent');
+							const trackerAgent = createTrackerDataAgent(workflowOrchestrator);
+							return trackerAgent.invoke(input);
+						case 'event-data-entry':
+							const { eventsAgent } = await import('./agents/events-agent');
+							return eventsAgent.invoke(input);
+						default:
+							throw new Error(`Unknown agent: ${selectedAgent}`);
+					}
+				};
+			}
+
+			// Start workflow with selected agent
+			const result = await workflowOrchestrator.startWorkflow(
+				flowType,
+				{
+					flow: `${selectedAgent}_query`,
+					input: {messages},
+					selectedAgent,
+					orchestrator: workflowOrchestrator
+				},
+				agentFunction
 			);
 
 			// Handle response
@@ -378,13 +421,13 @@ const MyApp: FC = () => {
 		} catch (error) {
 			console.error('Enhanced query submission error:', error);
 			workflowOrchestrator.addAssistantMessage(
-				`File processing failed: ${error.message}. This may be due to unsupported file format, corrupted file content, or processing limits. Please check your file type (supported: CSV, PDF, images) and size (max 10MB). Try re-uploading or contact support if the issue persists.`,
+				`Processing failed: ${error.message}. This may be due to network issues, invalid input format, or system constraints. Please try rephrasing your query or check your connection. If the problem persists, contact support with the error details.`,
 				'error',
 				{
 					error: error.message,
-					errorType: 'file_processing',
-					supportedFormats: ['CSV', 'PDF', 'PNG', 'JPG', 'JPEG'],
-					maxSize: '10MB'
+					errorType: 'processing_error',
+					selectedAgent,
+					timestamp: new Date().toISOString()
 				}
 			);
 		}
@@ -830,7 +873,7 @@ const MyApp: FC = () => {
 							<EnhancedInput
 								value={uiState.queryText}
 								onChange={handleQueryChange}
-								onSubmit={(text, attachments) => handleEnhancedQuerySubmit(text, attachments)}
+								onSubmit={(text, attachments, selectedAgent) => handleEnhancedQuerySubmit(text, attachments, selectedAgent)}
 								disabled={!uiState.queryEnabled}
 								isProcessing={uiState.showProcessing}
 							/>

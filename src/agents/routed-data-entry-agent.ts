@@ -90,7 +90,13 @@ function updateProgress(step: number, stepName: string, message: string, isIndet
 
 // 1. Check for data grid action intent (resolve/submit via natural language)
 async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnotation.State): Promise<Partial<typeof DataEntryRouterAnnotation.State>> {
-	const query = state.messages.filter(m => m.role === 'user').pop()?.content || '';
+	console.log('🔍 Data Entry Router: state.messages:', state.messages);
+	console.log('🔍 Data Entry Router: state.messages length:', state.messages?.length || 0);
+
+	const userMessages = state.messages?.filter(m => m.role === 'user') || [];
+	console.log('🔍 Data Entry Router: user messages:', userMessages);
+
+	const query = userMessages.pop()?.content || '';
 	console.log('🔍 Data Entry Router: Checking for data grid action intent:', query);
 
 	// Update progress
@@ -725,15 +731,37 @@ const dataEntryRouterStateGraph = dataEntryRouterWorkflow.compile();
 export function createRoutedDataEntryAgent(orchestrator: any) {
 	return {
 		invoke: async (input: any) => {
-			console.log('🔄 Data Entry Router: Processing data entry query');
+			console.log('🔄 Data Entry Router: Processing data entry query', input);
+
+			// Check if a specific agent was selected for direct routing
+			const selectedAgent = input.selectedAgent;
+			let initialCategory = 'unknown';
+
+			if (selectedAgent === 'aggregate-data-entry') {
+				initialCategory = 'aggregate_data';
+				console.log('🎯 Data Entry Router: Direct routing to aggregate data agent');
+			} else if (selectedAgent === 'tracker-data-entry') {
+				initialCategory = 'tracker';
+				console.log('🎯 Data Entry Router: Direct routing to tracker data agent');
+			} else if (selectedAgent === 'event-data-entry') {
+				initialCategory = 'events';
+				console.log('🎯 Data Entry Router: Direct routing to events agent');
+			}
+
+			// Extract messages from input (handle both direct and nested structures)
+			const messages = input.messages || input.input?.messages || [];
+			const userMessages = messages?.filter(m => m.role === 'user') || [];
+			const lastUserMessage = userMessages[userMessages.length - 1];
+			const originalQuery = lastUserMessage?.content || '';
+			console.log('Original Query: ', originalQuery);
 
 			const initialState: Partial<typeof DataEntryRouterAnnotation.State> = {
-				messages: input.messages || [],
+				messages: messages || [],
 				dataEntryType: input.dataEntryType || null, // Use data entry type context from router
 				isDataValueUpdate: input.isDataValueUpdate || false,
 				orchestrator: orchestrator,
-				dataEntryCategory: 'unknown',
-				originalQuery: '',
+				dataEntryCategory: initialCategory,
+				originalQuery: originalQuery,
 			};
 
 			// Execute StateGraph workflow

@@ -2152,4 +2152,37 @@ workflow.addEdge('parse_selected_metadata', 'query_data');
 // Compile the workflow
 const stateGraphAgent = workflow.compile();
 
+// StateGraph-based analytics agent wrapper for proper input handling
+export function createAnalyticsGraphAgent(orchestrator: any) {
+	return {
+		invoke: async (input: any) => {
+			console.log('📊 Analytics StateGraph: Processing analytics request');
+
+			// Extract messages from input (handle both direct and nested structures)
+			const messages = input.messages || input.input?.messages || [];
+			const query = messages?.filter(m => m.role === 'user').pop()?.content || '';
+
+			const initialState: Partial<typeof GraphAnnotation.State> = {
+				messages: messages || [],
+				query: query,
+				orchestrator: orchestrator,
+				workflowId: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+			};
+
+			// Execute the StateGraph workflow
+			const result = await stateGraphAgent.invoke(initialState);
+
+			// Format for compatibility with existing interface (StateGraph returns result directly)
+			return {
+				messages: [{
+					content: JSON.stringify(result.finalResult),
+					name: undefined,
+					additional_kwargs: {},
+					response_metadata: {}
+				}]
+			};
+		}
+	};
+}
+
 export { stateGraphAgent as analyticsGraphAgent, GraphAnnotation };

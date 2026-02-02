@@ -417,14 +417,55 @@ class WorkflowOrchestrator {
                     if (result?.success !== false) {
                         console.log('🎭 Workflow completion: handling successful result', result);
 
+                        // Check if the result is wrapped in messages (StateGraph agents return JSON strings, ReactAgents return multiple messages)
+                        let actualResult = result;
+                        if (result?.messages && Array.isArray(result.messages) && result.messages.length > 0) {
+                            console.log(`📦 Processing ${result.messages.length} messages from agent result`);
+
+                            // For ReactAgents (like search agent), look through all messages to find the one with JSON result
+                            // ReactAgents create separate messages for each tool call, with the final result in one of them
+                            let foundJsonResult = false;
+
+                            for (let i = result.messages.length - 1; i >= 0; i--) { // Start from last message
+                                const message = result.messages[i];
+                                const messageContent = message.content;
+
+                                if (typeof messageContent === 'string') {
+                                    try {
+                                        // Try to parse as JSON
+                                        const parsed = JSON.parse(messageContent);
+                                        console.log(`📦 Found valid JSON result in message ${i}:`, parsed);
+                                        actualResult = parsed;
+                                        foundJsonResult = true;
+                                        break;
+                                    } catch (parseError) {
+                                        // Not JSON, continue to next message
+                                        console.log(`📦 Message ${i} is not JSON, skipping`);
+                                    }
+                                } else if (messageContent && typeof messageContent === 'object') {
+                                    // ReactAgent might return object directly
+                                    console.log(`📦 Found object result in message ${i}:`, messageContent);
+                                    actualResult = messageContent;
+                                    foundJsonResult = true;
+                                    break;
+                                }
+                            }
+
+                            if (!foundJsonResult) {
+                                console.warn('⚠️ No valid JSON or object result found in any message, using fallback');
+                                // Fallback: use the last message content as-is
+                                actualResult = result.messages[result.messages.length - 1]?.content || result;
+                            }
+                        }
+
                         // Check if this is a data entry result from aggregate data agent
-                        const isDataEntryResult = result && result.data && typeof result.data === 'object' &&
-                            (result.data.uploadedData || result.data.resolutionState);
+                        const isDataEntryResult = actualResult && actualResult.data && typeof actualResult.data === 'object' &&
+                            (actualResult.data.uploadedData || actualResult.data.resolutionState);
 
                         if (isDataEntryResult) {
                             console.log('📊 Detected data entry result, calling requestDataEntryRender');
                             // For data entry results, render through conversation
-                            this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
+                            this.requestDataEntryRender(actualResult, input?.input?.messages?.[0]?.content || 'Data import');
                             // Reset UI state for data entry results
                             this.updateUIState({
                                 showProcessing: false,
@@ -433,16 +474,16 @@ class WorkflowOrchestrator {
                             });
                         } else {
                             // Check for other specialized result types
-                            if (result?.type === 'data_grid' || result?.type === 'resolution_selection' || result?.type === 'resolution_error') {
+                            if (actualResult?.type === 'data_grid' || actualResult?.type === 'resolution_selection' || actualResult?.type === 'resolution_error' || actualResult?.type === 'data_set_selection') {
                                 console.log('📊 Detected specialized data entry result, calling requestDataEntryRender');
-                                this.requestDataEntryRender(result, input?.input?.messages?.[0]?.content || 'Data import');
-                            } else if (result && (
-                                result.dataElements || result.indicators || result.organisationUnits ||
-                                result.dataSets || result.programs || result.categories ||
-                                (result.data && Array.isArray(result.data))
+                                this.requestDataEntryRender(actualResult, input?.input?.messages?.[0]?.content || 'Data import');
+                            } else if (actualResult && (
+                                actualResult.dataElements || actualResult.indicators || actualResult.organisationUnits ||
+                                actualResult.dataSets || actualResult.programs || actualResult.categories ||
+                                (actualResult.data && Array.isArray(actualResult.data))
                             )) {
                                 console.log('🔍 Detected search result, calling requestSearchRender');
-                                this.requestSearchRender(result, input?.input?.messages?.[0]?.content || 'Search query');
+                                this.requestSearchRender(actualResult, input?.input?.messages?.[0]?.content || 'Search query');
                                 // Reset UI state for search results - they are handled through conversation
                                 this.updateUIState({
                                     showProcessing: false,
@@ -467,14 +508,14 @@ class WorkflowOrchestrator {
                                 });
 
                                 return result;
-                            } else if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {
+                            } else if (actualResult?.data?.echarts_option || actualResult?.chart?.echarts_option || actualResult?.echarts_option) {
                                 console.log('📊 Detected chart result, calling renderChart');
-                                this.renderChart(result);
-                            } else if (result?.success === true && result?.message) {
+                                this.renderChart(actualResult);
+                            } else if (actualResult?.success === true && actualResult?.message) {
                                 // Handle general successful operation results (CRUD operations, etc.)
                                 console.log('✅ Detected general successful operation result, adding to conversation');
-                                console.log('📋 Result message:', result.message);
-                                this.addAssistantMessage(result.message, 'response', result);
+                                console.log('📋 Result message:', actualResult.message);
+                                this.addAssistantMessage(actualResult.message, 'response', actualResult);
                                 // Reset UI state for successful operations
                                 this.updateUIState({
                                     showProcessing: false,
@@ -487,8 +528,8 @@ class WorkflowOrchestrator {
                                 this.updateUIState({
                                     showProcessing: false,
                                     showResults: true,
-                                    results: result,
-                                    resultsType: result.type || 'default',
+                                    results: actualResult,
+                                    resultsType: actualResult?.type || 'default',
                                 });
                             }
                         }
@@ -669,8 +710,9 @@ class WorkflowOrchestrator {
                 };
             case 'analytics_routing':
                 return async (input: any) => {
-                    const { analyticsGraphAgent } = await import('../agents/analytics-graph-agent');
-                    return analyticsGraphAgent.invoke(input);
+                    const { createAnalyticsGraphAgent } = await import('../agents/analytics-graph-agent');
+                    const analyticsAgent = createAnalyticsGraphAgent(this);
+                    return analyticsAgent.invoke(input);
                 };
             case 'crud':
                 return async (input: any) => {

@@ -13,7 +13,7 @@ export interface FileAttachment {
 export interface EnhancedInputProps {
     value: string;
     onChange: (value: string) => void;
-    onSubmit: (text: string, attachments: FileAttachment[]) => void;
+    onSubmit: (text: string, attachments: FileAttachment[], selectedAgent: string) => void;
     disabled?: boolean;
     placeholder?: string;
     isProcessing?: boolean;
@@ -89,12 +89,24 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
     showValidation = true
 }) => {
     const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+    const [selectedAgent, setSelectedAgent] = useState<string>('auto');
     const [dragOver, setDragOver] = useState(false);
     const [validation, setValidation] = useState<ValidationState | null>(null);
     const [isFocused, setIsFocused] = useState(false);
     const [fileProcessing, setFileProcessing] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Agent options with default prompts
+    const agentOptions = [
+        { value: 'auto', label: '🤖 Auto', description: 'Intelligent routing', defaultPrompt: '' },
+        { value: 'search', label: '🔍 Search', description: 'Find metadata', defaultPrompt: 'Find DHIS2 metadata items like data elements, indicators, or organisation units' },
+        { value: 'analytics', label: '📊 Analytics', description: 'Data visualization', defaultPrompt: 'Create analytics charts and visualizations from DHIS2 data' },
+        { value: 'metadata', label: '🏗️ Metadata', description: 'Create/modify structures', defaultPrompt: 'Create or modify DHIS2 metadata structures like data elements or indicators' },
+        { value: 'aggregate-data-entry', label: '📋 Aggregate Data Entry', description: 'Enter aggregate data', defaultPrompt: 'Enter aggregate data into DHIS2 datasets' },
+        { value: 'tracker-data-entry', label: '🏥 Tracker Data Entry', description: 'Enter tracker data', defaultPrompt: 'Enter tracker data for individual records in DHIS2' },
+        { value: 'event-data-entry', label: '📅 Event Data Entry', description: 'Enter event data', defaultPrompt: 'Record event data in DHIS2' }
+    ];
 
     // Validation logic
     const validateInput = useCallback((input: string, files: FileAttachment[]): ValidationState | null => {
@@ -296,12 +308,18 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
         setAttachments(prev => prev.filter(att => att.id !== attachmentId));
     }, []);
 
+    // Handle agent selection change
+    const handleAgentChange = useCallback((newAgent: string) => {
+        setSelectedAgent(newAgent);
+    }, []);
+
     const handleSubmit = useCallback(() => {
         if (!value.trim() && attachments.length === 0) return;
-        onSubmit(value.trim(), attachments);
+        onSubmit(value.trim(), attachments, selectedAgent);
         onChange(''); // Clear input
         setAttachments([]); // Clear attachments
-    }, [value, attachments, onSubmit, onChange]);
+        setSelectedAgent('auto'); // Reset to auto
+    }, [value, attachments, selectedAgent, onSubmit, onChange]);
 
     const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -527,48 +545,90 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
                     </div>
                 )}
 
-                <div style={{ display: 'flex', gap: '12px', padding: '16px', alignItems: 'flex-end' }}>
-                    {/* File Upload Button */}
-                    <Tooltip content="Attach CSV, Excel, JSON, PDF, or image files. Max 50MB total.">
-                        <button
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={disabled || isProcessing}
-                            style={{
-                                padding: '12px',
-                                backgroundColor: 'var(--color-bg-secondary)',
-                                border: '1px solid var(--color-border-light)',
-                                borderRadius: '8px',
-                                cursor: disabled || isProcessing ? 'not-allowed' : 'pointer',
-                                color: disabled || isProcessing ? 'var(--color-text-disabled)' : 'var(--color-text-primary)',
-                                fontSize: '16px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                transition: 'all var(--transition-fast)',
-                                width: '48px',
-                                height: '48px'
-                            }}
-                            onMouseEnter={(e) => {
-                                if (!(disabled || isProcessing)) {
-                                    e.currentTarget.style.backgroundColor = 'var(--color-primary-50)';
+                {/* Agent Selection and Controls */}
+                <div style={{ padding: '12px 16px 0 16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                        {/* Agent Selection Dropdown */}
+                        <Tooltip content="Select agent for processing your request">
+                            <select
+                                value={selectedAgent}
+                                onChange={(e) => handleAgentChange(e.target.value)}
+                                disabled={disabled || isProcessing}
+                                style={{
+                                    padding: '6px 10px',
+                                    backgroundColor: 'var(--color-bg-primary)',
+                                    border: '1px solid var(--color-border-light)',
+                                    borderRadius: '6px',
+                                    color: disabled || isProcessing ? 'var(--color-text-disabled)' : 'var(--color-text-primary)',
+                                    fontSize: '13px',
+                                    cursor: disabled || isProcessing ? 'not-allowed' : 'pointer',
+                                    minWidth: '140px',
+                                    outline: 'none',
+                                    transition: 'all var(--transition-fast)'
+                                }}
+                                onFocus={(e) => {
                                     e.currentTarget.style.borderColor = 'var(--color-primary)';
-                                    e.currentTarget.style.color = 'var(--color-primary)';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                if (!(disabled || isProcessing)) {
-                                    e.currentTarget.style.backgroundColor = 'var(--color-bg-secondary)';
+                                    e.currentTarget.style.boxShadow = '0 0 0 2px rgba(33, 150, 243, 0.1)';
+                                }}
+                                onBlur={(e) => {
                                     e.currentTarget.style.borderColor = 'var(--color-border-light)';
-                                    e.currentTarget.style.color = 'var(--color-text-primary)';
-                                }
-                            }}
-                            title="Attach files"
-                            aria-label="Attach files"
-                        >
-                            📎
-                        </button>
-                    </Tooltip>
+                                    e.currentTarget.style.boxShadow = 'none';
+                                }}
+                                title="Select processing agent"
+                                aria-label="Select processing agent"
+                            >
+                                {agentOptions.map((option) => (
+                                    <option key={option.value} value={option.value} title={option.description}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                        </Tooltip>
 
+                        {/* File Upload Button */}
+                        <Tooltip content="Attach CSV, Excel, JSON, PDF, or image files. Max 50MB total.">
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={disabled || isProcessing}
+                                style={{
+                                    padding: '8px',
+                                    backgroundColor: 'var(--color-bg-secondary)',
+                                    border: '1px solid var(--color-border-light)',
+                                    borderRadius: '6px',
+                                    cursor: disabled || isProcessing ? 'not-allowed' : 'pointer',
+                                    color: disabled || isProcessing ? 'var(--color-text-disabled)' : 'var(--color-text-primary)',
+                                    fontSize: '16px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'all var(--transition-fast)',
+                                    width: '36px',
+                                    height: '36px'
+                                }}
+                                onMouseEnter={(e) => {
+                                    if (!(disabled || isProcessing)) {
+                                        e.currentTarget.style.backgroundColor = 'var(--color-primary-50)';
+                                        e.currentTarget.style.borderColor = 'var(--color-primary)';
+                                        e.currentTarget.style.color = 'var(--color-primary)';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    if (!(disabled || isProcessing)) {
+                                        e.currentTarget.style.backgroundColor = 'var(--color-bg-secondary)';
+                                        e.currentTarget.style.borderColor = 'var(--color-border-light)';
+                                        e.currentTarget.style.color = 'var(--color-text-primary)';
+                                    }
+                                }}
+                                title="Attach files"
+                                aria-label="Attach files"
+                            >
+                                📎
+                            </button>
+                        </Tooltip>
+                    </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', padding: '0 16px 16px 16px', alignItems: 'flex-end' }}>
                     {/* Hidden File Input */}
                     <input
                         ref={fileInputRef}

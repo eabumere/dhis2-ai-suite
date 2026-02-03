@@ -474,9 +474,15 @@ class WorkflowOrchestrator {
                             });
                         } else {
                             // Check for other specialized result types
-                            if (actualResult?.type === 'data_grid' || actualResult?.type === 'resolution_selection' || actualResult?.type === 'resolution_error' || actualResult?.type === 'data_set_selection') {
+                            if (actualResult?.type === 'data_grid' || actualResult?.type === 'resolution_selection' || actualResult?.type === 'resolution_error' || actualResult?.type === 'data_set_selection' || actualResult?.type === 'show_review_grid') {
                                 console.log('📊 Detected specialized data entry result, calling requestDataEntryRender');
                                 this.requestDataEntryRender(actualResult, input?.input?.messages?.[0]?.content || 'Data import');
+                                // Reset UI state for data entry results
+                                this.updateUIState({
+                                    showProcessing: false,
+                                    showQueryInput: true,
+                                    queryEnabled: true,
+                                });
                             } else if (actualResult && (
                                 actualResult.dataElements || actualResult.indicators || actualResult.organisationUnits ||
                                 actualResult.dataSets || actualResult.programs || actualResult.categories ||
@@ -709,6 +715,12 @@ class WorkflowOrchestrator {
                     return searchAgent.invoke(input);
                 };
             case 'analytics_routing':
+                return async (input: any) => {
+                    const { createAnalyticsGraphAgent } = await import('../agents/analytics-graph-agent');
+                    const analyticsAgent = createAnalyticsGraphAgent(this);
+                    return analyticsAgent.invoke(input);
+                };
+            case 'analytics':
                 return async (input: any) => {
                     const { createAnalyticsGraphAgent } = await import('../agents/analytics-graph-agent');
                     const analyticsAgent = createAnalyticsGraphAgent(this);

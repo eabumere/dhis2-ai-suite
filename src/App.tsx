@@ -1,18 +1,17 @@
-import {useDataQuery} from '@dhis2/app-runtime'
+import { useDataQuery } from '@dhis2/app-runtime'
 import i18n from '@dhis2/d2-i18n'
-import React, {FC, useEffect, useState, useRef} from 'react'
+import React, { FC, useEffect, useRef, useState } from 'react'
 import classes from './App.module.css'
 import './styles/utilities.css'
-import {DataEngineProvider} from "./utils/app-runtime/data-engine.provider";
-import MetadataSelector, {MetadataOption} from './components/MetadataSelector';
+import { DataEngineProvider } from "./utils/app-runtime/data-engine.provider";
+import MetadataSelector, { MetadataOption } from './components/MetadataSelector';
 
 import MessageContainer from './components/MessageContainer';
-import EnhancedInput, {FileAttachment} from './components/EnhancedInput';
-import TrackerDataGrid from './components/TrackerDataGrid';
+import EnhancedInput, { FileAttachment } from './components/EnhancedInput';
 
 // Import the comprehensive workflow orchestrator
-import {workflowOrchestrator, WorkflowUIState, ConversationMessage} from './utils/workflow-orchestrator';
-import {createContextRouterAgent} from './agents/router-agent'
+import { workflowOrchestrator, WorkflowUIState } from './utils/workflow-orchestrator';
+import { createContextRouterAgent } from './agents/router-agent'
 
 // Import toast notification system
 import { ToastProvider, useToast } from './components/ToastNotification';
@@ -367,32 +366,78 @@ const MyApp: FC = () => {
 				flowType = selectedAgent;
 				agentFunction = async (input) => {
 					console.log(`🎯 Invoking ${selectedAgent} agent directly with messages:`, input.input?.messages);
+					const message = { messages: input.input?.messages, orchestrator: workflowOrchestrator };
 
-					// Map selectedAgent to actual agent function
+					// Map selectedAgent to actual agent function and handle LangChain result parsing
+					let agentResult;
 					switch (selectedAgent) {
 						case 'search':
 							const { searchAgent } = await import('./agents/search-agent');
-							return searchAgent.invoke(input);
+							agentResult = await searchAgent.invoke(message);
+							break;
 						case 'analytics':
-							const { analyticsGraphAgent } = await import('./agents/analytics-graph-agent');
-							return analyticsGraphAgent.invoke(input);
+							const { createAnalyticsGraphAgent } = await import('./agents/analytics-graph-agent');
+							const analyticsAgent = createAnalyticsGraphAgent(workflowOrchestrator);
+							agentResult = await analyticsAgent.invoke(message);
+							break;
 						case 'metadata':
 							const { createCrudAgent } = await import('./agents/crud-agent');
 							const crudAgent = createCrudAgent();
-							return crudAgent.invoke(input);
+							agentResult = await crudAgent.invoke(message);
+							break;
 						case 'aggregate-data-entry':
 							const { createRoutedDataEntryAgent } = await import('./agents/routed-data-entry-agent');
 							const dataEntryAgent = createRoutedDataEntryAgent(workflowOrchestrator);
-							return dataEntryAgent.invoke(input);
+							agentResult = await dataEntryAgent.invoke(message);
+							break;
 						case 'tracker-data-entry':
 							const { createTrackerDataAgent } = await import('./agents/tracker-agent');
 							const trackerAgent = createTrackerDataAgent(workflowOrchestrator);
-							return trackerAgent.invoke(input);
+							agentResult = await trackerAgent.invoke(message);
+							break;
 						case 'event-data-entry':
 							const { eventsAgent } = await import('./agents/events-agent');
-							return eventsAgent.invoke(input);
+							agentResult = await eventsAgent.invoke(input);
+							break;
 						default:
 							throw new Error(`Unknown agent: ${selectedAgent}`);
+					}
+
+					// Handle LangChain-style results (search, analytics agents return LangChain format)
+					if (selectedAgent === 'search' || selectedAgent === 'analytics') {
+						console.log(`📦 Direct agent ${selectedAgent} result:`, agentResult);
+
+						// Extract the last message content (similar to router agent logic)
+						const lastMessage = agentResult.messages[agentResult.messages.length - 1];
+						const responseContent = lastMessage.content as string;
+
+						console.log(`🔍 Direct agent ${selectedAgent} response content:`, responseContent);
+
+						try {
+							console.log(`🔄 Parsing JSON response from ${selectedAgent} agent...`);
+							const parsed = JSON.parse(responseContent);
+							console.log(`✅ JSON parse successful for ${selectedAgent}:`, parsed);
+							return parsed;
+						} catch (parseError) {
+							console.error(`❌ JSON parse error for ${selectedAgent}:`, parseError);
+							console.error(`❌ Failed to parse ${selectedAgent} response:`, responseContent);
+
+							// Return a result that won't crash the workflow
+							return {
+								success: false,
+								error: `JSON parse error: ${parseError.message}`,
+								rawResponse: responseContent,
+								debug: {
+									responseLength: responseContent.length,
+									responseType: typeof responseContent,
+									first100: responseContent.substring(0, 100)
+								},
+								type: 'parse_error'
+							};
+						}
+					} else {
+						// Other agents (metadata, data-entry) return direct results
+						return agentResult;
 					}
 				};
 			}

@@ -100,9 +100,9 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
     // Agent options with default prompts
     const agentOptions = [
         { value: 'auto', label: '🤖 Auto', description: 'Intelligent routing', defaultPrompt: '' },
-        { value: 'search', label: '🔍 Search', description: 'Find metadata', defaultPrompt: 'Find DHIS2 metadata items like data elements, indicators, or organisation units' },
+        { value: 'search', label: '🔍 Metadata Search', description: 'Find metadata', defaultPrompt: 'Find DHIS2 metadata items like data elements, indicators, or organisation units' },
         { value: 'analytics', label: '📊 Analytics', description: 'Data visualization', defaultPrompt: 'Create analytics charts and visualizations from DHIS2 data' },
-        { value: 'metadata', label: '🏗️ Metadata', description: 'Create/modify structures', defaultPrompt: 'Create or modify DHIS2 metadata structures like data elements or indicators' },
+        { value: 'metadata', label: '🏗️ Metadata (Modify)', description: 'Create/modify structures', defaultPrompt: 'Create or modify DHIS2 metadata structures like data elements or indicators' },
         { value: 'aggregate-data-entry', label: '📋 Aggregate Data Entry', description: 'Enter aggregate data', defaultPrompt: 'Enter aggregate data into DHIS2 datasets' },
         { value: 'tracker-data-entry', label: '🏥 Tracker Data Entry', description: 'Enter tracker data', defaultPrompt: 'Enter tracker data for individual records in DHIS2' },
         { value: 'event-data-entry', label: '📅 Event Data Entry', description: 'Enter event data', defaultPrompt: 'Record event data in DHIS2' }
@@ -318,7 +318,7 @@ const EnhancedInput: React.FC<EnhancedInputProps> = ({
         onSubmit(value.trim(), attachments, selectedAgent);
         onChange(''); // Clear input
         setAttachments([]); // Clear attachments
-        setSelectedAgent('auto'); // Reset to auto
+        // Keep selected agent for next submission
     }, [value, attachments, selectedAgent, onSubmit, onChange]);
 
     const handleKeyPress = useCallback((e: React.KeyboardEvent) => {

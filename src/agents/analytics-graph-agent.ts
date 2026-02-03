@@ -286,6 +286,48 @@ async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Part
 	const query = state.query || state.messages.filter(m => m.role === 'user').pop()?.content || '';
 	console.log('🔍 Extracted query:', query);
 
+	// Check if this is an empty query (agent selected from dropdown without user input)
+	const trimmedQuery = query.trim();
+	if (!trimmedQuery) {
+		console.log('📊 Empty query detected - providing analytics interface');
+
+		// Check if we have recent analytics data available for follow-up
+		const directAnalyticsData = await getAnalyticsDataDirectly();
+
+		if (directAnalyticsData) {
+			console.log('🔄 Recent analytics data found - offering follow-up analysis');
+			return {
+				query: '',
+				step: 'analyze_existing_data'
+			};
+		} else {
+			console.log('🆕 No recent analytics data - showing analytics options');
+			// No recent data and no query - provide analytics welcome interface
+			return {
+				query: '',
+				step: 'completed',
+				finalResult: {
+					success: true,
+					message: 'Welcome to Analytics! I can help you analyze health data from DHIS2. Here are some things I can do:\n\n📊 **Create Charts & Reports**\n- Show trends over time\n- Compare data across locations\n- Analyze indicators and data elements\n\n🔍 **Explore Data**\n- Search for available indicators\n- Find data elements and categories\n- Browse organisation units\n\n📈 **Ask Questions**\n- "Show me HIV testing data for the last year"\n- "Compare malaria cases between districts"\n- "What are the top performing health facilities?"\n\n💡 **Tip:** Try typing a question above or select from available options.',
+					type: 'analytics',
+					showAnalyticsInterface: true,
+					actions: [
+						{
+							type: 'show_recent_analytics',
+							label: '📊 Recent Analytics',
+							description: 'View your recent analytics queries'
+						},
+						{
+							type: 'explore_metadata',
+							label: '🔍 Explore Data',
+							description: 'Browse available indicators and data elements'
+						}
+					]
+				}
+			};
+		}
+	}
+
 	// First try direct IndexedDB for analytics data (bypasses conversation context issues)
 	const directAnalyticsData = await getAnalyticsDataDirectly();
 
@@ -461,7 +503,36 @@ Return JSON:
 }`;
 
 		const intentResult = await model.invoke([new HumanMessage(intentPrompt)]);
-		const intentAnalysis = JSON.parse((intentResult.content as string).trim());
+		console.log('intentResult', intentResult);
+
+		// Extract JSON from LLM response, handling cases where LLM returns text + JSON code block
+		let intentAnalysis: any;
+		try {
+			const content = (intentResult.content as string).trim();
+
+			// Try to extract JSON from code block first (```json ... ```)
+			const jsonCodeBlockMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+			if (jsonCodeBlockMatch) {
+				intentAnalysis = JSON.parse(jsonCodeBlockMatch[1].trim());
+			} else {
+				// Fallback: try parsing the entire content as JSON
+				intentAnalysis = JSON.parse(content);
+			}
+		} catch (parseError) {
+			console.error('Failed to parse LLM response as JSON:', parseError);
+			console.error('LLM response content:', intentResult.content);
+
+			// Provide fallback analysis when parsing fails
+			intentAnalysis = {
+				intent: null,
+				dimension: null,
+				metric: null,
+				filters: [],
+				timeframe: null,
+				parseError: parseError.message,
+				fallback: true
+			};
+		}
 
 		console.log('🤖 Extracted analysis intent:', intentAnalysis);
 
@@ -768,40 +839,62 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 				};
 			}
 
-			// Request selection through orchestrator (this will show UI and wait)
-			const selectedItems = await state.orchestrator.requestSelection(
-				state.workflowId || 'analytics_workflow',
-				suggestions,
-				true // Allow multiple selection
-			);
+			try {
+				// Request selection through orchestrator (this will show UI and wait)
+				const selectedItems = await state.orchestrator.requestSelection(
+					state.workflowId || 'analytics_workflow',
+					suggestions,
+					true // Allow multiple selection
+				);
 
-			console.log('▶️ Received selection from orchestrator:', selectedItems);
+				console.log('▶️ Received selection from orchestrator:', selectedItems);
 
-			if (selectedItems && selectedItems.length > 0) {
-				// Update metadata with selected items
+				if (selectedItems && selectedItems.length > 0) {
+					// Update metadata with selected items
+					const updatedMetadata = {
+						...metadata,
+						suggestions: selectedItems,
+						status: 'user_selected'
+					};
+
+					// Progress continues after user selection - advance to next step
+					advanceProgress(state, 3, 'Processing Selection', 'Indicator selection completed, proceeding to data resolution...', false);
+
+					// Continue with query_data using selected items
+					return {
+						metadata: updatedMetadata,
+						step: 'query_data'
+					};
+				} else {
+					// Selection was cancelled
+					return {
+						step: 'completed',
+						finalResult: {
+							success: false,
+							message: 'Selection was cancelled by user',
+							type: 'analytics'
+						}
+					};
+				}
+			} catch (selectionError) {
+				// Handle case where orchestrator selection fails (e.g., no UI callbacks registered)
+				console.warn('⏸️ Orchestrator selection failed, falling back to auto-selection:', selectionError.message);
+
+				// Fallback: Auto-select the first suggestion to continue workflow
+				const autoSelectedItem = suggestions[0];
+				console.log('▶️ Auto-selected first item due to selection failure:', autoSelectedItem);
+
 				const updatedMetadata = {
 					...metadata,
-					suggestions: selectedItems,
-					status: 'user_selected'
+					suggestions: [autoSelectedItem],
+					status: 'auto_selected_fallback',
+					fallbackReason: 'Selection UI unavailable, auto-selected first option'
 				};
 
-				// Progress continues after user selection - advance to next step
-				advanceProgress(state, 3, 'Processing Selection', 'Indicator selection completed, proceeding to data resolution...', false);
-
-				// Continue with query_data using selected items
+				// Continue with query_data using auto-selected item
 				return {
 					metadata: updatedMetadata,
 					step: 'query_data'
-				};
-			} else {
-				// Selection was cancelled
-				return {
-					step: 'completed',
-					finalResult: {
-						success: false,
-						message: 'Selection was cancelled by user',
-						type: 'analytics'
-					}
 				};
 			}
 		} else {
@@ -1361,37 +1454,59 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 				};
 			}
 
-			// Request selection through orchestrator (this will show UI and wait)
-			const selectedItems = await state.orchestrator.requestSelection(
-				state.workflowId || 'org_units_workflow',
-				suggestions,
-				true // Allow multiple selection for org units
-			);
+			try {
+				// Request selection through orchestrator (this will show UI and wait)
+				const selectedItems = await state.orchestrator.requestSelection(
+					state.workflowId || 'org_units_workflow',
+					suggestions,
+					true // Allow multiple selection for org units
+				);
 
-			console.log('▶️ Received org unit selection from orchestrator:', selectedItems);
+				console.log('▶️ Received org unit selection from orchestrator:', selectedItems);
 
-			if (selectedItems && selectedItems.length > 0) {
-				// Update metadata with selected items
+				if (selectedItems && selectedItems.length > 0) {
+					// Update metadata with selected items
+					const updatedOrgUnitsMetadata = {
+						...orgUnitsMetadata,
+						suggestions: selectedItems,
+						status: 'user_selected'
+					};
+
+					// Continue with query_data using selected org units
+					return {
+						orgUnitsMetadata: updatedOrgUnitsMetadata,
+						step: 'query_data'
+					};
+				} else {
+					// Selection was cancelled
+					return {
+						step: 'completed',
+						finalResult: {
+							success: false,
+							message: 'Organisation unit selection was cancelled by user',
+							type: 'analytics'
+						}
+					};
+				}
+			} catch (selectionError) {
+				// Handle case where orchestrator selection fails (e.g., no UI callbacks registered)
+				console.warn('⏸️ Org unit selection failed, falling back to auto-selection:', selectionError.message);
+
+				// Fallback: Auto-select the first suggestion to continue workflow
+				const autoSelectedItem = suggestions[0];
+				console.log('▶️ Auto-selected first org unit due to selection failure:', autoSelectedItem);
+
 				const updatedOrgUnitsMetadata = {
 					...orgUnitsMetadata,
-					suggestions: selectedItems,
-					status: 'user_selected'
+					suggestions: [autoSelectedItem],
+					status: 'auto_selected_fallback',
+					fallbackReason: 'Selection UI unavailable, auto-selected first org unit'
 				};
 
-				// Continue with query_data using selected org units
+				// Continue with query_data using auto-selected org unit
 				return {
 					orgUnitsMetadata: updatedOrgUnitsMetadata,
 					step: 'query_data'
-				};
-			} else {
-				// Selection was cancelled
-				return {
-					step: 'completed',
-					finalResult: {
-						success: false,
-						message: 'Organisation unit selection was cancelled by user',
-						type: 'analytics'
-					}
 				};
 			}
 		} else {
@@ -1662,41 +1777,64 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				};
 			}
 
-			// Request selection through orchestrator (this will show UI and wait)
-			const selectedItems = await state.orchestrator.requestSelection(
-				state.workflowId || 'disaggregations_workflow',
-				suggestions,
-				true // Allow multiple selection for disaggregations
-			);
+			try {
+				// Request selection through orchestrator (this will show UI and wait)
+				const selectedItems = await state.orchestrator.requestSelection(
+					state.workflowId || 'disaggregations_workflow',
+					suggestions,
+					true // Allow multiple selection for disaggregations
+				);
 
-			console.log('▶️ Received disaggregation selection from orchestrator:', selectedItems);
+				console.log('▶️ Received disaggregation selection from orchestrator:', selectedItems);
 
-			if (selectedItems && selectedItems.length > 0) {
-				// Update metadata with selected items
+				if (selectedItems && selectedItems.length > 0) {
+					// Update metadata with selected items
+					const updatedDisaggMetadata = {
+						...disaggregationsMetadata,
+						suggestions: selectedItems,
+						status: 'user_selected'
+					};
+
+					// Continue with query_data using selected disaggregations
+					return {
+						disaggregationsMetadata: updatedDisaggMetadata,
+						optionsToCocs: optionToCocs,
+						step: 'query_data'
+					};
+				} else {
+					// Selection was cancelled - proceed without disaggregations
+					console.log('⏭️ Disaggregation selection cancelled - proceeding without disaggregation');
+
+					const cancelledDisaggMetadata = {
+						...disaggregationsMetadata,
+						status: 'cancelled',
+						suggestions: []
+					};
+
+					return {
+						disaggregationsMetadata: cancelledDisaggMetadata,
+						optionsToCocs: optionToCocs,
+						step: 'query_data'
+					};
+				}
+			} catch (selectionError) {
+				// Handle case where orchestrator selection fails (e.g., no UI callbacks registered)
+				console.warn('⏸️ Disaggregation selection failed, falling back to auto-selection:', selectionError.message);
+
+				// Fallback: Auto-select the first suggestion to continue workflow
+				const autoSelectedItem = suggestions[0];
+				console.log('▶️ Auto-selected first disaggregation due to selection failure:', autoSelectedItem);
+
 				const updatedDisaggMetadata = {
 					...disaggregationsMetadata,
-					suggestions: selectedItems,
-					status: 'user_selected'
+					suggestions: [autoSelectedItem],
+					status: 'auto_selected_fallback',
+					fallbackReason: 'Selection UI unavailable, auto-selected first disaggregation'
 				};
 
-				// Continue with query_data using selected disaggregations
+				// Continue with query_data using auto-selected disaggregation
 				return {
 					disaggregationsMetadata: updatedDisaggMetadata,
-					optionsToCocs: optionToCocs,
-					step: 'query_data'
-				};
-			} else {
-				// Selection was cancelled - proceed without disaggregations
-				console.log('⏭️ Disaggregation selection cancelled - proceeding without disaggregation');
-
-				const cancelledDisaggMetadata = {
-					...disaggregationsMetadata,
-					status: 'cancelled',
-					suggestions: []
-				};
-
-				return {
-					disaggregationsMetadata: cancelledDisaggMetadata,
 					optionsToCocs: optionToCocs,
 					step: 'query_data'
 				};
@@ -2158,17 +2296,20 @@ export function createAnalyticsGraphAgent(orchestrator: any) {
 		invoke: async (input: any) => {
 			console.log('📊 Analytics StateGraph: Processing analytics request');
 
-			// Extract messages from input (handle both direct and nested structures)
-			const messages = input.messages || input.input?.messages || [];
-			const query = messages?.filter(m => m.role === 'user').pop()?.content || '';
+			// Extract messages from input (handle workflow orchestrator structure)
+			// Workflow orchestrator passes messages as input.input
+			const messages = input.messages || input.input || [];
+			const userMessages = messages?.filter((m: any) => m.role === 'user') || [];
+			const lastUserMessage = userMessages[userMessages.length - 1];
+			const originalQuery = lastUserMessage?.content || '';
 
 			const initialState: Partial<typeof GraphAnnotation.State> = {
 				messages: messages || [],
-				query: query,
+				query: originalQuery || '',
 				orchestrator: orchestrator,
 				workflowId: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 			};
-
+console.log('Initial state', initialState);
 			// Execute the StateGraph workflow
 			const result = await stateGraphAgent.invoke(initialState);
 

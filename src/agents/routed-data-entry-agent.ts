@@ -113,9 +113,11 @@ async function check_data_grid_action_intent(state: typeof DataEntryRouterAnnota
 	const followUpType = state.dataEntryType;
 
 	console.log(`🔍 Data Entry Router: Follow-up context - isFollowUp: ${isFollowUp}, type: ${followUpType}`);
+	console.log(`🔍 Data Entry Router: Data grid context - hasDataGridContext: ${hasDataGridContext}`);
 
-	// Check for data grid action intent (if we have data grid context or follow-up context)
-	if (hasDataGridContext || isFollowUp) {
+	// Check for data grid action intent ONLY if we have an actual data grid present
+	// (don't check action intent just because it's a follow-up)
+	if (hasDataGridContext) {
 		const actionIntent = await detectDataGridActionIntent(query, state.orchestrator, followUpType);
 		console.log(`🔍 Detected data grid action intent: ${actionIntent}`);
 

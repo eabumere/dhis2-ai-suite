@@ -366,7 +366,7 @@ const MyApp: FC = () => {
 				flowType = selectedAgent;
 				agentFunction = async (input) => {
 					console.log(`🎯 Invoking ${selectedAgent} agent directly with messages:`, input.input?.messages);
-					const message = { messages: input.input?.messages, orchestrator: workflowOrchestrator };
+					const message = {messages: input.input?.messages, orchestrator: workflowOrchestrator, selectedAgent: selectedAgent};
 
 					// Map selectedAgent to actual agent function and handle LangChain result parsing
 					let agentResult;
@@ -386,9 +386,9 @@ const MyApp: FC = () => {
 							agentResult = await crudAgent.invoke(message);
 							break;
 						case 'aggregate-data-entry':
-							const { createRoutedDataEntryAgent } = await import('./agents/routed-data-entry-agent');
-							const dataEntryAgent = createRoutedDataEntryAgent(workflowOrchestrator);
-							agentResult = await dataEntryAgent.invoke(message);
+							const { createAggregateDataAgent } = await import('./agents/aggregate-data-agent');
+							const aggregateAgent = createAggregateDataAgent(workflowOrchestrator);
+							agentResult = await aggregateAgent.invoke(message);
 							break;
 						case 'tracker-data-entry':
 							const { createTrackerDataAgent } = await import('./agents/tracker-agent');
@@ -397,7 +397,7 @@ const MyApp: FC = () => {
 							break;
 						case 'event-data-entry':
 							const { eventsAgent } = await import('./agents/events-agent');
-							agentResult = await eventsAgent.invoke(input);
+							agentResult = await eventsAgent.invoke(message);
 							break;
 						default:
 							throw new Error(`Unknown agent: ${selectedAgent}`);

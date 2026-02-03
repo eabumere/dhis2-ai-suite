@@ -738,15 +738,19 @@ export function createRoutedDataEntryAgent(orchestrator: any) {
 			// Check if a specific agent was selected for direct routing
 			const selectedAgent = input.selectedAgent;
 			let initialCategory = 'unknown';
+			let initialDataEntryType: 'tracker' | 'aggregate' | null = null;
 
 			if (selectedAgent === 'aggregate-data-entry') {
 				initialCategory = 'aggregate_data';
+				initialDataEntryType = 'aggregate';
 				console.log('🎯 Data Entry Router: Direct routing to aggregate data agent');
 			} else if (selectedAgent === 'tracker-data-entry') {
 				initialCategory = 'tracker';
+				initialDataEntryType = 'tracker';
 				console.log('🎯 Data Entry Router: Direct routing to tracker data agent');
 			} else if (selectedAgent === 'event-data-entry') {
 				initialCategory = 'events';
+				initialDataEntryType = null; // Events don't use this type system
 				console.log('🎯 Data Entry Router: Direct routing to events agent');
 			}
 
@@ -759,7 +763,7 @@ export function createRoutedDataEntryAgent(orchestrator: any) {
 
 			const initialState: Partial<typeof DataEntryRouterAnnotation.State> = {
 				messages: messages || [],
-				dataEntryType: input.dataEntryType || null, // Use data entry type context from router
+				dataEntryType: input.dataEntryType || initialDataEntryType, // Use data entry type context from router or direct selection
 				isDataValueUpdate: input.isDataValueUpdate || false,
 				orchestrator: orchestrator,
 				dataEntryCategory: initialCategory,

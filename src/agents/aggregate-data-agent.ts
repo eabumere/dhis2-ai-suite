@@ -234,6 +234,36 @@ const AggregateDataAnnotation = Annotation.Root({
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
+// Detect submission intent when there's an active data grid
+async function detectSubmissionIntent(query: string): Promise<boolean> {
+    try {
+        console.log('📤 Detecting submission intent for:', query);
+
+        const detectionPrompt = `
+Analyze this user query to determine if they want to submit/save data to DHIS2 when viewing a data grid.
+
+SUBMISSION COMMANDS:
+- submit, confirm, save, upload, send
+- submit data, confirm submission, save data, upload data
+- yes, ok, proceed, go ahead, continue
+- submit to DHIS2, save to system, upload to database
+
+Return ONLY "true" if this is clearly a submission command, otherwise return "false".
+
+Query: "${query}"
+
+Response:`;
+
+        const result = await model.invoke([new HumanMessage(detectionPrompt)]);
+        const intent = (result.content as string).trim().toLowerCase();
+
+        return intent === 'true';
+    } catch (error) {
+        console.error('📤 Submission intent detection failed:', error);
+        return false;
+    }
+}
+
 // Progress tracking helper
 function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof AggregateDataAnnotation.State> {
     return {
@@ -256,6 +286,37 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
     // Check if this is follow-up data entry
     const isFollowUp = state.dataEntryType === 'aggregate';
     console.log(`📊 Aggregate Data Agent: Follow-up context - dataEntryType: ${state.dataEntryType}, isFollowUp: ${isFollowUp}`);
+
+    // Check if this is a submission command when there's an active data grid
+    const hasActiveDataGrid = state.orchestrator?.currentUIState?.conversation?.some((msg: any) =>
+        msg.type === 'data_grid' && msg.timestamp > Date.now() - 300000 // Within last 5 minutes
+    );
+
+    if (hasActiveDataGrid) {
+        const userMessages = state.messages?.filter(m => m.role === 'user') || [];
+        const query = userMessages.pop()?.content || '';
+
+        // Detect submission intent
+        const submissionIntent = await detectSubmissionIntent(query);
+        console.log(`📊 Aggregate Data Agent: Detected submission intent: ${submissionIntent}`);
+
+        if (submissionIntent) {
+            console.log('📤 Triggering data submission via orchestrator');
+            // Trigger submission through orchestrator
+            state.orchestrator.handleDataGridInteraction({
+                type: 'confirm_submit',
+                data: {}
+            });
+
+            return {
+                finalResult: {
+                    success: true,
+                    message: 'Data submission initiated. Processing and validating data for DHIS2 submission.',
+                    action: 'submit_triggered'
+                }
+            };
+        }
+    }
 
     // Update progress
     updateProgress(1, 'Parsing Request', 'Processing your data entry request...', false);

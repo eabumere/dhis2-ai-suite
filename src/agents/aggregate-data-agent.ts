@@ -264,6 +264,135 @@ Response:`;
     }
 }
 
+// Detect compound requests that contain both update instructions and submission commands
+async function detectCompoundRequest(query: string): Promise<{
+    isCompound: boolean;
+    hasUpdate: boolean;
+    hasSubmission: boolean;
+    updateDetails?: {
+        targetRow?: string;
+        targetColumn?: string;
+        newValue?: string;
+        rowIndex?: number;
+        colIndex?: number;
+    };
+}> {
+    try {
+        console.log('🔍 Detecting compound request for:', query);
+
+        const compoundPrompt = `
+Analyze this user query to determine if it contains both update instructions and submission commands.
+
+Look for patterns like:
+- "update X and submit"
+- "change Y then submit"
+- "modify Z and save"
+- "set value to W and submit"
+
+UPDATE PATTERNS:
+- update, change, modify, set
+- first row, second row, third row, etc.
+- column names or positions
+- new values
+
+SUBMISSION PATTERNS:
+- submit, confirm, save, upload, send
+
+Return a JSON object with:
+{
+  "isCompound": true/false,
+  "hasUpdate": true/false,
+  "hasSubmission": true/false,
+  "updateDetails": {
+    "targetRow": "description like 'second row'",
+    "targetColumn": "column name or null",
+    "newValue": "the new value to set",
+    "rowIndex": null (will be parsed later),
+    "colIndex": null (will be parsed later)
+  }
+}
+
+If not a compound request, set isCompound to false.
+
+Query: "${query}"
+
+Return ONLY valid JSON:`;
+
+        const result = await model.invoke([new HumanMessage(compoundPrompt)]);
+        const parsed = JSON.parse((result.content as string).trim());
+
+        console.log('🔍 Compound request detection result:', parsed);
+        return parsed;
+    } catch (error) {
+        console.error('🔍 Compound request detection failed:', error);
+        return {
+            isCompound: false,
+            hasUpdate: false,
+            hasSubmission: false
+        };
+    }
+}
+
+// Parse row references like "first row", "second row", etc. to indices
+function parseRowReference(rowDescription: string, totalRows: number): number | null {
+    if (!rowDescription) return null;
+
+    const lowerDesc = rowDescription.toLowerCase().trim();
+
+    // Handle ordinal numbers
+    const ordinalMap: Record<string, number> = {
+        'first': 0, '1st': 0,
+        'second': 1, '2nd': 1,
+        'third': 2, '3rd': 2,
+        'fourth': 3, '4th': 3,
+        'fifth': 4, '5th': 4,
+        'sixth': 5, '6th': 5,
+        'seventh': 6, '7th': 6,
+        'eighth': 7, '8th': 7,
+        'ninth': 8, '9th': 8,
+        'tenth': 9, '10th': 9
+    };
+
+    // Check for ordinal words
+    for (const [ordinal, index] of Object.entries(ordinalMap)) {
+        if (lowerDesc.includes(ordinal)) {
+            return index < totalRows ? index : null;
+        }
+    }
+
+    // Check for direct row numbers
+    const rowMatch = lowerDesc.match(/row\s*(\d+)/i);
+    if (rowMatch) {
+        const rowNum = parseInt(rowMatch[1]) - 1; // Convert to 0-based
+        return rowNum >= 0 && rowNum < totalRows ? rowNum : null;
+    }
+
+    return null;
+}
+
+// Parse column references to indices
+function parseColumnReference(columnDescription: string, headers: string[]): number | null {
+    if (!columnDescription) return null;
+
+    const lowerDesc = columnDescription.toLowerCase().trim();
+
+    // Check for column names
+    for (let i = 0; i < headers.length; i++) {
+        if (lowerDesc.includes(headers[i].toLowerCase())) {
+            return i;
+        }
+    }
+
+    // Check for value column (most common update target)
+    const valueIndex = headers.findIndex(h => h.toLowerCase().includes('value'));
+    if (valueIndex >= 0) {
+        return valueIndex;
+    }
+
+    // Default to last column (often the value column)
+    return headers.length - 1;
+}
+
 // Progress tracking helper
 function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof AggregateDataAnnotation.State> {
     return {
@@ -296,7 +425,143 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
         const userMessages = state.messages?.filter(m => m.role === 'user') || [];
         const query = userMessages.pop()?.content || '';
 
-        // Detect submission intent
+        // First check for compound requests (update + submit)
+        const compoundRequest = await detectCompoundRequest(query);
+        console.log(`🔍 Compound request detection:`, compoundRequest);
+
+        if (compoundRequest.isCompound && compoundRequest.hasUpdate && compoundRequest.hasSubmission) {
+            console.log('🔄 Detected compound request - applying update before submission');
+
+            // Get current data grid data
+            const dataGridMessage = state.orchestrator.currentUIState.conversation
+                .filter((msg: any) => msg.type === 'data_grid')
+                .pop();
+
+            if (dataGridMessage?.data) {
+                const { headers, rows } = dataGridMessage.data;
+
+                // Parse update details
+                const rowIndex = parseRowReference(compoundRequest.updateDetails?.targetRow || '', rows.length);
+                const colIndex = parseColumnReference(compoundRequest.updateDetails?.targetColumn || '', headers);
+
+                console.log(`🔄 Parsed update: row ${rowIndex}, col ${colIndex}, value "${compoundRequest.updateDetails?.newValue}"`);
+
+                if (rowIndex !== null && colIndex !== null && compoundRequest.updateDetails?.newValue !== undefined) {
+                    // Apply the update to the data grid
+                    const updatedRows = [...rows];
+                    updatedRows[rowIndex] = [...rows[rowIndex]];
+                    updatedRows[rowIndex][colIndex] = compoundRequest.updateDetails.newValue;
+
+                    // Update the conversation with the new data
+                    const updatedData = { ...dataGridMessage.data, rows: updatedRows };
+                    const updatedConversation = state.orchestrator.currentUIState.conversation.map(msg =>
+                        msg.id === dataGridMessage.id ? { ...msg, data: updatedData } : msg
+                    );
+
+                    state.orchestrator.updateUIState({
+                        conversation: updatedConversation
+                    });
+
+                    // CRITICAL FIX: Also update the workflow state to keep it synchronized
+                    const updatedWorkflowData = [headers, ...updatedRows];
+                    console.log(`🔄 Synchronizing workflow state with updated data: ${updatedWorkflowData.length - 1} rows`);
+
+                    console.log(`✅ Applied update: row ${rowIndex + 1}, column ${colIndex + 1} set to "${compoundRequest.updateDetails.newValue}"`);
+
+                    // Add confirmation message
+                    state.orchestrator.addAssistantMessage(
+                        `Updated ${compoundRequest.updateDetails.targetRow || `row ${rowIndex + 1}`} to "${compoundRequest.updateDetails.newValue}". Now submitting data...`,
+                        'response'
+                    );
+
+                    // Now trigger submission
+                    console.log('📤 Triggering data submission after update');
+                    state.orchestrator.handleDataGridInteraction({
+                        type: 'confirm_submit',
+                        data: {}
+                    });
+
+                    return {
+                        uploadedData: updatedWorkflowData, // Include updated workflow data
+                        finalResult: {
+                            success: true,
+                            message: 'Data updated and submission initiated. Processing and validating data for DHIS2 submission.',
+                            action: 'update_and_submit_triggered'
+                        }
+                    };
+                } else {
+                    console.warn('⚠️ Could not parse update details from compound request');
+                    // Fall back to just submission
+                }
+            }
+        }
+
+        // Check for simple update requests (update current grid data)
+        const simpleUpdate = await detectSimpleUpdateIntent(query);
+        console.log(`🔧 Simple update detection:`, simpleUpdate);
+
+        if (simpleUpdate.isSimpleUpdate && simpleUpdate.updateDetails) {
+            console.log('🔄 Detected simple update request - updating current grid data');
+
+            // Get current data grid data
+            const dataGridMessage = state.orchestrator.currentUIState.conversation
+                .filter((msg: any) => msg.type === 'data_grid')
+                .pop();
+
+            if (dataGridMessage?.data) {
+                const { headers, rows } = dataGridMessage.data;
+
+                // Parse update details
+                const rowIndex = parseRowReference(simpleUpdate.updateDetails.targetRow || '', rows.length);
+                const colIndex = parseColumnReference(simpleUpdate.updateDetails.targetColumn || '', headers);
+
+                console.log(`🔧 Parsed simple update: row ${rowIndex}, col ${colIndex}, value "${simpleUpdate.updateDetails.newValue}"`);
+
+                if (rowIndex !== null && colIndex !== null && simpleUpdate.updateDetails.newValue !== undefined) {
+                    // Apply the update to the data grid
+                    const updatedRows = [...rows];
+                    updatedRows[rowIndex] = [...rows[rowIndex]];
+                    updatedRows[rowIndex][colIndex] = simpleUpdate.updateDetails.newValue;
+
+                    // Update the conversation with the new data
+                    const updatedData = { ...dataGridMessage.data, rows: updatedRows };
+                    const updatedConversation = state.orchestrator.currentUIState.conversation.map(msg =>
+                        msg.id === dataGridMessage.id ? { ...msg, data: updatedData } : msg
+                    );
+
+                    state.orchestrator.updateUIState({
+                        conversation: updatedConversation
+                    });
+
+                    // CRITICAL FIX: Also update the workflow state to keep it synchronized
+                    const updatedWorkflowData = [headers, ...updatedRows];
+                    console.log(`🔄 Synchronizing workflow state with updated data: ${updatedWorkflowData.length - 1} rows`);
+
+                    console.log(`✅ Applied simple update: row ${rowIndex + 1}, column ${colIndex + 1} set to "${simpleUpdate.updateDetails.newValue}"`);
+
+                    // Add confirmation message
+                    state.orchestrator.addAssistantMessage(
+                        `Updated ${simpleUpdate.updateDetails.targetRow || `row ${rowIndex + 1}`} to "${simpleUpdate.updateDetails.newValue}".`,
+                        'response'
+                    );
+
+                    // For simple updates, we don't trigger submission - just update and show the grid
+                    return {
+                        uploadedData: updatedWorkflowData, // Include updated workflow data
+                        finalResult: {
+                            success: true,
+                            message: `Data updated successfully. ${simpleUpdate.updateDetails.targetRow || `Row ${rowIndex + 1}`} value changed to "${simpleUpdate.updateDetails.newValue}".`,
+                            action: 'update_applied'
+                        }
+                    };
+                } else {
+                    console.warn('⚠️ Could not parse update details from simple update request');
+                    // Fall back to regular processing
+                }
+            }
+        }
+
+        // Check for regular submission intent
         const submissionIntent = await detectSubmissionIntent(query);
         console.log(`📊 Aggregate Data Agent: Detected submission intent: ${submissionIntent}`);
 
@@ -1756,6 +2021,60 @@ Response:`;
 	} catch (error) {
 		console.error('🔄 Aggregate Data Agent: Data value update intent detection failed:', error);
 		return false;
+	}
+}
+
+// Detect simple update intent for current data grid
+async function detectSimpleUpdateIntent(query: string): Promise<{
+	isSimpleUpdate: boolean;
+	updateDetails?: {
+		targetRow?: string;
+		targetColumn?: string;
+		newValue?: string;
+		rowIndex?: number;
+		colIndex?: number;
+	};
+}> {
+	try {
+		console.log('🔧 Detecting simple update intent for:', query);
+
+		const updatePrompt = `
+Analyze this user query to determine if they want to update/modify data in the current data grid (not previously submitted data).
+
+Look for patterns like:
+- "update the first row to 10"
+- "change second row value to 25"
+- "set third row to 15"
+- "modify the value in row 2 to 8"
+
+This should be for updating the currently displayed data grid, not historical/follow-up data.
+
+Return a JSON object with:
+{
+  "isSimpleUpdate": true/false,
+  "updateDetails": {
+    "targetRow": "description like 'second row'",
+    "targetColumn": "column name or null",
+    "newValue": "the new value to set",
+    "rowIndex": null (will be parsed later),
+    "colIndex": null (will be parsed later)
+  }
+}
+
+If not a simple update request, set isSimpleUpdate to false.
+
+Query: "${query}"
+
+Return ONLY valid JSON:`;
+
+		const result = await model.invoke([new HumanMessage(updatePrompt)]);
+		const parsed = JSON.parse((result.content as string).trim());
+
+		console.log('🔧 Simple update detection result:', parsed);
+		return parsed;
+	} catch (error) {
+		console.error('🔧 Simple update detection failed:', error);
+		return { isSimpleUpdate: false };
 	}
 }
 

@@ -3282,9 +3282,9 @@ class WorkflowOrchestrator {
     private async submitDataToDHIS2() {
         console.log('📤 Starting DHIS2 data submission...');
 
-        // Find the data_grid message with the processed data
+        // Find the data_grid message with the processed data (must have actual headers and rows)
         const dataGridMessage = this.currentUIState.conversation
-            .filter(msg => msg.type === 'data_grid')
+            .filter(msg => msg.type === 'data_grid' && msg.data?.headers && Array.isArray(msg.data.headers) && msg.data.headers.length > 0)
             .pop();
 
         if (!dataGridMessage?.data) {

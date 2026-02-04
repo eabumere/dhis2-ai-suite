@@ -45,7 +45,8 @@ export interface ConversationMessage {
     data?: any;
     threadId?: string; // For grouping related messages (request → processing → result)
     type: 'query' | 'response' | 'selection' | 'error' | 'selection_response' | 'data_grid' | 'resolution_selection'
-	    | 'tracker_processing_complete' | 'data_set_selection' | 'tracker_data_grid' | 'success' | 'warning' | 'info' | 'progress' | 'confirmation';
+	    | 'tracker_processing_complete' | 'data_set_selection' | 'tracker_data_grid' | 'success' | 'warning' | 'info' | 'progress' | 'confirmation'
+	| 'data_submission_success';
 }
 
 export interface WorkflowStep {
@@ -1448,8 +1449,14 @@ class WorkflowOrchestrator {
                 break;
 
             case 'confirm_submit':
-                console.log('📤 Submitting data to DHIS2...');
-                this.submitDataToDHIS2();
+                console.log('📤 Submitting data to DHIS2...', data);
+                // Check if updated data was passed directly (e.g., from compound requests)
+                if (data.updatedData) {
+                    console.log('📤 Using updated data from compound request');
+                    this.submitDataToDHIS2(data.updatedData, data.resolutionState);
+                } else {
+                    this.submitDataToDHIS2();
+                }
                 break;
 
             case 'update_data_set':
@@ -3279,24 +3286,44 @@ class WorkflowOrchestrator {
     }
 
     // Submit data to DHIS2
-    private async submitDataToDHIS2() {
-        console.log('📤 Starting DHIS2 data submission...');
+    private async submitDataToDHIS2(updatedData?: any[][], resolutionState?: any) {
+        console.log('📤 Starting DHIS2 data submission...', updatedData ? 'using provided updated data' : 'using conversation data');
 
-        // Find the data_grid message with the processed data (must have actual headers and rows)
-        const dataGridMessage = this.currentUIState.conversation
-            .filter(msg => msg.type === 'data_grid' && msg.data?.headers && Array.isArray(msg.data.headers) && msg.data.headers.length > 0)
-            .pop();
+        let headers: string[];
+        let rows: any[][];
 
-        if (!dataGridMessage?.data) {
-            this.addAssistantMessage(
-                '❌ No data found to submit. Please ensure you have processed data ready.',
-                'error'
-            );
-            return;
+        if (updatedData && Array.isArray(updatedData) && updatedData.length > 0) {
+            // Use provided updated data from compound request
+            console.log('📤 Using updated data from compound request:', updatedData.length - 1, 'rows');
+            headers = updatedData[0] || [];
+            rows = updatedData.slice(1) || [];
+            // Convert provided resolution state to Map if it's an array, or create empty map if not provided
+            if (resolutionState) {
+                if (Array.isArray(resolutionState)) {
+                    resolutionState = new Map(resolutionState);
+                }
+            } else {
+                resolutionState = new Map();
+            }
+        } else {
+            // Find the data_grid message with the processed data (must have actual headers and rows)
+            const dataGridMessage = this.currentUIState.conversation
+                .filter(msg => msg.type === 'data_grid' && msg.data?.headers && Array.isArray(msg.data.headers) && msg.data.headers.length > 0)
+                .pop();
+
+            if (!dataGridMessage?.data) {
+                this.addAssistantMessage(
+                    '❌ No data found to submit. Please ensure you have processed data ready.',
+                    'error'
+                );
+                return;
+            }
+
+            const { data } = dataGridMessage;
+            headers = data.headers;
+            rows = data.rows;
+            resolutionState = data.resolutionState;
         }
-
-        const { data } = dataGridMessage;
-        const { headers, rows, resolutionState } = data;
 
         // Check if all items are resolved
         const unresolvedItems = resolutionState ?
@@ -3433,7 +3460,7 @@ class WorkflowOrchestrator {
 
                 this.addAssistantMessage(
                     submissionMessage.message,
-                    'data_grid',
+                    'data_submission_success',
                     submissionMessage.data
                 );
                 console.log('📤 DHIS2 submission successful:', response);

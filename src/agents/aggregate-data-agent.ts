@@ -492,11 +492,14 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
                         'response'
                     );
 
-                    // Now trigger submission
+                    // Now trigger submission with updated data and resolution state
                     console.log('📤 Triggering data submission after update');
                     state.orchestrator.handleDataGridInteraction({
                         type: 'confirm_submit',
-                        data: {}
+                        data: {
+                            updatedData: updatedWorkflowData,
+                            resolutionState: Array.from(state.resolutionState.entries())
+                        }
                     });
 
                     return {

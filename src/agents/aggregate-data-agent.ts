@@ -504,12 +504,13 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
     // Prepare data structure (either from CSV, prompt extraction, or empty grid)
     let headers: string[];
     let dataRows: string[][];
+    let extractedData: any = null;
 
     if (!hasCSVFile || !csvData) {
         console.log('📊 Aggregate Data Agent: No CSV file found, attempting to extract data from prompt');
 
         // Try to extract data values from the prompt
-        const extractedData = await extractDataValuesFromPrompt(userMessage.content);
+        extractedData = await extractDataValuesFromPrompt(userMessage.content);
         console.log('📊 Extracted data from prompt:', extractedData);
 
         if (extractedData && Object.keys(extractedData).length > 0) {
@@ -554,48 +555,15 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
         dataRows = csvData.slice(1);
     }
 
+    // Check if attribute option combo is present to conditionally skip data set selection
+    const hasAttributeOptionCombo = checkForAttributeOptionCombo(headers, dataRows, extractedData);
+    const uiAction = hasAttributeOptionCombo ? 'map_headers' : 'resolve_data_set';
+
     return {
         uploadedData: [headers, ...dataRows],
         resolutionState: new Map(),
-        uiAction: 'resolve_data_set'
+        uiAction: uiAction
     };
-
-    // CSV file was found, parse and validate it
-    try {
-        console.log('📊 Aggregate Data Agent: Parsing CSV file');
-
-        // Validate CSV structure - should have headers: dataElement, orgUnit, period, categoryOptionCombos, attributeOptionCombos, value
-        if (csvData.length === 0) {
-            return {
-                finalResult: {
-                    success: false,
-                    error: 'CSV file is empty'
-                }
-            };
-        }
-
-        const headers = csvData[0];
-
-        // Remove header row and store data
-        const dataRows = csvData.slice(1);
-
-        // Store parsed data with original headers for mapping
-        console.log(`📊 Aggregate Data Agent: Parsed ${dataRows.length} rows from CSV with headers: [${headers.join(', ')}]`);
-
-        return {
-            uploadedData: [headers, ...dataRows],
-            uiAction: 'resolve_data_set'
-        };
-
-    } catch (error) {
-        console.error('📊 Aggregate Data Agent: CSV parsing failed:', error);
-        return {
-            finalResult: {
-                success: false,
-                error: `Failed to parse CSV: ${error.message}`
-            }
-        };
-    }
 }
 
 // 1.5. Resolve data set (required for DHIS2 data values)
@@ -766,148 +734,7 @@ async function resolve_data_set(state: typeof AggregateDataAnnotation.State): Pr
     }
 }
 
-// 1. Parse CSV upload or initialize empty grid for data entry
-async function parse_csv_upload_old(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
-    console.log('📊 Aggregate Data Agent: Processing data entry request');
 
-    const messages = state.messages || [];
-    const userMessage = messages.filter(m => m.role === 'user').pop();
-
-    if (!userMessage || !userMessage.content) {
-        return {
-            finalResult: {
-                success: false,
-                error: 'No user message provided'
-            }
-        };
-    }
-
-    // Extract contextual information from all user messages
-    const contextualInfo = await extractContextualInfo(messages);
-    console.log('📊 Aggregate Data Agent: Extracted contextual info:', contextualInfo);
-
-    // Check for CSV file content in messages
-    let csvData: string[][] | null = null;
-    let hasCSVFile = false;
-
-    // Look for file content in user messages
-    for (const message of messages) {
-        if (message.role === 'user' && message.content?.includes('File:') && message.content?.includes('Content:')) {
-            // Extract file content from message
-            const contentMatch = message.content.match(/Content:\n([\s\S]*)$/);
-            if (contentMatch) {
-                try {
-                    csvData = parseCSV(contentMatch[1]);
-                    hasCSVFile = true;
-                    console.log('📊 Aggregate Data Agent: Found CSV file in message');
-                    break;
-                } catch (error) {
-                    console.warn('📊 Aggregate Data Agent: Failed to parse CSV from message:', error);
-                }
-            }
-        }
-    }
-
-    // If no CSV file found, but this is a data entry request, show empty grid
-    if (!hasCSVFile || !csvData) {
-        console.log('📊 Aggregate Data Agent: No CSV file found, showing empty data entry grid');
-
-        // Create empty grid with expected column structure
-        const headers = ['dataElement', 'orgUnit', 'period', 'categoryOptionCombos', 'attributeOptionCombos', 'value'];
-        const emptyRows: string[][] = []; // Start with no data rows
-
-        return {
-            uploadedData: [headers, ...emptyRows],
-            resolutionState: new Map(),
-            uiAction: 'show_data_grid'
-        };
-    }
-
-    // CSV file was found, parse and validate it
-    try {
-        console.log('📊 Aggregate Data Agent: Parsing CSV file');
-
-        // Validate CSV structure - should have headers: dataElement, orgUnit, period, categoryOptionCombos, attributeOptionCombos, value
-        if (csvData.length === 0) {
-            return {
-                finalResult: {
-                    success: false,
-                    error: 'CSV file is empty'
-                }
-            };
-        }
-
-        const headers = csvData[0];
-
-        // Remove header row and store data
-        const dataRows = csvData.slice(1);
-
-        // Store parsed data with original headers for mapping
-        console.log(`📊 Aggregate Data Agent: Parsed ${dataRows.length} rows from CSV with headers: [${headers.join(', ')}]`);
-
-        return {
-            uploadedData: [headers, ...dataRows],
-            uiAction: 'map_headers'
-        };
-
-        // Initialize resolution state
-        const resolutionState = new Map<string, ResolutionItem>();
-
-        // Analyze each cell to determine if it needs resolution
-        dataRows.forEach((row, rowIndex) => {
-            headers.forEach((header, colIndex) => {
-                const value = row[colIndex];
-                const fieldType = getFieldTypeFromHeader(header);
-
-                if (fieldType && fieldType !== 'period' && fieldType !== 'value') {
-                    // Check if value looks like an ID (alphanumeric with possible underscores/hyphens)
-                    // or a name (contains spaces or special characters)
-                    const needsResolution = isNameValue(value);
-
-                    if (needsResolution) {
-                        const key = `${rowIndex}-${colIndex}`;
-                        resolutionState.set(key, {
-                            rowIndex,
-                            colIndex,
-                            originalValue: value,
-                            fieldType,
-                            status: 'pending'
-                        });
-                    } else {
-                        // For values that look like IDs, we should still validate they exist
-                        // This provides early error detection for invalid IDs
-                        const key = `${rowIndex}-${colIndex}`;
-                        resolutionState.set(key, {
-                            rowIndex,
-                            colIndex,
-                            originalValue: value,
-                            fieldType,
-                            resolvedId: value, // Assume it's already an ID
-                            status: 'resolved' // Mark as resolved, but we'll validate during submission
-                        });
-                    }
-                }
-            });
-        });
-
-        console.log(`📊 Aggregate Data Agent: Parsed ${dataRows.length} rows from CSV, ${resolutionState.size} items need resolution`);
-
-        return {
-            uploadedData: [headers, ...dataRows],
-            resolutionState,
-            uiAction: 'show_data_grid'
-        };
-
-    } catch (error) {
-        console.error('📊 Aggregate Data Agent: CSV parsing failed:', error);
-        return {
-            finalResult: {
-                success: false,
-                error: `Failed to parse CSV: ${error.message}`
-            }
-        };
-    }
-}
 
 // 1.5. Intelligently map CSV headers to DHIS2 fields using LLM (internal processing)
 async function map_csv_headers(state: typeof AggregateDataAnnotation.State): Promise<Partial<typeof AggregateDataAnnotation.State>> {
@@ -2764,6 +2591,44 @@ async function extractContextualInfo(messages: any[]): Promise<{
         orgUnits: extractedOrgUnits,
         userOrgUnit
     };
+}
+
+// Helper function to check if attribute option combo is present in the data
+function checkForAttributeOptionCombo(
+    headers: string[],
+    dataRows: string[][],
+    extractedData?: any
+): boolean {
+    // Check if attribute option combo was extracted from prompt
+    if (extractedData?.attributeOptionCombo && extractedData.attributeOptionCombo.trim()) {
+        console.log('📊 Attribute option combo found in prompt extraction:', extractedData.attributeOptionCombo);
+        return true;
+    }
+
+    // Check if CSV headers contain attribute option combo column
+    const attributeOptionComboIndex = headers.findIndex(header =>
+        header.toLowerCase().includes('attributeoption') ||
+        header.toLowerCase().includes('attribute_option') ||
+        header.toLowerCase().includes('attribute combo') ||
+        header.toLowerCase().includes('attribute coc')
+    );
+
+    if (attributeOptionComboIndex >= 0) {
+        console.log('📊 Attribute option combo column found in CSV headers at index:', attributeOptionComboIndex);
+
+        // Check if any data rows have non-empty values in this column
+        const hasValues = dataRows.some(row =>
+            row[attributeOptionComboIndex] && row[attributeOptionComboIndex].trim().length > 0
+        );
+
+        if (hasValues) {
+            console.log('📊 Attribute option combo values found in CSV data');
+            return true;
+        }
+    }
+
+    console.log('📊 No attribute option combo found in data');
+    return false;
 }
 
 function isNameValue(value: string): boolean {

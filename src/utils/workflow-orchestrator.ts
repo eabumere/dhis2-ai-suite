@@ -3095,6 +3095,27 @@ class WorkflowOrchestrator {
         });
     }
 
+    // Helper method to check if data contains attribute option combo values
+    private checkIfDataHasAttributeOptionCombo(headers: string[], rows: string[][]): boolean {
+        // Find the attribute option combo column index
+        const attributeOptionComboIndex = headers.findIndex(header =>
+            header.toLowerCase().includes('attributeoption') ||
+            header.toLowerCase().includes('attribute_option') ||
+            header.toLowerCase().includes('attribute combo') ||
+            header.toLowerCase().includes('attribute coc')
+        );
+
+        // If attribute option combo column exists and has non-empty values in any row
+        if (attributeOptionComboIndex >= 0) {
+            return rows.some(row =>
+                row[attributeOptionComboIndex] &&
+                row[attributeOptionComboIndex].trim().length > 0
+            );
+        }
+
+        return false;
+    }
+
     // Handle data value update requests
     async handleDataValueUpdate(updateDetails: {
         rowIndex: number;
@@ -3295,22 +3316,27 @@ class WorkflowOrchestrator {
         );
 
         try {
-            // Get the resolved data set from the data grid
-            // Look for dataSetId in the data grid message
+            // Check if data contains attribute option combo values
+            // If so, we can submit individual data values without requiring a data set
+            const hasAttributeOptionCombo = this.checkIfDataHasAttributeOptionCombo(headers, rows);
+
             let dataSetId: string | null = null;
             let dataSetName: string = 'Unknown Data Set';
 
-            // Look for dataSetId in the conversation messages (data_grid type)
-            for (const message of this.currentUIState.conversation) {
-                if (message.type === 'data_grid' && message.data?.dataSetId) {
-                    dataSetId = message.data.dataSetId;
-                    dataSetName = message.data.dataSetName || dataSetName;
-                    break;
+            // Only look for dataSetId if we don't have attribute option combo
+            if (!hasAttributeOptionCombo) {
+                // Look for dataSetId in the conversation messages (data_grid type)
+                for (const message of this.currentUIState.conversation) {
+                    if (message.type === 'data_grid' && message.data?.dataSetId) {
+                        dataSetId = message.data.dataSetId;
+                        dataSetName = message.data.dataSetName || dataSetName;
+                        break;
+                    }
                 }
-            }
 
-            if (!dataSetId) {
-                throw new Error('No data set found. Please ensure data set resolution was completed.');
+                if (!dataSetId) {
+                    throw new Error('No data set found. Please ensure data set resolution was completed.');
+                }
             }
 
             // Prepare data values for submission

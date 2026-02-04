@@ -432,14 +432,32 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
         if (compoundRequest.isCompound && compoundRequest.hasUpdate && compoundRequest.hasSubmission) {
             console.log('🔄 Detected compound request - applying update before submission');
 
-            // Get current data grid data
+            // Get current data grid data with validation
             const dataGridMessage = state.orchestrator.currentUIState.conversation
                 .filter((msg: any) => msg.type === 'data_grid')
                 .pop();
 
-            if (dataGridMessage?.data) {
-                const { headers, rows } = dataGridMessage.data;
+            // Validate data grid structure and get data
+            let headers: string[] = [];
+            let rows: any[][] = [];
 
+            if (dataGridMessage?.data?.headers && Array.isArray(dataGridMessage.data.headers) &&
+                dataGridMessage.data.rows && Array.isArray(dataGridMessage.data.rows)) {
+                // Use conversation data grid if it has proper structure
+                headers = dataGridMessage.data.headers;
+                rows = dataGridMessage.data.rows;
+                console.log('🔄 Using data from conversation data grid');
+            } else if (state.uploadedData && state.uploadedData.length > 0) {
+                // Fallback to workflow state data
+                headers = state.uploadedData[0] || [];
+                rows = state.uploadedData.slice(1) || [];
+                console.log('🔄 Using data from workflow state (fallback)');
+            } else {
+                console.warn('⚠️ No valid data source found for compound request');
+                // Fall back to just submission
+            }
+
+            if (headers.length > 0 && rows.length >= 0) {
                 // Parse update details
                 const rowIndex = parseRowReference(compoundRequest.updateDetails?.targetRow || '', rows.length);
                 const colIndex = parseColumnReference(compoundRequest.updateDetails?.targetColumn || '', headers);
@@ -503,13 +521,32 @@ async function parse_csv_upload(state: typeof AggregateDataAnnotation.State): Pr
         if (simpleUpdate.isSimpleUpdate && simpleUpdate.updateDetails) {
             console.log('🔄 Detected simple update request - updating current grid data');
 
-            // Get current data grid data
+            // Get current data grid data with validation
             const dataGridMessage = state.orchestrator.currentUIState.conversation
                 .filter((msg: any) => msg.type === 'data_grid')
                 .pop();
 
-            if (dataGridMessage?.data) {
-                const { headers, rows } = dataGridMessage.data;
+            // Validate data grid structure and get data
+            let headers: string[] = [];
+            let rows: any[][] = [];
+
+            if (dataGridMessage?.data?.headers && Array.isArray(dataGridMessage.data.headers) &&
+                dataGridMessage.data.rows && Array.isArray(dataGridMessage.data.rows)) {
+                // Use conversation data grid if it has proper structure
+                headers = dataGridMessage.data.headers;
+                rows = dataGridMessage.data.rows;
+                console.log('🔄 Using data from conversation data grid for simple update');
+            } else if (state.uploadedData && state.uploadedData.length > 0) {
+                // Fallback to workflow state data
+                headers = state.uploadedData[0] || [];
+                rows = state.uploadedData.slice(1) || [];
+                console.log('🔄 Using data from workflow state for simple update (fallback)');
+            } else {
+                console.warn('⚠️ No valid data source found for simple update request');
+                // Fall back to regular processing
+            }
+
+            if (headers.length > 0 && rows.length >= 0) {
 
                 // Parse update details
                 const rowIndex = parseRowReference(simpleUpdate.updateDetails.targetRow || '', rows.length);

@@ -372,7 +372,15 @@ function parseRowReference(rowDescription: string, totalRows: number): number | 
 
 // Parse column references to indices
 function parseColumnReference(columnDescription: string, headers: string[]): number | null {
-    if (!columnDescription) return null;
+    // If no column description provided, default to value column (most common update target)
+    if (!columnDescription || !columnDescription.trim()) {
+        const valueIndex = headers.findIndex(h => h.toLowerCase().includes('value'));
+        if (valueIndex >= 0) {
+            return valueIndex;
+        }
+        // If no explicit value column, default to last column (often the value column)
+        return headers.length - 1;
+    }
 
     const lowerDesc = columnDescription.toLowerCase().trim();
 

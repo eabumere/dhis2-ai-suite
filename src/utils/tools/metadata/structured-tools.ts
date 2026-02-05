@@ -4581,14 +4581,22 @@ export const deleteDhis2Resource = tool(
                 });
 
             } else if (exactMatches.length > 1) {
-                // Multiple exact matches - this is unusual but possible
+                // Multiple exact matches - show selector for disambiguation
+                const selectorOptions = exactMatches.map((item: any, index: number) => ({
+                    name: item.name,
+                    id: item.id,
+                    type: resourceType
+                }));
+
                 return JSON.stringify({
-                    success: false,
-                    error: `Multiple exact matches found for "${resourceName}". Please be more specific.`,
+                    success: true,
+                    action: 'SHOW_SELECTOR',
+                    message: `Multiple exact matches found for "${resourceName}". ${exactMatches.length} resources found.`,
                     resourceType,
                     resourceName,
-                    matches: exactMatches,
-                    suggestion: 'Use the resource ID or provide more context to identify the specific resource to delete.'
+                    selectorOptions,
+                    originalQuery: resourceName,
+                    suggestion: 'Please select the specific resource you want to delete from the list below.'
                 });
 
             } else {

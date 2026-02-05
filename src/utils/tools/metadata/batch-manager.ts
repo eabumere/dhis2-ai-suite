@@ -118,7 +118,7 @@ export class UnifiedMetadataManager {
         if (options.schema) {
             const validation = validateResourceData(options.schema, item.data);
             if (!validation.success) {
-                throw new Error(`Validation failed for ${type}: ${validation.errors.join(', ')}`);
+                throw new Error(`Validation failed for ${type}: ${(validation as any).errors.join(', ')}`);
             }
             item.data = validation.data;
         }
@@ -251,7 +251,17 @@ export class UnifiedMetadataManager {
         } catch (error) {
             // Restore original operations even on error
             this.pendingOperations = originalOperations;
-            throw error;
+
+            // Return error response instead of throwing
+            return {
+                success: false,
+                total: this.pendingOperations.length,
+                successful: 0,
+                failed: this.pendingOperations.length,
+                results: [],
+                apiResponse: null,
+                errors: [error.message],
+            };
         }
     }
 
@@ -579,6 +589,11 @@ export class UnifiedMetadataManager {
                     } else {
                         // For other operations, assume success if no errors at type level
                         success = !typeStats.errorReports?.length;
+                    }
+
+                    // Ensure error is set if operation failed but no specific error was found
+                    if (!success && !error) {
+                        error = `Operation failed: no specific error details available from DHIS2 API`;
                     }
 
                     results.push({

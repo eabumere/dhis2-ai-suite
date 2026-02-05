@@ -744,6 +744,12 @@ class WorkflowOrchestrator {
                     const dataEntryAgent = createRoutedDataEntryAgent(this);
                     return dataEntryAgent.invoke(input);
                 };
+            case 'delete':
+                return async (input: any) => {
+                    const { createDeleteGraphAgent } = await import('../agents/delete-agent');
+                    const deleteAgent = createDeleteGraphAgent(this);
+                    return deleteAgent.invoke(input);
+                };
             default:
                 return null;
         }

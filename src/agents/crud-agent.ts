@@ -1,7 +1,7 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { ChatModels } from '../utils/chat-model-factory';
 import { createAgent } from './create-agent';
-import { deleteAgent } from './delete-agent';
+import { createDeleteGraphAgent } from './delete-agent';
 
 // Define CRUD State - tracks operation type and workflow context
 const CrudAnnotation = Annotation.Root({
@@ -157,19 +157,19 @@ async function invoke_delete_agent(state: typeof CrudAnnotation.State): Promise<
 	console.log('🗑️ CRUD: Routing to Delete Agent');
 
 	try {
-		const result = await deleteAgent.invoke({
-			messages: state.messages
+		// Use workflow orchestrator's agent routing instead of direct call
+		const { workflowOrchestrator } = await import('../utils/workflow-orchestrator');
+		const deleteAgentFn = workflowOrchestrator.getAgentFunction('delete');
+
+		const result = await deleteAgentFn({
+			flow: 'metadata',
+			input: { messages: state.messages },
+			selectedAgent: 'delete'
 		});
 
-		const responseContent = result.messages[result.messages.length - 1].content as string;
-		let parsedResponse;
-		try {
-			parsedResponse = JSON.parse(responseContent);
-		} catch (parseError) {
-			parsedResponse = { rawResponse: responseContent };
-		}
-
-		return { finalResult: parsedResponse };
+		// The workflow orchestrator returns the final result directly
+		// No need to parse messages since it's already processed
+		return { finalResult: result };
 	} catch (error) {
 		console.error('🗑️ CRUD: Delete agent error:', error);
 		const errorResponse = {

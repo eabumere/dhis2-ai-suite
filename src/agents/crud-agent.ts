@@ -1,7 +1,6 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { ChatModels } from '../utils/chat-model-factory';
 import { createAgent } from './create-agent';
-import { updateAgent } from './update-agent';
 import { deleteAgent } from './delete-agent';
 
 // Define CRUD State - tracks operation type and workflow context
@@ -29,8 +28,8 @@ const CrudAnnotation = Annotation.Root({
 	}),
 });
 
-// Initialize the ChatOpenAI model with Azure configuration
-const model = ChatModels.createAgentModel();
+// Initialize the ChatOpenAI model with Azure configuration and retry logic for rate limiting
+const model = ChatModels.createAgentModelWithRetry();
 
 // StateGraph Workflow Nodes
 
@@ -130,19 +129,19 @@ async function invoke_update_agent(state: typeof CrudAnnotation.State): Promise<
 	console.log('🔄 CRUD: Routing to Update Agent');
 
 	try {
-		const result = await updateAgent.invoke({
-			messages: state.messages
+		// Use workflow orchestrator's agent routing instead of direct call
+		const { workflowOrchestrator } = await import('../utils/workflow-orchestrator');
+		const updateAgentFn = workflowOrchestrator.getAgentFunction('update');
+
+		const result = await updateAgentFn({
+			flow: 'metadata',
+			input: { messages: state.messages },
+			selectedAgent: 'update'
 		});
 
-		const responseContent = result.messages[result.messages.length - 1].content as string;
-		let parsedResponse;
-		try {
-			parsedResponse = JSON.parse(responseContent);
-		} catch (parseError) {
-			parsedResponse = { rawResponse: responseContent };
-		}
-
-		return { finalResult: parsedResponse };
+		// The workflow orchestrator returns the final result directly
+		// No need to parse messages since it's already processed
+		return { finalResult: result };
 	} catch (error) {
 		console.error('🔄 CRUD: Update agent error:', error);
 		const errorResponse = {

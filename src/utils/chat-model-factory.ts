@@ -152,6 +152,99 @@ export function createChatModel(
 }
 
 /**
+ * Retry configuration for LLM calls
+ */
+export interface RetryConfig {
+  maxRetries?: number;
+  baseDelay?: number;
+  maxDelay?: number;
+  backoffMultiplier?: number;
+}
+
+/**
+ * Default retry configuration for rate limiting
+ */
+const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
+  maxRetries: 3,
+  baseDelay: 1000, // 1 second
+  maxDelay: 10000, // 10 seconds
+  backoffMultiplier: 2,
+};
+
+/**
+ * Execute a function with exponential backoff retry logic for rate limiting
+ */
+export async function executeWithRetry<T>(
+  fn: () => Promise<T>,
+  config: RetryConfig = {}
+): Promise<T> {
+  const {
+    maxRetries,
+    baseDelay,
+    maxDelay,
+    backoffMultiplier
+  } = { ...DEFAULT_RETRY_CONFIG, ...config };
+
+  let lastError: Error;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+
+      // Check if this is a rate limit error (429)
+      const isRateLimit = error?.status === 429 ||
+                         error?.code === 429 ||
+                         error?.message?.includes('429') ||
+                         error?.message?.includes('rate limit');
+
+      // Check if this is the last attempt or not a rate limit error
+      if (attempt === maxRetries || !isRateLimit) {
+        throw error;
+      }
+
+      // Calculate delay with exponential backoff
+      const delay = Math.min(baseDelay * Math.pow(backoffMultiplier, attempt), maxDelay);
+
+      console.log(`🔄 Rate limited (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError!;
+}
+
+/**
+ * Create a chat model with built-in retry logic for rate limiting
+ * Returns a properly typed AzureChatOpenAI model with retry functionality
+ */
+export function createChatModelWithRetry(
+  preset: keyof typeof MODEL_PRESETS = 'AGENT',
+  overrides: Partial<ChatModelOverrides> = {},
+  retryConfig: RetryConfig = {}
+): AzureChatOpenAI {
+  const model = createChatModel(preset, overrides);
+  const config = { ...DEFAULT_RETRY_CONFIG, ...retryConfig };
+
+  // Monkey patch the invoke method to add retry logic while maintaining type compatibility
+  const originalInvoke = model.invoke.bind(model);
+  model.invoke = async (messages: any[], options?: any) => {
+    return executeWithRetry(() => originalInvoke(messages, options), config);
+  };
+
+  // Also patch stream method if it exists
+  if (model.stream) {
+    const originalStream = model.stream.bind(model);
+    model.stream = async (messages: any[], options?: any) => {
+      return executeWithRetry(() => originalStream(messages, options), config);
+    };
+  }
+
+  return model; // Returns properly typed AzureChatOpenAI
+}
+
+/**
  * Convenience functions for common use cases
  */
 export const ChatModels = {
@@ -170,4 +263,14 @@ export const ChatModels = {
   // Creative models - for more flexible generation
   createCreativeModel: (overrides?: Partial<ChatModelOverrides>) =>
     createChatModel('CREATIVE', overrides),
+
+  // Retry-enabled models for rate limit resilience
+  createAgentModelWithRetry: (overrides?: Partial<ChatModelOverrides>, retryConfig?: RetryConfig) =>
+    createChatModelWithRetry('AGENT', overrides, retryConfig),
+
+  createExtractionModelWithRetry: (overrides?: Partial<ChatModelOverrides>, retryConfig?: RetryConfig) =>
+    createChatModelWithRetry('EXTRACTION', overrides, retryConfig),
+
+  createAnalysisModelWithRetry: (overrides?: Partial<ChatModelOverrides>, retryConfig?: RetryConfig) =>
+    createChatModelWithRetry('ANALYSIS', overrides, retryConfig),
 };

@@ -165,8 +165,8 @@ export const extractDatePeriodLLM = tool(
         try {
             console.log('📅 LLM date period extraction called for:', input.query);
 
-            // Initialize Azure OpenAI LLM
-            const llm = ChatModels.createExtractionModel({
+            // Initialize Azure OpenAI LLM with retry logic for rate limiting
+            const llm = ChatModels.createExtractionModelWithRetry({
                 maxTokens: 150,   // Longer output for period analysis
             });
 
@@ -4334,7 +4334,7 @@ export const updateDhis2Resource = tool(
 
                 const updateResult = await updateFunction.invoke({
                     id: exactMatch.id,
-                    resource: { ...exactMatch, ...updates } // Merge existing with updates
+                    resource: updates // Let the individual update tool fetch and merge existing data
                 });
 
                 return JSON.stringify({
@@ -4350,14 +4350,23 @@ export const updateDhis2Resource = tool(
                 });
 
             } else if (exactMatches.length > 1) {
-                // Multiple exact matches - this is unusual but possible
+                // Multiple exact matches - show selector for disambiguation
+                const selectorOptions = exactMatches.map((item: any, index: number) => ({
+                    name: item.name,
+                    id: item.id,
+                    type: resourceType
+                }));
+
                 return JSON.stringify({
-                    success: false,
-                    error: `Multiple exact matches found for "${resourceName}". Please be more specific.`,
+                    success: true,
+                    action: 'SHOW_SELECTOR',
+                    message: `Multiple exact matches found for "${resourceName}". ${exactMatches.length} resources found.`,
                     resourceType,
                     resourceName,
-                    matches: exactMatches,
-                    suggestion: 'Use the resource ID or provide more context to identify the specific resource to update.'
+                    selectorOptions,
+                    updates: updates,
+                    originalQuery: resourceName,
+                    suggestion: 'Please select the specific resource you want to update from the list below.'
                 });
 
             } else {

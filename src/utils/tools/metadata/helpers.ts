@@ -307,7 +307,8 @@ export function transformExternalResults(
 
 /**
  * Search for existing DHIS2 metadata by name or code
- * Now includes external search API call with fallback to DHIS2 native search
+ * Always performs DHIS2 search, then merges with external search results if available
+ * DHIS2 results take precedence by ID matching
  */
 export async function searchDhis2Metadata(
     metadataType: string,
@@ -315,30 +316,67 @@ export async function searchDhis2Metadata(
     limit: number = 10
 ): Promise<Array<{ id: string; name: string; code?: string; displayName: string }>> {
 
-    // STEP 1: Try external search API first (if configured)
+    // STEP 1: Always perform DHIS2 search first
+    console.log(`🔄 Performing DHIS2 native search for ${metadataType}`);
+    const dhis2Results = await searchDhis2MetadataAppRuntime(metadataType, query, limit);
+    console.log(`✅ DHIS2 search found ${dhis2Results.length} results for type '${metadataType}'`);
+
+    // STEP 2: Also try external search API if configured (in parallel with DHIS2)
+    let externalResults: ExternalSearchApiResponse | null = null;
     try {
-        const externalResults = await callExternalSearchApi(query, metadataType, limit);
-
-        if (externalResults && externalResults.length > 0) {
-            // Filter results by the requested metadata type
-            const filteredResults = filterExternalResultsByType(externalResults, metadataType);
-
-            if (filteredResults.length > 0) {
-                console.log(`✅ External search found ${filteredResults.length} results for type '${metadataType}'`);
-                return transformExternalResults(filteredResults.slice(0, limit));
-            }
-
-            console.log(`⚠️ External search found results but none matched type '${metadataType}'`);
-        } else {
-            console.log('No external search results, falling back to DHIS2 API');
-        }
+        externalResults = await callExternalSearchApi(query, metadataType, limit);
     } catch (externalError) {
-        console.warn('External search failed, falling back to DHIS2 API:', externalError.message);
+        console.warn('External search failed, using DHIS2 results only:', externalError.message);
     }
 
-    // STEP 2: Fall back to DHIS2 native search
-    console.log(`🔄 Using DHIS2 native search for ${metadataType}`);
-    return await searchDhis2MetadataAppRuntime(metadataType, query, limit);
+    // STEP 3: Merge results with DHIS2 precedence if external results exist
+    if (externalResults && externalResults.length > 0) {
+        // Filter external results by the requested metadata type
+        const filteredExternalResults = filterExternalResultsByType(externalResults, metadataType);
+
+        if (filteredExternalResults.length > 0) {
+            const transformedExternalResults = transformExternalResults(filteredExternalResults);
+            console.log(`✅ External search found ${transformedExternalResults.length} additional results for type '${metadataType}'`);
+
+            // Merge with DHIS2 precedence
+            const mergedResults = mergeSearchResults(dhis2Results, transformedExternalResults, limit);
+            console.log(`📋 Merged ${dhis2Results.length} DHIS2 + ${transformedExternalResults.length} external = ${mergedResults.length} total results`);
+            return mergedResults;
+        }
+
+        console.log(`⚠️ External search found results but none matched type '${metadataType}'`);
+    } else {
+        console.log('No external search results available, using DHIS2 results only');
+    }
+
+    return dhis2Results;
+}
+
+/**
+ * Merge search results from DHIS2 and external sources with DHIS2 ID precedence
+ * DHIS2 results always take precedence when IDs match
+ */
+function mergeSearchResults(
+    dhis2Results: Array<{ id: string; name: string; code?: string; displayName: string }>,
+    externalResults: Array<{ id: string; name: string; code?: string; displayName: string }>,
+    limit: number
+): Array<{ id: string; name: string; code?: string; displayName: string }> {
+    // Create a map of DHIS2 results by ID for fast lookup and precedence
+    const dhis2ById = new Map(dhis2Results.map(result => [result.id, result]));
+
+    // Start with all DHIS2 results (they have precedence)
+    const merged = [...dhis2Results];
+
+    // Add external results only if they don't conflict with DHIS2 IDs
+    for (const externalResult of externalResults) {
+        if (!dhis2ById.has(externalResult.id)) {
+            merged.push(externalResult);
+        }
+        // If ID exists in DHIS2, skip the external result (DHIS2 takes precedence)
+    }
+
+    // Respect the original limit
+    return merged.slice(0, limit);
 }
 
 /**

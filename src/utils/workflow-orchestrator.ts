@@ -707,7 +707,7 @@ class WorkflowOrchestrator {
     }
 
     // Get agent function by name
-    private getAgentFunction(agentName: string): any {
+    public getAgentFunction(agentName: string): any {
         // Import agents dynamically to avoid circular dependencies
         switch (agentName) {
             case 'direct_search':
@@ -731,6 +731,12 @@ class WorkflowOrchestrator {
                 return async (input: any) => {
                     const { crudAgent } = await import('../agents/crud-agent');
                     return crudAgent.invoke(input);
+                };
+            case 'update':
+                return async (input: any) => {
+                    const { createUpdateGraphAgent } = await import('../agents/update-agent');
+                    const updateAgent = createUpdateGraphAgent(this);
+                    return updateAgent.invoke(input);
                 };
             case 'data_entry':
                 return async (input: any) => {

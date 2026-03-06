@@ -258,12 +258,12 @@ export async function callExternalSearchApi(
         const results: ExternalSearchApiResponse = await response.json();
 
         // Validate response structure
-        if (!Array.isArray(results)) {
+        if (!Array.isArray(results['results'])) {
             console.warn('External search API returned invalid response format (not an array)');
             return null;
         }
 
-        return results;
+        return results['results'] as ExternalSearchApiResponse;
 
     } catch (error) {
         if (error.name === 'AbortError') {

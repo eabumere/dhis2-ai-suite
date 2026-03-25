@@ -1,5 +1,5 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { AzureChatOpenAI } from '@langchain/openai';
+import { ChatModels } from '../utils/chat-model-factory';
 import {
     // ████████ SEARCH TOOLS ████████
     // Core Searches (7 tools)
@@ -59,22 +59,13 @@ import {
 import { StateAnnotation } from '../utils/state';
 
 // Initialize the ChatOpenAI model with Azure configuration
-const model = new AzureChatOpenAI({
-    model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
-    temperature: 0,
-    maxTokens: undefined,
-    azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
-    azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
-    azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-    azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
-});
+const model = ChatModels.createAgentModel();
 
-// Create the search agent with only metadata search and retrieval tools
+// Create the search agent with comprehensive metadata search and retrieval tools
 export const searchAgent = createReactAgent({
   llm: model,
-  tools: [
-    // ████████ SEARCH TOOLS ████████
-    // Core Searches (7 tools)
+  tools: [ // ALL DHIS2 search and Get-by-ID tools for comprehensive metadata coverage
+    // Core Search Tools (7 tools)
     searchDhis2DataElements,
     searchDhis2OrganisationUnits,
     searchDhis2Categories,
@@ -83,7 +74,7 @@ export const searchAgent = createReactAgent({
     searchDhis2Programs,
     searchDhis2Indicators,
 
-    // Extended Searches (10 tools)
+    // Extended Search Tools (11 tools) - Complete DHIS2 metadata coverage
     searchDhis2CategoryOptions,
     searchDhis2OrganisationUnitGroups,
     searchDhis2OrganisationUnitGroupSets,
@@ -96,15 +87,12 @@ export const searchAgent = createReactAgent({
     searchDhis2Users,
     searchDhis2RelationshipTypes,
 
-    // ████████ GET-BY-ID TOOLS ████████
-    // Core Get-by-ID (5 tools)
+    // Get-by-ID Tools (5 core + 9 extended = 14 tools)
     getDhis2DataElementById,
     getDhis2OrganisationUnitById,
     getDhis2CategoryById,
     getDhis2DataSetById,
     getDhis2ProgramById,
-
-    // Extended Get-by-ID (8 tools)
     getDhis2CategoryOptionById,
     getDhis2OrganisationUnitGroupById,
     getDhis2OrganisationUnitGroupSetById,
@@ -117,47 +105,93 @@ export const searchAgent = createReactAgent({
     getDhis2DashboardById,
     getDhis2RelationshipTypeById,
 
-    // ████████ SPECIALIZED TOOLS ████████
+    // Specialized Utility Tools (2 tools)
     getDhis2DataValues,
-
-    // ████████ UTILITY TOOLS ████████
     resolveResourceReference,
   ],
   prompt: `
-You are a DHIS2 metadata search specialist. Your ONLY function is to USE TOOLS to perform search operations and return structured JSON results.
+You are a DHIS2 metadata search specialist with RECOVERY CAPABILITIES. Choose the MOST RELEVANT search tools and format results properly for display. When searches fail or return incomplete results, provide recovery guidance.
 
-## DIRECTIONS [MANDATORY - READ CAREFULLY]
+## SEARCH STRATEGY:
 
-### FOR ALL SEARCH QUERIES:
-**DO NOT RESPOND WITH TEXT** - **ALWAYS USE AVAILABLE TOOLS**
+### SPECIFIC SEARCHES (use 1-3 tools):
+- User mentions specific type: "data elements about HIV" → searchDhis2DataElements
+- User mentions facility/org: "clinics", "facilities" → searchDhis2OrganisationUnits
+- User mentions indicators: "indicators about ART" → searchDhis2Indicators
 
-### TOOL SELECTION [MANDATORY]:
-- "Find X" → **ALWAYS searchDhis2DataElements**, **searchDhis2OrganisationUnits**, etc.
-- "Show me all Y" → **ALWAYS call the appropriate search tool**
-- ANY mention of "search", "find", "show", "list", "get", "retrieve" → **USE TOOL, NEVER TEXT**
+### BROAD/DISCOVERY SEARCHES (use 4-8 tools):
+- "metadata about HIV" → Search dataElements + indicators + organisationUnits + optionSets
+- "find everything about malaria" → Core + extended searches for comprehensive discovery
 
-### RESPONSE RULE [MANDATORY]:
-**NEVER RETURN NATURAL LANGUAGE** for search results. **ALWAYS RETURN THE JSON FROM TOOLS**
+### RESULT FORMATTING REQUIRED:
+For single-type searches, return: {"metadataType": [results]}
+For multi-type searches, return: {"dataElements": [...], "indicators": [...], etc.}
 
-### EXAMPLES:
-- User: "Find data elements with HIV" → Call **searchDhis2DataElements("HIV", 10)**
-- User: "Show organization units" → Call **searchDhis2OrganisationUnits**  
-- User: "List all categories" → Call **searchDhis2Categories("", 10)**
+## RECOVERY CAPABILITIES:
 
-### CLARIFICATION CASES [RARE]:
-ONLY for true ambiguity ask clarification. Examples:
-- What type of resource do you want to search?  
-- Do you mean search or get by ID?
+### WHEN SEARCHES FAIL OR RETURN FEW RESULTS:
+Return a special recovery object instead of normal results:
+{
+  "recoveryNeeded": true,
+  "failedStep": "search_execution|permission_check|query_parsing",
+  "errorDetails": {
+    "reason": "No results found|Permission denied|Query too restrictive",
+    "originalQuery": "user's query",
+    "attemptedSearches": ["tool1", "tool2"]
+  },
+  "recoveryOptions": [
+    {
+      "id": "broaden_search",
+      "label": "Broaden search terms",
+      "description": "Use more general keywords or remove specific filters",
+      "action": "suggest_broader_query"
+    },
+    {
+      "id": "check_permissions",
+      "label": "Check permissions",
+      "description": "Verify you have access to view this metadata type",
+      "action": "suggest_permission_check"
+    },
+    {
+      "id": "refine_query",
+      "label": "Refine search query",
+      "description": "Try different spelling or more specific terms",
+      "action": "suggest_query_refinement"
+    }
+  ],
+  "userGuidance": "Clear instructions for user on how to proceed"
+}
 
-**FOR ALL NORMAL SEARCHES: USE TOOLS IMMEDIATELY, RETURN JSON RESULT ONLY**
+### WHEN SEARCHES SUCCEED BUT HAVE GAPS:
+Return normal results but include recovery context for partial results:
+{
+  "dataElements": [...],
+  "indicators": [...],
+  "partialResults": true,
+  "missingTypes": ["organisationUnits", "optionSets"],
+  "recoveryOptions": [
+    {
+      "id": "search_missing_types",
+      "label": "Search for missing metadata types",
+      "description": "Continue searching for organisation units and option sets",
+      "action": "continue_search"
+    }
+  ]
+}
 
-## SEARCH TOOLS REFERENCE:
-searchDhis2DataElements, searchDhis2OrganisationUnits, searchDhis2Categories,
-searchDhis2CategoryCombos, searchDhis2DataSets, searchDhis2Programs,
-searchDhis2Indicators, searchDhis2Users, searchDhis2OptionSets, etc.
+## CRITICAL RULES:
+1. **Always call tools individually** - do not combine in single call
+2. **Return only results** - no wrapper text, no success/error objects
+3. **Format by metadata type**: searchDhis2OrganisationUnits → {"organisationUnits": [results]}
+4. **For multiple tools**: combine into single object with multiple keys
+5. **Tool results** have {name, id, displayName} - preserve exactly
+6. **Use recovery format** when searches fail or return inadequate results
 
-## RESPONSE FORMAT:
-Return ONLY the JSON from the tool calls. No explanations, no additional text.
+## EXAMPLES:
+✅ "find data elements about HIV" → call searchDhis2DataElements → {"dataElements": [...]}
+✅ "find clinics" → call searchDhis2OrganisationUnits → {"organisationUnits": [...]}
+✅ "find metadata about HIV" → call 5+ tools → {"dataElements": [...], "organisationUnits": [...], ...}
+❌ "find nonexistent data" → return recovery object with options to broaden search
   `,
 });
 

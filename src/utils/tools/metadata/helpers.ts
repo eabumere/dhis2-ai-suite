@@ -197,14 +197,186 @@ export async function generateDhis2Id(): Promise<string> {
 
 
 /**
+ * Interface for external search API response
+ */
+interface ExternalSearchResult {
+    content: string;
+    metadata: {
+        item_id: string;
+        name: string;
+        type: string;
+    };
+}
+
+/**
+ * Interface for external search API response format
+ */
+interface ExternalSearchApiResponse extends Array<ExternalSearchResult> {}
+
+/**
+ * Call external search API with query and limit
+ */
+export async function callExternalSearchApi(
+    query: string,
+    targetType: string,
+    limit: number
+): Promise<ExternalSearchApiResponse | null> {
+    const externalUrl = (import.meta as any).env.DHIS2_EXTERNAL_SEARCH_URL;
+    const apiKey = (import.meta as any).env.DHIS2_EXTERNAL_SEARCH_API_KEY;
+    const timeout = parseInt((import.meta as any).env.DHIS2_EXTERNAL_SEARCH_TIMEOUT) || 5000;
+
+    // Check if external search is configured
+    if (!externalUrl) {
+        return null;
+    }
+
+    try {
+        // Create AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+        const response = await fetch(externalUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(apiKey && { 'Authorization': `Bearer ${apiKey}` })
+            },
+            body: JSON.stringify({
+                query: query,
+                limit: limit
+            }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            console.warn(`External search API returned ${response.status}: ${response.statusText}`);
+            return null;
+        }
+
+        const results: ExternalSearchApiResponse = await response.json();
+
+        // Validate response structure
+        if (!Array.isArray(results['results'])) {
+            console.warn('External search API returned invalid response format (not an array)');
+            return null;
+        }
+
+        return results['results'] as ExternalSearchApiResponse;
+
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            console.warn('External search API call timed out, falling back to DHIS2');
+        } else {
+            console.warn('External search API call failed:', error.message);
+        }
+        return null;
+    }
+}
+
+/**
+ * Filter external search results by target metadata type
+ */
+export function filterExternalResultsByType(
+    results: ExternalSearchApiResponse,
+    targetType: string
+): ExternalSearchApiResponse {
+    return results.filter(result =>
+        result.metadata?.type === targetType ||
+        result.metadata?.type?.toLowerCase() === targetType.toLowerCase() ||
+        // Handle plural forms (dataElements vs dataElement, etc.)
+        result.metadata?.type?.toLowerCase() === targetType.slice(0, -1).toLowerCase() ||
+        result.metadata?.type?.slice(0, -1).toLowerCase() === targetType.toLowerCase()
+    );
+}
+
+/**
+ * Transform external search results to match DHIS2 metadata format
+ */
+export function transformExternalResults(
+    results: ExternalSearchApiResponse
+): Array<{ id: string; name: string; code?: string; displayName: string }> {
+    return results.map(result => ({
+        id: result.metadata.item_id,
+        name: result.metadata.name,
+        code: result.metadata.name, // Use name as code since external API might not provide separate codes
+        displayName: result.content || result.metadata.name // Use content as display name if available, fallback to name
+    }));
+}
+
+/**
  * Search for existing DHIS2 metadata by name or code
+ * Always performs DHIS2 search, then merges with external search results if available
+ * DHIS2 results take precedence by ID matching
  */
 export async function searchDhis2Metadata(
     metadataType: string,
     query: string,
     limit: number = 10
 ): Promise<Array<{ id: string; name: string; code?: string; displayName: string }>> {
-    return await searchDhis2MetadataAppRuntime(metadataType, query, limit);
+
+    // STEP 1: Always perform DHIS2 search first
+    console.log(`🔄 Performing DHIS2 native search for ${metadataType}`);
+    const dhis2Results = await searchDhis2MetadataAppRuntime(metadataType, query, limit);
+    console.log(`✅ DHIS2 search found ${dhis2Results.length} results for type '${metadataType}'`);
+
+    // STEP 2: Also try external search API if configured (in parallel with DHIS2)
+    let externalResults: ExternalSearchApiResponse | null = null;
+    try {
+        externalResults = await callExternalSearchApi(query, metadataType, limit);
+    } catch (externalError) {
+        console.warn('External search failed, using DHIS2 results only:', externalError.message);
+    }
+
+    // STEP 3: Merge results with DHIS2 precedence if external results exist
+    if (externalResults && externalResults.length > 0) {
+        // Filter external results by the requested metadata type
+        const filteredExternalResults = filterExternalResultsByType(externalResults, metadataType);
+
+        if (filteredExternalResults.length > 0) {
+            const transformedExternalResults = transformExternalResults(filteredExternalResults);
+            console.log(`✅ External search found ${transformedExternalResults.length} additional results for type '${metadataType}'`);
+
+            // Merge with DHIS2 precedence
+            const mergedResults = mergeSearchResults(dhis2Results, transformedExternalResults, limit);
+            console.log(`📋 Merged ${dhis2Results.length} DHIS2 + ${transformedExternalResults.length} external = ${mergedResults.length} total results`);
+            return mergedResults;
+        }
+
+        console.log(`⚠️ External search found results but none matched type '${metadataType}'`);
+    } else {
+        console.log('No external search results available, using DHIS2 results only');
+    }
+
+    return dhis2Results;
+}
+
+/**
+ * Merge search results from DHIS2 and external sources with DHIS2 ID precedence
+ * DHIS2 results always take precedence when IDs match
+ */
+function mergeSearchResults(
+    dhis2Results: Array<{ id: string; name: string; code?: string; displayName: string }>,
+    externalResults: Array<{ id: string; name: string; code?: string; displayName: string }>,
+    limit: number
+): Array<{ id: string; name: string; code?: string; displayName: string }> {
+    // Create a map of DHIS2 results by ID for fast lookup and precedence
+    const dhis2ById = new Map(dhis2Results.map(result => [result.id, result]));
+
+    // Start with all DHIS2 results (they have precedence)
+    const merged = [...dhis2Results];
+
+    // Add external results only if they don't conflict with DHIS2 IDs
+    for (const externalResult of externalResults) {
+        if (!dhis2ById.has(externalResult.id)) {
+            merged.push(externalResult);
+        }
+        // If ID exists in DHIS2, skip the external result (DHIS2 takes precedence)
+    }
+
+    // Respect the original limit
+    return merged.slice(0, limit);
 }
 
 /**
@@ -288,6 +460,40 @@ export async function updateDhis2Metadata(
 
     if (!result.success) {
         throw new Error(`Failed to update metadata: ${result.errors?.join(', ')}`);
+    }
+
+    return result.apiResponse;
+}
+
+/**
+ * Delete DHIS2 metadata using unified batch API (for multiple resources at once)
+ */
+export async function deleteDhis2Metadata(
+    metadataType: string,
+    payload: Record<string, any> | Record<string, any>[]
+): Promise<any> {
+    const { getUnifiedMetadataManager } = await import('./batch-manager');
+
+    const manager = getUnifiedMetadataManager();
+    manager.clear(); // Clear any pending operations
+
+    // Add delete operations to the batch
+    const items = Array.isArray(payload)
+        ? payload.map(data => ({ type: metadataType, id: data.id, data }))
+        : [{ type: metadataType, id: payload.id, data: payload }];
+
+    for (const item of items) {
+        await manager.addOperation(metadataType, 'DELETE', item.data, { id: item.id });
+    }
+
+    // Execute the batch delete
+    const result = await manager.executeBatch({
+        importStrategy: 'DELETE',
+        atomic: false // Allow partial success for backward compatibility
+    });
+
+    if (!result.success) {
+        throw new Error(`Failed to delete metadata: ${result.errors?.join(', ')}`);
     }
 
     return result.apiResponse;

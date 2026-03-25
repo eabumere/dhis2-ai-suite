@@ -1,5 +1,5 @@
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { AzureChatOpenAI } from '@langchain/openai';
+import { ChatModels } from './utils/chat-model-factory';
 import {
     // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
     createDhis2DataElement, // Pure tool calling (replaces ALL custom parsing)
@@ -127,15 +127,7 @@ import {
 import { StateAnnotation } from './utils/state';
 
 // Initialize the ChatOpenAI model with Azure configuration
-const model = new AzureChatOpenAI({
-    model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
-    temperature: 0,
-    maxTokens: undefined,
-    azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
-    azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
-    azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-    azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
-});
+const model = ChatModels.createAgentModel();
 
 // Create the agent with all DHIS2 metadata tools
 export const metadataAgent = createReactAgent({

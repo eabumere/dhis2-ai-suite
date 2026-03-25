@@ -56,9 +56,8 @@ export class Dhis2Api {
                 search: {
                     resource: metadataType,
                     params: {
-                        filter: `name:ilike:${encodeURIComponent(query)}`,
-                        fields: 'id,name,code,displayName',
-                        paging: false
+                        filter: `name:ilike:${query}`,
+                        fields: 'id,name,code,displayName'
                     }
                 }
             });
@@ -145,6 +144,50 @@ export async function searchDhis2Metadata(
 }
 
 /**
+ * Get current user information including organisation units
+ */
+export async function getCurrentUserInfo(): Promise<{
+    id: string;
+    name: string;
+    username: string;
+    organisationUnits: Array<{ id: string; name: string; level: number; path: string }>;
+    primaryOrgUnit?: { id: string; name: string; level: number; path: string };
+} | null> {
+    try {
+        const result = await Dhis2Api.query({
+            me: {
+                resource: 'me',
+                params: {
+                    fields: 'id,name,username,organisationUnits[id,name,level,path]'
+                }
+            }
+        });
+
+        if (result.success && result.data?.me) {
+            const userData = result.data.me;
+
+            // Find primary org unit (usually the first one or one marked as primary)
+            // DHIS2 typically has a user's "home" org unit as the first in the list
+            const primaryOrgUnit = userData.organisationUnits?.[0] || null;
+
+            return {
+                id: userData.id,
+                name: userData.name,
+                username: userData.username,
+                organisationUnits: userData.organisationUnits || [],
+                primaryOrgUnit: primaryOrgUnit
+            };
+        }
+
+        console.warn('Failed to fetch user info from /me endpoint');
+        return null;
+    } catch (error) {
+        console.error('Error fetching current user info:', error);
+        return null;
+    }
+}
+
+/**
  * Check if a specific resource exists
  */
 export async function checkResourceExists(
@@ -187,8 +230,7 @@ export async function checkResourceExists(
                         resource: metadataType,
                         params: {
                             filter: `code:eq:${encodeURIComponent(code)}`,
-                            fields: 'id,name,code,displayName',
-                            paging: false
+                            fields: 'id,name,code,displayName'
                         }
                     }
                 });
@@ -221,55 +263,20 @@ export async function createDhis2MetadataAggregated(
 ): Promise<{ response: any; httpStatus: number; results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> }> {
     const results: Array<{ type: string; id?: string; exists?: boolean; created?: boolean }> = [];
 
-    // Process each resource type - check existence first
+    // Trust that the aggregatedPayload contains only resources that need to be created
+    // (existence checks already happened in the workflow's resolve_all_references step)
     for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
         for (const resource of resources) {
-            const existsCheck = await checkResourceExists(
-                metadataType,
-                resource.name,
-                resource.id,
-                metadataType === 'dataElements' ? resource.code : undefined
-            );
-            if (existsCheck?.exists) {
-                console.log(`✅ Resource already exists: ${metadataType} '${resource.name}' with ID: ${existsCheck.id}`);
-                results.push({ type: metadataType, id: existsCheck.id, exists: true, created: false });
-                continue;
-            }
             results.push({ type: metadataType, id: resource.id, exists: false, created: true });
         }
     }
 
-    // Filter to only include resources that don't exist
-    const filteredPayload: Record<string, Record<string, any>[]> = {};
-    let hasNewResources = false;
-
-    for (const [metadataType, resources] of Object.entries(aggregatedPayload)) {
-        const newResources = resources.filter(resource => {
-            const result = results.find(r => r.type === metadataType && r.id === resource.id);
-            return !result?.exists;
-        });
-
-        if (newResources.length > 0) {
-            filteredPayload[metadataType] = newResources;
-            hasNewResources = true;
-        }
-    }
-
-    if (!hasNewResources) {
-        console.log('All resources already exist, no creation needed');
-        return {
-            response: { status: 'OK', message: 'All resources already exist' },
-            httpStatus: 200,
-            results
-        };
-    }
-
-    console.log('Creating aggregated metadata:', JSON.stringify(filteredPayload, null, 2));
+    console.log('Creating aggregated metadata:', JSON.stringify(aggregatedPayload, null, 2));
 
     const mutationConfig = {
         resource: 'metadata',
         type: 'create',
-        data: filteredPayload,
+        data: aggregatedPayload,
         params: {
             importStrategy: 'CREATE_UPDATE',
             atomic: false

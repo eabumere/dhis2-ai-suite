@@ -1,9 +1,7 @@
 import { MessagesAnnotation } from "@langchain/langgraph/web";
 
 /**
- * State annotation for the LangGraph agent
- * Uses basic messages annotation - conversation context is managed at tool level
+ * State annotation for the LangGraph agents
+ * Conversation state is managed by ConversationContextManager, so we keep minimal state
  */
-export const StateAnnotation = {
-  ...MessagesAnnotation,
-};
+export const StateAnnotation = MessagesAnnotation

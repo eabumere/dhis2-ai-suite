@@ -234,6 +234,10 @@ export const TrackedEntityAttributeSchema = z.object({
   optionSet: z.object({ id: z.string() }).optional(),
   pattern: z.string().optional(),
   confidential: z.boolean().optional(),
+  aggregationType: z.enum([
+    'SUM', 'AVERAGE', 'AVERAGE_SUM_ORG_UNIT', 'COUNT', 'STDDEV', 'VARIANCE',
+    'MIN', 'MAX', 'NONE', 'CUSTOM', 'DEFAULT'
+  ]).optional().describe("Aggregation type for the attribute (defaults to NONE for tracked entity attributes)"),
 });
 
 export const TrackedEntityTypeAttributeSchema = z.object({

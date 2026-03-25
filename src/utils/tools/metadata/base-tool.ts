@@ -1,4 +1,4 @@
-import { tool } from '@langchain/core/tools';
+import { tool, DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
     createDhis2Metadata,
@@ -9,8 +9,67 @@ import {
     validateResourceData,
     addResourceToContext,
     updateDhis2Metadata,
+    deleteDhis2Metadata,
 } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
+
+/**
+ * Extract required field names from a Zod schema for LLM prompting
+ */
+function getRequiredFieldsFromSchema(schema: z.ZodSchema): string[] {
+    // For known schemas that were failing, return hardcoded required fields
+    // This ensures the LLM gets explicit instructions about required fields
+    try {
+        // Try to detect which schema this is by checking for known field patterns
+        const schemaDef = (schema as any)._def;
+
+        if (schemaDef.typeName === 'ZodObject' && schemaDef.shape) {
+            // Check for DataElement schema (has valueType, domainType, aggregationType)
+            if (schemaDef.shape.valueType && schemaDef.shape.domainType && schemaDef.shape.aggregationType) {
+                return ['name', 'valueType', 'domainType', 'aggregationType', 'shortName'];
+            }
+
+            // Check for Category schema (has dataDimension, categoryOptions array)
+            if (schemaDef.shape.dataDimension && schemaDef.shape.categoryOptions && Array.isArray(schemaDef.shape.categoryOptions._def.type._def.shape)) {
+                return ['name', 'shortName', 'dataDimensionType', 'categoryOptions'];
+            }
+
+            // Check for CategoryCombo schema (has categories array, dataDimensionType)
+            if (schemaDef.shape.categories && schemaDef.shape.dataDimensionType && Array.isArray(schemaDef.shape.categories._def.type._def.shape)) {
+                return ['name', 'shortName', 'dataDimensionType', 'categories'];
+            }
+
+            // Check for DataSet schema (has periodType, dataSetElements)
+            if (schemaDef.shape.periodType && schemaDef.shape.dataSetElements) {
+                return ['name', 'shortName', 'periodType', 'dataSetElements'];
+            }
+
+            // Fallback: try to extract dynamically
+            const requiredFields: string[] = [];
+
+            for (const [fieldName, fieldSchema] of Object.entries(schemaDef.shape)) {
+                const fieldDef = (fieldSchema as any)._def;
+
+                // Check if field is required (not optional or nullable by default)
+                const isOptional = fieldDef.typeName === 'ZodOptional' ||
+                                  fieldDef.typeName === 'ZodNullable' ||
+                                  fieldDef.typeName === 'ZodDefault';
+
+                if (!isOptional) {
+                    requiredFields.push(fieldName);
+                }
+            }
+
+            return requiredFields;
+        }
+
+        return [];
+    } catch (error) {
+        console.warn('Failed to extract required fields from schema:', error);
+        // Return common required fields as fallback
+        return ['name', 'shortName'];
+    }
+}
 
 /**
  * New LLM-First Tool Configuration
@@ -37,7 +96,7 @@ export interface LLMToolConfig<T extends z.ZodSchema> {
  */
 export function createLLMFirstTool<T extends z.ZodSchema>(
     config: LLMToolConfig<T> & { dhis2SchemaName?: keyof typeof import('./schemas').Dhis2Schemas }
-) {
+): DynamicStructuredTool {
     return tool(
         async ({ resource }: { resource: z.infer<T> }) => {
             try {
@@ -48,8 +107,22 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 const transformedInput = config.preparePayload ?
                     await config.preparePayload(llmInput) : llmInput;
 
+                // 1.5. Check if resource already exists (set by preparePayload)
+                if ((transformedInput as any)._exists) {
+                    console.log(`Resource "${llmInput.name}" already exists (ID: ${(transformedInput as any)._existingId}) - skipping creation`);
+                    return JSON.stringify({
+                        success: true,
+                        message: `${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists`,
+                        id: (transformedInput as any)._existingId,
+                        name: llmInput.name,
+                        exists: true,
+                        action: 'skipped_creation',
+                        llm_input: llmInput
+                    });
+                }
+
                 // 2. Transform LLM input to full DHIS2 object
-                const dhis2Object = {
+                let dhis2Object = {
                     // LLM-provided fields
                     ...transformedInput,
 
@@ -65,10 +138,46 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                         `CODE_${Date.now()}`)
                 };
 
+                // Always populate DHIS2-required fields with defaults based on schema type
+                if (config.dhis2SchemaName) {
+                    switch (config.dhis2SchemaName) {
+                        case 'DataElement':
+                            dhis2Object = {
+                                ...dhis2Object,
+                                domainType: dhis2Object.domainType || 'AGGREGATE',
+                                aggregationType: dhis2Object.aggregationType || 'SUM'
+                            };
+                            break;
+                        case 'Category':
+                            dhis2Object = {
+                                ...dhis2Object,
+                                dataDimensionType: dhis2Object.dataDimensionType || 'DISAGGREGATION'
+                            };
+                            break;
+                        case 'CategoryCombo':
+                            dhis2Object = {
+                                ...dhis2Object,
+                                dataDimensionType: dhis2Object.dataDimensionType || 'DISAGGREGATION'
+                            };
+                            break;
+                    }
+                }
+
                 // 2. Use DLHIS2 schema for validation if provided
                 const schemaToUse = config.dhis2SchemaName ?
                     (await import('./schemas')).Dhis2Schemas[config.dhis2SchemaName] :
                     config.schema;
+
+                // Defensive check: ensure schema exists
+                if (!schemaToUse) {
+                    return JSON.stringify({
+                        success: false,
+                        error: `Schema validation failed: No schema found for ${config.dhis2SchemaName || 'config.schema'}. This may be a configuration issue.`,
+                        provided: llmInput,
+                        tool: config.name,
+                        schemaName: config.dhis2SchemaName
+                    });
+                }
 
                 // Validate against DHIS2 schema
                 const validation = validateResourceData(schemaToUse, dhis2Object);
@@ -107,6 +216,9 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 }
 
                 // 6. Return success response
+
+
+                // 6. Return success response
                 return JSON.stringify({
                     success: true,
                     message: `Successfully created ${config.metadataType.slice(0, -1)}: ${validation.data.name}`,
@@ -130,10 +242,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
         },
         {
             name: config.name,
-            description: config.description,
+            description: `${config.description}\n\nIMPORTANT: You MUST provide ALL required fields from the schema. The following fields are REQUIRED and cannot be omitted: ${getRequiredFieldsFromSchema(config.schema).join(', ')}. Do not omit any required fields - this will cause API errors.`,
             schema: z.object({
                 resource: config.schema
-            }).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with these properties`),
+            }).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with ALL required properties specified. Required fields: ${getRequiredFieldsFromSchema(config.schema).join(', ')}`),
         }
     );
 }
@@ -327,6 +439,69 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                     "Dependencies that need to be resolved before updating"
                 ),
             }).describe(`Update DHIS2 ${config.metadataType} resource with schema objects`),
+        }
+    );
+}
+
+/**
+ * Create a delete tool for DHIS2 resources
+ * Allows deleting existing resources by ID
+ */
+export function createDhis2DeleteTool<T extends z.ZodSchema>(
+    config: LLMToolConfig<T>
+) {
+    return tool(
+        async ({
+            id,
+            resource
+        }: {
+            id?: string;
+            resource?: Record<string, any>;
+        }) => {
+            try {
+                if (!id && !resource?.id) {
+                    throw new Error('Must provide either id parameter or include id in resource object');
+                }
+
+                const resourceId = id || resource!.id;
+
+                // Prepare the resource data for deletion
+                const deleteData = {
+                    id: resourceId,
+                    ...resource
+                };
+
+                // Delete from DHIS2 using the new delete function
+                const deleteResult = await deleteDhis2Metadata(
+                    config.metadataType,
+                    [deleteData]
+                );
+
+                return JSON.stringify({
+                    success: true,
+                    message: `${config.metadataType.slice(0, -1)} deleted successfully`,
+                    id: resourceId,
+                    apiResponse: deleteResult
+                });
+
+            } catch (error) {
+                console.error(`Error deleting ${config.name}:`, error);
+                return JSON.stringify({
+                    success: false,
+                    error: `Failed to delete resource: ${error.message}`,
+                    id
+                });
+            }
+        },
+        {
+            name: `delete_dhis2_${config.metadataType.toLowerCase()}`,
+            description: `Delete an existing DHIS2 ${config.description.split(' ')[0]} resource`,
+            schema: z.object({
+                id: z.string().optional().describe("The ID of the resource to delete"),
+                resource: config.schema.optional().describe(
+                    "Resource object containing the ID to delete"
+                ),
+            }).describe(`Delete DHIS2 ${config.metadataType.slice(0, -1)} resource`),
         }
     );
 }

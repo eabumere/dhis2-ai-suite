@@ -2,9 +2,8 @@
     "ERROR": "ERROR",
     "Loading...": "Loading...",
     "Hello {{name}}": "Hello {{name}}",
-    "DHIS2 Multi-Agent Metadata Assistant": "DHIS2 Multi-Agent Metadata Assistant",
-    "Ask Anything": "Ask Anything",
-    "e.g., \"Find all data elements with HIV\", \"Create a program for maternal health\", \"Show me programs about malaria\"": "e.g., \"Find all data elements with HIV\", \"Create a program for maternal health\", \"Show me programs about malaria\"",
+    "DHIS2 Orchestrated Multi-Agent Assistant": "DHIS2 Orchestrated Multi-Agent Assistant",
+    "Ask me anything about DHIS2...": "Ask me anything about DHIS2...",
     "Processing...": "Processing...",
-    "Execute": "Execute"
+    "Send": "Send"
 }

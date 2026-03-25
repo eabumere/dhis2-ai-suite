@@ -29,6 +29,10 @@ export {
     createDhis2Enrollment,
     createDhis2Event,
 
+    // LLM-powered extraction tools
+    extractDatePeriodLLM,
+    extractOrgUnitKeywordsLLM,
+
     // Update tools - Extended
     updateDhis2DataElement,
     updateDhis2OrganisationUnit,

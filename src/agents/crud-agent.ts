@@ -1,362 +1,270 @@
-import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { AzureChatOpenAI } from '@langchain/openai';
-import {
-    // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
-    createDhis2DataElement, // Pure tool calling (replaces ALL custom parsing)
-    createDhis2Option, // Fixed option routing (the key solution!)
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
+import { ChatModels } from '../utils/chat-model-factory';
+import { createAgent } from './create-agent';
+import { createDeleteGraphAgent } from './delete-agent';
 
-    // ████████ ALL CREATION TOOLS ████████
-    // Core Metadata (15 tools)
-    createDhis2OrganisationUnit,
-    createDhis2Category,
-    createDhis2CategoryCombo,
-    createDhis2DataSet,
-    createDhis2Indicator,
-    createDhis2OptionSet,
-    createDhis2ValidationRule,
-    createDhis2ReportingForm,
+// Define CRUD State - tracks operation type and workflow context
+const CrudAnnotation = Annotation.Root({
+	// Workflow context
+	operationType: Annotation<'create' | 'update' | 'delete' | 'unknown'>({
+		reducer: (left, right) => right || left,
+		default: () => 'unknown'
+	}),
+	originalQuery: Annotation<string>({
+		reducer: (left, right) => right || left,
+		default: () => ''
+	}),
 
-    // Extended Metadata (15 tools)
-    createDhis2CategoryOption,
-    createDhis2OrganisationUnitGroup,
-    createDhis2OrganisationUnitGroupSet,
-    createDhis2Program,
-    createDhis2TrackedEntityType,
-    createDhis2TrackedEntityAttribute,
-    createDhis2ProgramStage,
-    createDhis2ProgramRule,
-    createDhis2ProgramIndicator,
-    createDhis2IndicatorType,
-    createDhis2Visualization,
-    createDhis2Dashboard,
-    createDhis2DashboardItem,
-    createDhis2User,
-    createDhis2RelationshipType,
+	// Messages for processing
+	messages: Annotation<any[]>({
+		reducer: (left: any[], right: any[]) => right ? right : left,
+		default: () => []
+	}),
 
-    // Entity & Data Management (5 tools)
-    createDhis2Relationship,
-    createDhis2TrackedEntityInstance,
-    createDhis2Enrollment,
-    createDhis2Event,
-    createDhis2AggregatedMetadata,
-
-    // ████████ ALL UPDATE TOOLS ████████
-    // Core Updates (12 tools)
-    updateDhis2DataElement,
-    updateDhis2OrganisationUnit,
-    updateDhis2Category,
-    updateDhis2CategoryCombo,
-    updateDhis2DataSet,
-    updateDhis2Indicator,
-    updateDhis2OptionSet,
-    updateDhis2ValidationRule,
-    updateDhis2Program,
-    updateDhis2CategoryOption,
-    updateDhis2OrganisationUnitGroup,
-    updateDhis2OrganisationUnitGroupSet,
-
-    // Advanced Updates (16 tools)
-    updateDhis2ProgramStage,
-    updateDhis2ProgramRule,
-    updateDhis2ProgramIndicator,
-    updateDhis2IndicatorType,
-    updateDhis2TrackedEntityType,
-    updateDhis2TrackedEntityAttribute,
-    updateDhis2TrackedEntityInstance,
-    updateDhis2Visualization,
-    updateDhis2Dashboard,
-    updateDhis2DashboardItem,
-    updateDhis2User,
-    updateDhis2RelationshipType,
-    updateDhis2Relationship,
-    updateDhis2Enrollment,
-    updateDhis2Event,
-
-    // ████████ UTILITY TOOLS (CONTEXT/HELPERS) ████████
-    resolveResourceReference,
-} from '../utils/tools/metadata';
-import {
-    resolveResourceReference as resolveRefHelper,
-    addResourceToContext,
-    getContextInfo,
-} from '../utils/tools/metadata/helpers';
-import { StateAnnotation } from '../utils/state';
-
-// Initialize the ChatOpenAI model with Azure configuration
-const model = new AzureChatOpenAI({
-    model: (import.meta as any).env.DHIS2_OPENAI_MODEL,
-    temperature: 0,
-    maxTokens: undefined,
-    azureOpenAIApiKey: (import.meta as any).env.DHIS2_AZURE_KEY,
-    azureOpenAIEndpoint: (import.meta as any).env.DHIS2_AZURE_ENDPOINT,
-    azureOpenAIApiDeploymentName: (import.meta as any).env.DHIS2_AZURE_API_DEPLOYMENT_NAME,
-    azureOpenAIApiVersion: (import.meta as any).env.DHIS2_AZURE_API_VERSION,
+	// Final result
+	finalResult: Annotation<any>({
+		reducer: (left, right) => right || left,
+		default: () => null
+	}),
 });
 
-// Create the CRUD agent with all creation and update tools
-export const crudAgent = createReactAgent({
-  llm: model,
-  tools: [
-    // ████████ LLM-FIRST TOOLS - NEW ARCHITECTURE ████████
-    createDhis2DataElement, // Pure tool calling (replaces ALL custom parsing)
-    createDhis2Option, // FIXED OPTION ROUTING (the key solution!)
+// Initialize the ChatOpenAI model with Azure configuration and retry logic for rate limiting
+const model = ChatModels.createAgentModelWithRetry();
 
-    // ████████ ALL CREATION TOOLS ████████
-    // Core Metadata Creation (8 tools)
-    createDhis2OrganisationUnit,
-    createDhis2Category,
-    createDhis2CategoryCombo,
-    createDhis2DataSet,
-    createDhis2Indicator,
-    createDhis2ValidationRule,
-    createDhis2OptionSet,
-    createDhis2ReportingForm,
+// StateGraph Workflow Nodes
 
-    // Extended Metadata Creation (15 tools)
-    createDhis2CategoryOption,
-    createDhis2OrganisationUnitGroup,
-    createDhis2OrganisationUnitGroupSet,
-    createDhis2Program,
-    createDhis2TrackedEntityType,
-    createDhis2TrackedEntityAttribute,
-    createDhis2ProgramStage,
-    createDhis2ProgramRule,
-    createDhis2ProgramIndicator,
-    createDhis2IndicatorType,
-    createDhis2Visualization,
-    createDhis2Dashboard,
-    createDhis2DashboardItem,
-    createDhis2User,
-    createDhis2RelationshipType,
+// 1. Classify operation type (Create/Update/Delete)
+async function classify_operation(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('🔄 CRUD: Classifying operation type for query:', state.originalQuery);
 
-    // Tracker & Data Management Creation (5 tools)
-    createDhis2Relationship,
-    createDhis2TrackedEntityInstance,
-    createDhis2Enrollment,
-    createDhis2Event,
-    createDhis2AggregatedMetadata,
+	const classificationPrompt = `
+Analyze this DHIS2 CRUD request and classify it as CREATE, UPDATE, or DELETE operation.
 
-    // ████████ ALL UPDATE TOOLS ████████
-    // Core Metadata Updates (11 tools)
-    updateDhis2DataElement,
-    updateDhis2OrganisationUnit,
-    updateDhis2Category,
-    updateDhis2CategoryCombo,
-    updateDhis2DataSet,
-    updateDhis2Indicator,
-    updateDhis2ValidationRule,
-    updateDhis2OptionSet,
-    updateDhis2Program,
-    updateDhis2CategoryOption,
-    updateDhis2OrganisationUnitGroup,
-    updateDhis2OrganisationUnitGroupSet,
+IMPORTANT: This system supports MULTIPLE LANGUAGES. Users may query in English, French, Spanish, Arabic, Portuguese, or any other language. Focus on INTENT and MEANING, not specific keywords.
 
-    // Advanced Metadata Updates (13 tools)
-    updateDhis2ProgramStage,
-    updateDhis2ProgramRule,
-    updateDhis2ProgramIndicator,
-    updateDhis2IndicatorType,
-    updateDhis2TrackedEntityType,
-    updateDhis2TrackedEntityAttribute,
-    updateDhis2TrackedEntityInstance,
-    updateDhis2Visualization,
-    updateDhis2Dashboard,
-    updateDhis2DashboardItem,
-    updateDhis2User,
-    updateDhis2RelationshipType,
-    updateDhis2Relationship,
-    updateDhis2Enrollment,
-    updateDhis2Event,
+CLASSIFICATION RULES (Language-Agnostic):
+- CREATE: Actions that ADD NEW resources, entities, or metadata to the system
+- UPDATE: Actions that MODIFY, CHANGE, or ALTER existing resources
+- DELETE: Actions that REMOVE, DESTROY, or ELIMINATE existing resources
 
-    // ████████ UTILITY TOOLS (CONTEXT/HELPERS) ████████
-    resolveResourceReference,
-  ],
-  prompt: `
-    You are an expert DHIS2 metadata creation and management specialist. Your expertise lies in creating new DHIS2 resources, updating existing ones, and managing complex metadata configurations for health information systems.
+SEMANTIC INDICATORS:
+- CREATE: Adding something new, establishing, setting up, building, making
+- UPDATE: Modifying existing items, changing properties, editing, revising
+- DELETE: Removing items, destroying, eliminating, erasing permanently
 
-    ## CORE CAPABILITIES
+EXAMPLES (Multilingual):
+- "Create a new data element" → CREATE
+- "Créer un nouvel élément de données" (French) → CREATE
+- "Crear un nuevo elemento de datos" (Spanish) → CREATE
+- "Update the data element I just created" → UPDATE
+- "Modifier l'élément de données que je viens de créer" (French) → UPDATE
+- "Delete the Monthly Summary dataset" → DELETE
+- "Supprimer le jeu de données Résumé Mensuel" (French) → DELETE
 
-    ### CREATION & UPDATE TOOLS
-    You can create and UPDATE ALL DHIS2 metadata resource types (~28 creation tools + ~28 update tools):
+QUERY: "${state.originalQuery}"
 
-    **CORE METADATA:**
-    - **Data Elements**: All value types (numeric, text, boolean, date, etc.) with proper aggregation
-    - **Organisation Units**: Hierarchical administrative units with levels and groups
-    - **Categories & Category Combinations**: Complete data disaggregation systems
-    - **Category Options**: Individual category values
-    - **Data Sets**: Collections with data elements, period types, and reporting forms
-    - **Indicators**: Calculated metrics with numerators/denominators and indicator types
-    - **Validation Rules**: Quality checks with expressions and constraints
-    - **Option Sets & Options**: Predefined choice lists
+Return ONLY a JSON object:
+{
+  "operationType": "create|update|delete",
+  "confidence": 0-1,
+  "reasoning": "brief explanation of intent detection"
+}
+`;
 
-    **PROGRAMS & TRACKER SYSTEMS:**
-    - **Programs**: Complete tracker/event program configurations
-    - **Tracked Entity Types**: Person/entity definitions
-    - **Tracked Entity Attributes**: Individual-level data fields
-    - **Program Stages**: Workflow steps with data elements
-    - **Program Rules**: Automated data processing logic
-    - **Program Indicators**: Program-specific calculations
+	try {
+		const result = await model.invoke([{
+			role: 'system',
+			content: 'You are a CRUD operation classifier. Return only valid JSON.'
+		}, {
+			role: 'user',
+			content: classificationPrompt
+		}]);
 
-    **ADVANCED FEATURES:**
-    - **Dashboards & Visualizations**: Complete analytics interfaces
-    - **Users & Access Control**: User management and permissions
-    - **Relationships**: Entity associations and linkages
-    - **Tracker Instances & Enrollments**: Individual record management
+		const response = JSON.parse(result.content as string);
+		console.log('🔄 CRUD: Classified operation as:', response.operationType, `(confidence: ${response.confidence})`);
 
-    ### CONVERSATIONAL CONTEXT
-    You maintain memory of resources created/accessed during our conversation:
-    - **Referencing previous work**: Use phrases like "the last created data element", "that category I just made", "the previous resource"
-    - **Context-aware operations**: When users request updates (change, modify, rename, update), first resolve any references using the reference resolution tool
-    - **Reference resolution workflow**:
-      1. When you see phrases like "last created", "the previous", "that one I made", etc., use the "resolve_resource_reference" tool first
-      2. Take the returned ID and use it with appropriate update tools (updateDhis2DataElement, updateDhis2OrganisationUnit, etc.)
-      3. If no reference can be resolved, ask the user to specify the resource explicitly
-    - **Reference resolution**: Understand references like "X I mentioned earlier", "the Y we just created", "previous Z"
+		return {
+			operationType: response.operationType || 'unknown',
+			originalQuery: state.originalQuery
+		};
+	} catch (error) {
+		console.error('🔄 CRUD: Classification failed, defaulting to unknown');
+		return {
+			operationType: 'unknown',
+			originalQuery: state.originalQuery
+		};
+	}
+}
 
-    ### BATCH OPERATIONS
-    - Create multiple different resource types in a single API call using batchCreateMetadata
-    - Use the UnifiedMetadataManager for complex multi-step operations
-    - Automatic batch parsing: When users request multiple resources in a single request (e.g., "Create data element A and data element B with different types"), automatically split and process as individual descriptions
-    - Atomic transactions: all operations succeed together or fail together
-    - Automatic dependency resolution between resources
+// 2. Route to Create Agent
+async function invoke_create_agent(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('➕ CRUD: Routing to Create Agent');
 
-    ### DATA MANAGEMENT
-    - **Tracker Operations**: Create and update entities, enrollments, and events
-    - **Relationship Management**: Link entities and records appropriately
-    - **Completeness**: Ensure all required fields are provided
+	try {
+		const result = await createAgent.invoke({
+			messages: state.messages
+		});
 
-## CREATION WORKFLOW
+		const responseContent = result.messages[result.messages.length - 1].content as string;
+		let parsedResponse;
+		try {
+			parsedResponse = JSON.parse(responseContent);
+		} catch (parseError) {
+			parsedResponse = { rawResponse: responseContent };
+		}
 
-1. **Extract Structured Data**: When users describe resources, extract complete schema-compliant objects with all required properties (name, valueType, domainType, etc.)
-2. **Validate Dependencies**: Search for existing dependencies or create them if needed (use search agent's help for dependency resolution if needed)
-3. **Generate IDs**: Get unique IDs from DHIS2 system when creating new resources
-4. **Schema Validation**: Ensure all data conforms to DHIS2 schemas using Zod validation
-5. **Batch Execution**: Use unified API for maximum efficiency
+		return { finalResult: parsedResponse };
+	} catch (error) {
+		console.error('➕ CRUD: Create agent error:', error);
+		const errorResponse = {
+			success: false,
+			error: `Create operation failed: ${error.message}`
+		};
+		return { finalResult: errorResponse };
+	}
+}
 
-### EXTRACTION GUIDELINES
+// 3. Route to Update Agent
+async function invoke_update_agent(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('🔄 CRUD: Routing to Update Agent');
 
-**Data Elements:**
-- Extract: name, valueType, domainType, aggregationType, description
-- Examples: "HIV Tested" → name: "HIV Tested", valueType: "BOOLEAN", domainType: "AGGREGATE", aggregationType: "COUNT"
+	try {
+		// Use workflow orchestrator's agent routing instead of direct call
+		const { workflowOrchestrator } = await import('../utils/workflow-orchestrator');
+		const updateAgentFn = workflowOrchestrator.getAgentFunction('update');
 
-**Organization Units:**
-- Extract: name, level, path
-- Level examples: "country" = 1, "province/state" = 2, "district" = 3, "facility" = 4
+		const result = await updateAgentFn({
+			flow: 'metadata',
+			input: { messages: state.messages },
+			selectedAgent: 'update'
+		});
 
-**Categories:**
-- Extract: name, dataDimension, dataDimensionType, categoryOptions
+		// The workflow orchestrator returns the final result directly
+		// No need to parse messages since it's already processed
+		return { finalResult: result };
+	} catch (error) {
+		console.error('🔄 CRUD: Update agent error:', error);
+		const errorResponse = {
+			success: false,
+			error: `Update operation failed: ${error.message}`
+		};
+		return { finalResult: errorResponse };
+	}
+}
 
-**Category Combinations:**
-- Extract: name, dataDimensionType, categories
+// 4. Route to Delete Agent
+async function invoke_delete_agent(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('🗑️ CRUD: Routing to Delete Agent');
 
-**Data Sets:**
-- Extract: name, periodType, dataSetElements (with dataElement and categoryCombo), organisationUnits
+	try {
+		// Use workflow orchestrator's agent routing instead of direct call
+		const { workflowOrchestrator } = await import('../utils/workflow-orchestrator');
+		const deleteAgentFn = workflowOrchestrator.getAgentFunction('delete');
 
-**Programs:**
-- Extract: name, programType, trackedEntityType, programStages, organisationUnits
+		const result = await deleteAgentFn({
+			flow: 'metadata',
+			input: { messages: state.messages },
+			selectedAgent: 'delete'
+		});
 
-**Indicators:**
-- Extract: name, annualized, decimals, numerator, denominator, indicatorType
+		// The workflow orchestrator returns the final result directly
+		// No need to parse messages since it's already processed
+		return { finalResult: result };
+	} catch (error) {
+		console.error('🗑️ CRUD: Delete agent error:', error);
+		const errorResponse = {
+			success: false,
+			error: `Delete operation failed: ${error.message}`
+		};
+		return { finalResult: errorResponse };
+	}
+}
 
-**Validation Rules:**
-- Extract: name, importance, operator, periodType, leftSide.expression, rightSide.expression
+// 5. Handle unknown operation type
+async function handle_unknown_operation(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
+	console.log('❓ CRUD: Handling unknown operation type');
 
-**Option Sets:**
-- Extract: name, valueType, options (as array with name, code, sortOrder)
+	const clarificationResponse = {
+		success: false,
+		error: 'Unable to determine operation type (create/update/delete). Please specify whether you want to create, update, or delete a resource.',
+		suggestion: 'Try rephrasing your request with clear action words like "create", "update", or "delete".'
+	};
 
-Always provide complete schema objects with all required fields, never just strings to be parsed.
+	return { finalResult: clarificationResponse };
+}
 
-    ## RESOURCE-SPECIFIC RULES
+// Create and compile StateGraph workflow
+const crudWorkflow = new StateGraph(CrudAnnotation);
 
-    ### Data Elements
-    - Default valueType: 'NUMBER' if not specified
-    - Default domainType: 'AGGREGATE' (use 'TRACKER' for program data)
-    - Default aggregationType: 'SUM' for numeric, 'NONE' for text
-    - Set zeroIsSignificant: false for text types, true for counts
+// Add nodes
+crudWorkflow.addNode('classify_operation', classify_operation);
+crudWorkflow.addNode('invoke_create_agent', invoke_create_agent);
+crudWorkflow.addNode('invoke_update_agent', invoke_update_agent);
+crudWorkflow.addNode('invoke_delete_agent', invoke_delete_agent);
+crudWorkflow.addNode('handle_unknown_operation', handle_unknown_operation);
 
-    ### Organisation Units
-    - Always specify level (1-5 typically)
-    - Generate path based on level (e.g., '/2' for level 2)
-    - Use appropriate naming hierarchy
+// Add edges
+// @ts-ignore
+crudWorkflow.addEdge(START, 'classify_operation');
 
-    ### Categories
-    - Set dataDimension: true for disaggregation
-    - dataDimensionType: 'DISAGGREGATION' or 'ATTRIBUTE'
-    - Include categoryOptions array (can be empty initially)
-
-    ### Programs
-    - programType: 'WITH_REGISTRATION' (tracker) or 'WITHOUT_REGISTRATION' (event)
-    - Include programStages for tracker programs
-    - Specify organisationUnits where program is available
-
-    ### Indicators
-    - Always include indicatorType dependency (creates default if not found)
-    - Set annualized: false unless specifically mentioned
-    - Numerator and denominator are required expressions
-
-    ### Users & Security
-    - Ensure proper user roles and organisational unit assignments
-    - Handle user credentials securely
-
-    ## DEPENDENCY MANAGEMENT [CRITICAL - VIOLATION PREVENTION]
-
-    **BREAKING THE WORKFLOW**: If you ask the user for confirmation about creating prerequisites, you BREAK the entire workflow and return invalid JSON.
-
-    **AUTOMATED SYSTEM ONLY**: The DHIS2 metadata system automatically handles ALL dependency creation:
-
-    - ✅ DataElements automatically create CategoryCombos (with Categories and CategoryOptions as needed)
-    - ✅ CategoryCombos automatically create Categories (with CategoryOptions as needed)
-    - ✅ Categories automatically create CategoryOptions
-    - ✅ All other tools handle their required dependencies
-
-    **ZERO MANUAL WORKFLOW**: NEVER ask, confirm, or mention creating prerequisites. Just call the appropriate tool directly.
-
-    **CORRECT EXECUTION**: For "Create data element X":
-    - Call createDhis2DataElement ONCE
-    - Return valid JSON response
-    - Dependencies are handled automatically by the tool system
-
-    **INCORRECT EXECUTION** (DO NOT DO THIS):
-    - Ask for confirmation
-    - Manually create dependencies
-    - Return plain text explanation
-    - Break JSON response format
-
-    **ALWAYS TRUST THE TOOL SYSTEM** - it will do everything automatically without your intervention.
-
-    ## BATCH OPERATIONS
-
-    For multiple resources or complex operations:
-    - Use batchCreateMetadata for simple batch creation
-    - Use UnifiedMetadataManager for complex workflows
-    - Set atomic=true for transaction-like behavior
-    - Use dryRun=true to validate without executing
-
-    ## RESPONSE FORMAT [CRITICAL]
-
-    **ALWAYS RETURN JSON** for creation/updating operations. Never return plain text explanations for these operations.
-
-    JSON Response Format:
-
-    {{
-      "success": boolean,
-      "message": string (optional descriptive message),
-      "results": array (for search/batch operations),
-      "data": object (for single create operations),
-      "count": number (optional count for batch operations),
-      "error": "error message" (only include if success is false)
-    }}
-
-    **Only use natural language responses when seeking clarification** from the user, such as:
-    - Requesting additional required information ("What aggregation type would you like?")
-    - Asking for confirmation ("Should I create this with default settings?")
-    - Offering choices ("Would you like to specify boolean or TEXT value type?")
-
-    For all creation, updates, and management operations (creating, modifying, managing), **respond exclusively with JSON**.
-
-    Focus on being thorough, accurate, and efficient in all metadata creation and management operations.
-  `,
+// Conditional routing based on operation type
+// @ts-ignore
+crudWorkflow.addConditionalEdges('classify_operation', (state) => {
+	if (state.operationType === 'create') return 'invoke_create_agent';
+	if (state.operationType === 'update') return 'invoke_update_agent';
+	if (state.operationType === 'delete') return 'invoke_delete_agent';
+	return 'handle_unknown_operation';
 });
+
+// Terminal nodes don't need additional edges
+// @ts-ignore
+crudWorkflow.addEdge('invoke_create_agent', END);
+// @ts-ignore
+crudWorkflow.addEdge('invoke_update_agent', END);
+// @ts-ignore
+crudWorkflow.addEdge('invoke_delete_agent', END);
+// @ts-ignore
+crudWorkflow.addEdge('handle_unknown_operation', END);
+
+// Compile the workflow
+const crudStateGraph = crudWorkflow.compile();
+
+// StateGraph-based CRUD router agent
+export function createCrudAgent() {
+	return {
+		invoke: async (input: any) => {
+			console.log('🔧 CRUD StateGraph: Processing CRUD request');
+
+			// Extract messages and original query with proper fallback logic
+			const messages = input.input?.messages || input.messages || [];
+			const originalQuery = input.input?.messages?.[0]?.content ||
+			                      input.messages?.[0]?.content ||
+			                      '';
+
+			const initialState: Partial<typeof CrudAnnotation.State> = {
+				messages: messages,
+				originalQuery: originalQuery,
+				operationType: 'unknown',
+			};
+
+			// Execute StateGraph workflow
+			const result = await crudStateGraph.invoke(initialState);
+
+			// Format for compatibility with existing interface
+			return {
+				messages: [{
+					content: JSON.stringify(result.finalResult),
+					name: undefined,
+					additional_kwargs: {},
+					response_metadata: {}
+				}]
+			};
+		}
+	};
+}
+
+// Export the StateGraph-based CRUD agent for backward compatibility
+export const crudAgent = createCrudAgent();
 
 // Export the state annotation for use in other parts of the app
-export { StateAnnotation };
+export { CrudAnnotation as StateAnnotation };

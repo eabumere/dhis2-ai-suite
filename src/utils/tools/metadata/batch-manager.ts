@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { generateDhis2Id, searchDhis2Metadata, validateResourceData } from './helpers';
+import { generateDhis2Id, searchDhis2Metadata, validateResourceData, checkResourceExists } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
 
 // Note: DHIS2 authentication now handled by app-runtime automatically
@@ -77,7 +77,7 @@ export class UnifiedMetadataManager {
     }
 
     /**
-     * Add a metadata operation to the batch
+     * Add a metadata operation to the batch with smart duplicate detection
      */
     async addOperation(
         type: string,
@@ -89,6 +89,16 @@ export class UnifiedMetadataManager {
             schema?: z.ZodSchema;
         } = {}
     ): Promise<string> {
+        // For CREATE operations, check if resource already exists
+        if (operation === 'CREATE') {
+            const existing = await this.checkExistingResource(type, data);
+            if (existing.exists) {
+                // Resource already exists, return success without creating
+                console.log(`✓ Resource already exists: ${existing.name} (${existing.id})`);
+                return existing.id;
+            }
+        }
+
         // Generate ID if not provided and operation requires it
         let itemId = options.id;
         if (!itemId && (operation === 'CREATE' || operation === 'UPDATE')) {
@@ -108,7 +118,7 @@ export class UnifiedMetadataManager {
         if (options.schema) {
             const validation = validateResourceData(options.schema, item.data);
             if (!validation.success) {
-                throw new Error(`Validation failed for ${type}: ${validation.errors.join(', ')}`);
+                throw new Error(`Validation failed for ${type}: ${(validation as any).errors.join(', ')}`);
             }
             item.data = validation.data;
         }
@@ -120,6 +130,212 @@ export class UnifiedMetadataManager {
 
         this.pendingOperations.push(item);
         return itemId || `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+
+    /**
+     * Execute batch with enhanced duplicate detection and user feedback
+     */
+    async executeBatchWithDuplicateDetection(options: {
+        importStrategy?: 'CREATE' | 'UPDATE' | 'CREATE_UPDATE' | 'DELETE';
+        atomic?: boolean;
+        dryRun?: boolean;
+    } = {}): Promise<BatchMetadataResponse> {
+        if (this.pendingOperations.length === 0) {
+            return {
+                success: true,
+                total: 0,
+                successful: 0,
+                failed: 0,
+                results: [],
+            };
+        }
+
+        const {
+            importStrategy = 'CREATE_UPDATE',
+            atomic = true,
+            dryRun = false
+        } = options;
+
+        // Track which resources already exist
+        const existingResources: Array<{ type: string; name: string; id: string }> = [];
+        const newResources: Array<{ type: string; name: string; id: string }> = [];
+
+        // Pre-check all CREATE operations for existing resources
+        for (const item of this.pendingOperations) {
+            if (item.operation === 'CREATE') {
+                const existing = await this.checkExistingResource(item.type, item.data);
+                if (existing.exists) {
+                    existingResources.push({
+                        type: item.type,
+                        name: existing.name || item.data.name || 'Unknown',
+                        id: existing.id!
+                    });
+                } else {
+                    newResources.push({
+                        type: item.type,
+                        name: item.data.name || 'Unknown',
+                        id: item.id || 'Unknown'
+                    });
+                }
+            }
+        }
+
+        console.log(`Batch operation summary:`);
+        console.log(`- Existing resources (will be skipped): ${existingResources.length}`);
+        console.log(`- New resources (will be created): ${newResources.length}`);
+        console.log(`- Total operations: ${this.pendingOperations.length}`);
+
+        if (existingResources.length > 0) {
+            console.log(`Existing resources:`);
+            existingResources.forEach(res => {
+                console.log(`  ✓ ${res.type}: ${res.name} (${res.id})`);
+            });
+        }
+
+        if (newResources.length > 0) {
+            console.log(`New resources to create:`);
+            newResources.forEach(res => {
+                console.log(`  + ${res.type}: ${res.name} (${res.id})`);
+            });
+        }
+
+        // Filter out existing resources from pending operations
+        const filteredOperations = this.pendingOperations.filter(item => {
+            if (item.operation === 'CREATE') {
+                const existing = existingResources.find(res =>
+                    res.type === item.type &&
+                    res.name === (item.data.name || item.data.displayName)
+                );
+                return !existing;
+            }
+            return true; // Keep UPDATE and DELETE operations
+        });
+
+        if (filteredOperations.length === 0) {
+            console.log('All CREATE operations were for existing resources, no API calls needed');
+            return {
+                success: true,
+                total: this.pendingOperations.length,
+                successful: this.pendingOperations.length,
+                failed: 0,
+                results: this.pendingOperations.map(item => ({
+                    type: item.type,
+                    operation: item.operation,
+                    id: item.id,
+                    success: true,
+                    data: item.data,
+                    error: undefined,
+                    apiResponse: { message: 'Resource already exists, skipped creation' }
+                })),
+            };
+        }
+
+        // Execute the filtered batch
+        const originalOperations = this.pendingOperations;
+        this.pendingOperations = filteredOperations;
+
+        try {
+            const result = await this.executeBatch(options);
+
+            // Restore original operations for return
+            this.pendingOperations = originalOperations;
+
+            // Enhance results with duplicate detection info
+            const enhancedResults = this.enhanceResultsWithDuplicateInfo(result.results, existingResources, newResources);
+
+            return {
+                ...result,
+                results: enhancedResults,
+            };
+
+        } catch (error) {
+            // Restore original operations even on error
+            this.pendingOperations = originalOperations;
+
+            // Return error response instead of throwing
+            return {
+                success: false,
+                total: this.pendingOperations.length,
+                successful: 0,
+                failed: this.pendingOperations.length,
+                results: [],
+                apiResponse: null,
+                errors: [error.message],
+            };
+        }
+    }
+
+    /**
+     * Enhance results with duplicate detection information
+     */
+    private enhanceResultsWithDuplicateInfo(
+        results: BatchMetadataResponse['results'],
+        existingResources: Array<{ type: string; name: string; id: string }>,
+        newResources: Array<{ type: string; name: string; id: string }>
+    ): BatchMetadataResponse['results'] {
+        const enhancedResults = [...results];
+
+        // Add entries for existing resources that were skipped
+        for (const existing of existingResources) {
+            enhancedResults.push({
+                type: existing.type,
+                operation: 'CREATE' as MetadataOperation,
+                id: existing.id,
+                success: true,
+                data: { name: existing.name, id: existing.id },
+                error: undefined,
+                apiResponse: {
+                    message: 'Resource already exists, creation skipped',
+                    duplicate: true
+                }
+            });
+        }
+
+        return enhancedResults;
+    }
+
+    /**
+     * Check if a resource already exists by name or code
+     */
+    private async checkExistingResource(
+        type: string,
+        data: Record<string, any>
+    ): Promise<{ exists: boolean; id?: string; name?: string }> {
+        try {
+            const name = data.name || data.displayName;
+            const code = data.code;
+
+            if (!name && !code) {
+                return { exists: false };
+            }
+
+            // Search by name first
+            if (name) {
+                const existingByName = await searchDhis2Metadata(type, name, 5);
+                if (existingByName.length > 0) {
+                    // Check for exact name match (case-insensitive)
+                    const exactMatch = existingByName.find(item =>
+                        item.name?.toLowerCase() === name.toLowerCase()
+                    );
+                    if (exactMatch) {
+                        return { exists: true, id: exactMatch.id, name: exactMatch.name };
+                    }
+                }
+            }
+
+            // Search by code if provided
+            if (code) {
+                const existingByCode = await checkResourceExists(type, undefined, undefined, code);
+                if (existingByCode && existingByCode.exists && existingByCode.id) {
+                    return { exists: true, id: existingByCode.id, name: existingByCode.data?.name };
+                }
+            }
+
+            return { exists: false };
+        } catch (error) {
+            console.warn(`Failed to check existing resource for ${type}:`, error);
+            return { exists: false };
+        }
     }
 
     /**
@@ -286,6 +502,7 @@ export class UnifiedMetadataManager {
                     success: false,
                     error: error.message,
                 })),
+                apiResponse: null,
                 errors: [error.message],
             };
         }
@@ -312,7 +529,7 @@ export class UnifiedMetadataManager {
 
         if (!result.success) {
             console.error('Unified metadata API Error:', result);
-            throw new Error(`App-runtime metadata API error: ${result.error}`);
+            throw new Error(`App-runtime metadata API error: ${result.error || 'Unknown error'}`);
         }
 
         console.log('Unified metadata API Response:', result.data);
@@ -358,18 +575,38 @@ export class UnifiedMetadataManager {
                     if (success) successful++;
                     else failed++;
                 } else {
-                    // No specific report found, assume success if no errors at type level
+                    // No specific report found, check success based on operation type and stats
+                    let success = false;
+                    let error = typeStats.errorReports?.[0]?.message;
+
+                    if (item.operation === 'DELETE') {
+                        // For DELETE operations, check if the type stats show successful deletions
+                        success = (typeStats.stats?.deleted > 0 && !typeStats.errorReports?.length) ||
+                                 (typeStats.stats?.total > 0 && typeStats.stats?.deleted === typeStats.stats?.total);
+                        if (!success && !error) {
+                            error = 'Delete operation completed but no detailed confirmation available';
+                        }
+                    } else {
+                        // For other operations, assume success if no errors at type level
+                        success = !typeStats.errorReports?.length;
+                    }
+
+                    // Ensure error is set if operation failed but no specific error was found
+                    if (!success && !error) {
+                        error = `Operation failed: no specific error details available from DHIS2 API`;
+                    }
+
                     results.push({
                         type: item.type,
                         operation: item.operation,
                         id: item.id,
-                        success: !typeStats.errorReports?.length,
+                        success,
                         data: item.data,
-                        error: typeStats.errorReports?.[0]?.message,
+                        error,
                         apiResponse: typeStats,
                     });
 
-                    if (!typeStats.errorReports?.length) successful++;
+                    if (success) successful++;
                     else failed++;
                 }
             } else {
@@ -470,7 +707,7 @@ export function getUnifiedMetadataManager(): UnifiedMetadataManager {
 }
 
 /**
- * Batch create multiple different resource types in a single API call
+ * Batch create multiple different resource types in a single API call with smart duplicate detection
  */
 export async function batchCreateMetadata(
     items: Array<{
@@ -503,8 +740,8 @@ export async function batchCreateMetadata(
         );
     }
 
-    // Execute the batch
-    return manager.executeBatch(options);
+    // Execute the batch with enhanced duplicate detection
+    return manager.executeBatchWithDuplicateDetection(options);
 }
 
 /**

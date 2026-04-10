@@ -436,6 +436,72 @@ export class UnifiedMetadataManager {
             // Group operations by type for the API payload
             const metadataPayload: Record<string, any[]> = {};
 
+            // DHIS2 metadata reference mapping: these are collection fields that reference other metadata types
+            const REFERENCE_COLLECTION_MAPPING: Record<string, string> = {
+                'categoryOptions': 'categoryOptions',
+                'categories': 'categories',
+                'categoryCombos': 'categoryCombos',
+                'categoryOptionCombos': 'categoryOptionCombos',
+                'dataElements': 'dataElements',
+                'dataSetElements': 'dataSetElements',
+                'programStages': 'programStages',
+                'programRules': 'programRules',
+                'programIndicators': 'programIndicators',
+                'organisationUnits': 'organisationUnits',
+                'sections': 'sections',
+                'indicatorTypes': 'indicatorTypes',
+                'optionSets': 'optionSets',
+                'options': 'options',
+                'programStageDataElements': 'programStageDataElements',
+                'trackedEntityAttributes': 'trackedEntityAttributes',
+                'userGroups': 'userGroups',
+                'userRoles': 'userRoles',
+            };
+
+            // Recursively normalize DHIS2 payload - extract embedded objects to root level
+            const normalizePayload = async (obj: any, targetPayload: Record<string, any[]>): Promise<any> => {
+                if (!obj || typeof obj !== 'object') return obj;
+                if (Array.isArray(obj)) {
+                    return Promise.all(obj.map(item => normalizePayload(item, targetPayload)));
+                }
+
+                const result: Record<string, any> = {};
+
+                for (const [key, value] of Object.entries(obj)) {
+                    // Check if this is a reference collection field
+                    if (REFERENCE_COLLECTION_MAPPING[key] && Array.isArray(value)) {
+                        const targetType = REFERENCE_COLLECTION_MAPPING[key];
+                        result[key] = [];
+
+                        for (const embeddedItem of value) {
+                            // Only process if this is an actual object (not just an id reference)
+                            if (embeddedItem && typeof embeddedItem === 'object' && !embeddedItem.id) {
+                                // Generate proper DHIS2 UID
+                                const generatedId = await generateDhis2Id();
+                                embeddedItem.id = generatedId;
+
+                                // Add to root payload
+                                if (!targetPayload[targetType]) {
+                                    targetPayload[targetType] = [];
+                                }
+                                targetPayload[targetType].push(embeddedItem);
+
+                                // Replace with id reference
+                                result[key].push({ id: generatedId });
+                            } else {
+                                // Already an id reference, pass through
+                                result[key].push(embeddedItem);
+                            }
+                        }
+                    } else {
+                        // Regular field, process recursively
+                        result[key] = await normalizePayload(value, targetPayload);
+                    }
+                }
+
+                return result;
+            };
+
             for (const item of this.pendingOperations) {
                 if (!metadataPayload[item.type]) {
                     metadataPayload[item.type] = [];
@@ -447,7 +513,10 @@ export class UnifiedMetadataManager {
                     payloadData.id = item.id;
                 }
 
-                metadataPayload[item.type].push(payloadData);
+                // Normalize payload - extract all embedded references
+                const normalizedData = await normalizePayload(payloadData, metadataPayload);
+
+                metadataPayload[item.type].push(normalizedData);
             }
 
             if (dryRun) {
@@ -620,16 +689,32 @@ export class UnifiedMetadataManager {
                     else failed++;
                 }
             } else {
-                // No report for this type, assume failure
-                results.push({
-                    type: item.type,
-                    operation: item.operation,
-                    id: item.id,
-                    success: false,
-                    data: item.data,
-                    error: 'No response from API for this operation',
-                });
-                failed++;
+                // No specific type report found - check if overall import was successful
+                const overallSuccess = apiResponse.status === 'OK' || apiResponse.httpStatusCode === 200;
+                
+                if (overallSuccess) {
+                    // If API returned success overall, assume this item succeeded (DHIS2 sometimes omits success only reports)
+                    results.push({
+                        type: item.type,
+                        operation: item.operation,
+                        id: item.id,
+                        success: true,
+                        data: item.data,
+                        apiResponse: { message: 'Resource created successfully' },
+                    });
+                    successful++;
+                } else {
+                    // No report for this type and overall failed, assume failure
+                    results.push({
+                        type: item.type,
+                        operation: item.operation,
+                        id: item.id,
+                        success: false,
+                        data: item.data,
+                        error: 'No response from API for this operation',
+                    });
+                    failed++;
+                }
             }
         }
 

@@ -6,7 +6,7 @@ export interface MetadataOption {
     id: string;
     type: 'indicator' | 'dataElement' | 'organisationUnit' | 'category' | 'categoryCombo' |
           'categoryOption' | 'dataSet' | 'program' | 'trackedEntityType' | 'trackedEntityAttribute' |
-          'validationRule' | 'optionSet' | 'visualization' | 'dashboard' | 'user' | 'relationshipType';
+          'validationRule' | 'optionSet' | 'visualization' | 'dashboard' | 'user' | 'relationshipType' | 'action';
 }
 
 export interface MetadataSelectorProps {
@@ -14,13 +14,25 @@ export interface MetadataSelectorProps {
     originalQuery: string;
     onSelection: (selectedItems: MetadataOption[], selectedIndices: number[]) => void;
     allowMultiple?: boolean;
+    title?: string;
+    description?: string;
+    allowCreateNew?: boolean;
+    createNewLabel?: string;
+    confirmButtonText?: string;
+    onCreateNew?: () => void;
 }
 
 const MetadataSelector: React.FC<MetadataSelectorProps> = ({
     selectionOptions,
     originalQuery,
     onSelection,
-    allowMultiple = true
+    allowMultiple = true,
+    title = "Select Metadata Items",
+    description,
+    allowCreateNew = false,
+    createNewLabel = "Create New",
+    confirmButtonText,
+    onCreateNew
 }) => {
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
@@ -240,14 +252,14 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                     gap: 'var(--space-2)'
                 }}>
                     <span>🎯</span>
-                    Select Metadata Items
+                    {title}
                 </h3>
                 <p style={{
                     margin: 'var(--space-2) 0 0 0',
                     color: 'var(--color-text-secondary)',
                     fontSize: 'var(--font-size-sm)'
                 }}>
-                    Found <strong>{selectionOptions.length}</strong> items for analysis of: <em>"{originalQuery}"</em>
+                    {description || `Found <strong>${selectionOptions.length}</strong> items for analysis of: <em>"${originalQuery}"</em>`}
                 </p>
             </div>
 
@@ -686,6 +698,27 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                     >
                         Cancel
                     </button>
+
+                    {allowCreateNew && (
+                        <button
+                            onClick={onCreateNew}
+                            style={{
+                                padding: 'var(--space-2) var(--space-4)',
+                                backgroundColor: 'var(--color-success)',
+                                color: 'var(--color-text-inverse)',
+                                border: 'none',
+                                borderRadius: 'var(--radius-md)',
+                                cursor: 'pointer',
+                                fontSize: 'var(--font-size-sm)',
+                                fontWeight: 'var(--font-weight-medium)',
+                                transition: 'var(--transition-fast)'
+                            }}
+                            className="hover-lift"
+                        >
+                            ✨ {createNewLabel}
+                        </button>
+                    )}
+
                     <button
                         onClick={handleProceed}
                         disabled={selectedIndices.length === 0}
@@ -703,7 +736,7 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                         }}
                         className={selectedIndices.length > 0 ? 'hover-lift' : ''}
                     >
-                        {allowMultiple ? `Analyze Selected (${selectedIndices.length})` : 'Select Item'}
+                        {confirmButtonText || (allowMultiple ? `Analyze Selected (${selectedIndices.length})` : 'Select Item')}
                     </button>
                 </div>
             </div>

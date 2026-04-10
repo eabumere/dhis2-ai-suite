@@ -107,6 +107,8 @@ export interface LLMToolConfig<T extends z.ZodSchema> {
         createParams?: Record<string, any>;
     }>;
     preparePayload?: (input: any) => any; // Tool-specific payload transformation
+    checkExistence?: boolean;    // Enable automatic existence verification before creation
+    searchLimit?: number;        // Max results to show in selection dialog
 }
 
 /**
@@ -122,6 +124,102 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 // LLM provides structured parameters directly
                 const llmInput = resource as any;
 
+                // ✅ GLOBAL EXISTENCE VERIFICATION (APPLIES TO ALL TOOLS)
+                // Enable by default for all tools unless explicitly disabled
+                const shouldCheckExistence = config.checkExistence !== false;
+                
+                if (shouldCheckExistence && llmInput.name) {
+                    const searchLimit = config.searchLimit || 20;
+                    const searchResults = await searchDhis2Metadata(config.metadataType, llmInput.name, searchLimit);
+
+                    if (searchResults.length > 0) {
+                        console.log(`⚠️ Found ${searchResults.length} existing ${config.metadataType} matching "${llmInput.name}"`);
+                        
+                        const orchestrator = getOrchestratorInstance();
+                        
+                        if (orchestrator && orchestrator.requestSelection) {
+                            // Show verification dialog with all matches
+                            // ✅ Build properly humanized strings directly (NO regex hacks needed)
+                            const humanizeResourceName = (resource: string): string => {
+                                const mappings: Record<string, string> = {
+                                    'dataElement': 'Data Element',
+                                    'dataElements': 'Data Elements',
+                                    'indicator': 'Indicator',
+                                    'indicators': 'Indicators',
+                                    'organisationUnit': 'Organisation Unit',
+                                    'organisationUnits': 'Organisation Units',
+                                    'dataSet': 'Data Set',
+                                    'dataSets': 'Data Sets',
+                                    'program': 'Program',
+                                    'programs': 'Programs',
+                                    'category': 'Category',
+                                    'categories': 'Categories',
+                                    'categoryCombo': 'Category Combo',
+                                    'categoryCombos': 'Category Combos',
+                                    'optionSet': 'Option Set',
+                                    'optionSets': 'Option Sets',
+                                    'validationRule': 'Validation Rule',
+                                    'validationRules': 'Validation Rules',
+                                    'visualization': 'Visualization',
+                                    'visualizations': 'Visualizations',
+                                    'dashboard': 'Dashboard',
+                                    'dashboards': 'Dashboards',
+                                    'user': 'User',
+                                    'users': 'Users',
+                                    'categoryOption': 'Category Option',
+                                    'categoryOptions': 'Category Options',
+                                    'organisationUnitGroup': 'Organisation Unit Group',
+                                    'organisationUnitGroups': 'Organisation Unit Groups',
+                                    'trackedEntityType': 'Tracked Entity Type',
+                                    'trackedEntityTypes': 'Tracked Entity Types'
+                                };
+                                
+                                return mappings[resource] || resource.charAt(0).toUpperCase() + resource.slice(1).replace(/([A-Z])/g, ' $1');
+                            };
+
+                            const singular = config.metadataType.slice(0, -1);
+                            const humanizedSingular = humanizeResourceName(singular);
+                            const humanizedPlural = humanizeResourceName(config.metadataType);
+
+                            const selection = await orchestrator.requestSelection({
+                                title: `Existing ${humanizedSingular} found`,
+                                description: `${searchResults.length} existing ${humanizedPlural} match "${llmInput.name}". Select one to use it, or create new:`,
+                                items: searchResults.map(r => ({
+                                    id: r.id,
+                                    name: r.name,
+                                    code: r.code || '',
+                                    displayName: r.displayName
+                                })),
+                                allowCreateNew: true,
+                                createNewLabel: "Create New Anyway",
+                                confirmButtonText: "Use Existing",
+                                parentResource: singular,
+                                parentName: llmInput.name
+                            });
+
+                            if (selection && selection.id !== '__create_new__') {
+                                // User selected existing resource
+                                console.log(`✅ User selected existing ${config.metadataType.slice(0, -1)}: ${selection.name} (${selection.id})`);
+                                return JSON.stringify({
+                                    success: true,
+                                    message: `✅ ${config.metadataType.slice(0, -1)} "${selection.name}" already exists`,
+                                    id: selection.id,
+                                    name: selection.name,
+                                    exists: true,
+                                    action: 'use_existing',
+                                    llm_input: llmInput
+                                });
+                            }
+
+                            // User selected create new or dismissed - proceed with creation
+                            console.log(`✅ User chose to create new ${config.metadataType.slice(0, -1)}`);
+                        } else {
+                            // No UI available - log warning and proceed
+                            console.log(`⚠️ ${searchResults.length} existing matches found, but no selection UI available. Proceeding with creation.`);
+                        }
+                    }
+                }
+
                 // 1. Run tool-specific payload transformation if provided
                 const transformedInput = config.preparePayload ?
                     await config.preparePayload(llmInput) : llmInput;
@@ -130,8 +228,9 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 if ((transformedInput as any)._exists) {
                     console.log(`Resource "${llmInput.name}" already exists (ID: ${(transformedInput as any)._existingId}) - skipping creation`);
                     return JSON.stringify({
-                        success: true,
-                        message: `${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists`,
+                        success: false,
+                        warning: true,
+                        message: `⚠️ ${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists. Creation skipped.`,
                         id: (transformedInput as any)._existingId,
                         name: llmInput.name,
                         exists: true,

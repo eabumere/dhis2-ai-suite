@@ -688,10 +688,16 @@ const MyApp: FC = () => {
 									selectionOptions={uiState.selectionOptions.map(opt => ({
 										...opt,
 										type: opt.type
-									}))}
+									})) as MetadataOption[]}
 									originalQuery={uiState.queryText}
 									onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
 									allowMultiple={uiState.selectionMultiple}
+									title={uiState.selectionRequest?.title}
+									description={uiState.selectionRequest?.description}
+									allowCreateNew={uiState.selectionRequest?.allowCreateNew}
+									createNewLabel={uiState.selectionRequest?.createNewLabel}
+									confirmButtonText={uiState.selectionRequest?.confirmButtonText}
+									onCreateNew={() => handleSelectionComplete([{ id: '__create_new__', name: 'Create New', type: 'action' } as MetadataOption])}
 								/>
 							) : (
 								<div style={{
@@ -901,10 +907,16 @@ const MyApp: FC = () => {
 									selectionOptions={uiState.selectionOptions.map(opt => ({
 										...opt,
 										type: opt.type
-									}))}
+									})) as MetadataOption[]}
 									originalQuery={uiState.queryText}
 									onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
 									allowMultiple={uiState.selectionMultiple}
+									title={uiState.selectionRequest?.title}
+									description={uiState.selectionRequest?.description}
+									allowCreateNew={uiState.selectionRequest?.allowCreateNew}
+									createNewLabel={uiState.selectionRequest?.createNewLabel}
+									confirmButtonText={uiState.selectionRequest?.confirmButtonText}
+									onCreateNew={() => handleSelectionComplete([{ id: '__create_new__', name: 'Create New', type: 'action' } as MetadataOption])}
 								/>
 							</div>
 						</div>

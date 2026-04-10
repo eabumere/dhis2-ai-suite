@@ -5,9 +5,29 @@ import { indexedDBStorage, FileData } from './indexeddb-storage';
 import { setOrchestratorInstance } from "./tools/metadata";
 
 export interface SelectionOptions {
-    name: string;
     id: string;
-    type: 'indicator' | 'dataElement';
+    name: string;
+    code?: string;
+    displayName?: string;
+    type?: string;
+}
+
+/**
+ * Standardized selection request interface
+ * This matches the format that ALL call sites already use
+ */
+export interface SelectionRequest {
+    title: string;
+    description: string;
+    items: SelectionOptions[];
+    allowMultiple?: boolean;
+    allowCreateNew?: boolean;
+    createNewLabel?: string;
+    confirmButtonText?: string;
+    parentResource?: string;
+    parentName?: string;
+    workflowId?: string;
+    context?: Record<string, any>;
 }
 
 export interface RecoveryOption {
@@ -122,6 +142,8 @@ export interface WorkflowUIState {
     showSelection: boolean;
     selectionOptions: SelectionOptions[];
     selectionMultiple: boolean;
+    selectionRequest?: SelectionRequest;
+    confirmButtonText?: string;
 
     // General states
     currentWorkflowId?: string;
@@ -628,8 +650,28 @@ class WorkflowOrchestrator {
     }
 
     // Request user selection during workflow
-    async requestSelection(workflowId: string, options: SelectionOptions[], multiple = true): Promise<SelectionOptions[]> {
-        console.log(`⏸️ Workflow ${workflowId} requesting user selection`);
+    async requestSelection(request: SelectionRequest | string, options?: SelectionOptions[], multiple = true): Promise<SelectionOptions[]> {
+        // ✅ Full backward compatibility + new interface:
+        // ✅ Accept both new signature: requestSelection(SelectionRequest)
+        // ✅ Accept old signature: requestSelection(workflowId, options, multiple)
+
+        let selectionRequest: SelectionRequest;
+
+        if (typeof request === 'string') {
+            // Legacy signature support
+            selectionRequest = {
+                title: 'Select item',
+                description: 'Please select an item',
+                items: options || [],
+                allowMultiple: multiple,
+                workflowId: request
+            };
+            console.log(`⏸️ Workflow ${request} requesting user selection (LEGACY SIGNATURE)`);
+        } else {
+            // New standardized interface
+            selectionRequest = request;
+            console.log(`⏸️ Workflow ${selectionRequest.workflowId} requesting user selection (NEW SIGNATURE with title: ${selectionRequest.title}`);
+        }
 
         return new Promise((resolve, reject) => {
             if (!this.uiCallbacks?.onSelection) {
@@ -637,23 +679,86 @@ class WorkflowOrchestrator {
                 return;
             }
 
+        // Resource name humanization mappings
+        const humanizeResourceName = (resource: string): string => {
+            const mappings: Record<string, string> = {
+                'dataElement': 'Data Element',
+                'dataElements': 'Data Elements',
+                'indicator': 'Indicator',
+                'indicators': 'Indicators',
+                'organisationUnit': 'Organisation Unit',
+                'organisationUnits': 'Organisation Units',
+                'dataSet': 'Data Set',
+                'dataSets': 'Data Sets',
+                'program': 'Program',
+                'programs': 'Programs',
+                'category': 'Category',
+                'categories': 'Categories',
+                'categoryCombo': 'Category Combo',
+                'categoryCombos': 'Category Combos',
+                'optionSet': 'Option Set',
+                'optionSets': 'Option Sets',
+                'validationRule': 'Validation Rule',
+                'validationRules': 'Validation Rules',
+                'visualization': 'Visualization',
+                'visualizations': 'Visualizations',
+                'dashboard': 'Dashboard',
+                'dashboards': 'Dashboards',
+                'user': 'User',
+                'users': 'Users',
+                'categoryOption': 'Category Option',
+                'categoryOptions': 'Category Options',
+                'organisationUnitGroup': 'Organisation Unit Group',
+                'organisationUnitGroups': 'Organisation Unit Groups',
+                'trackedEntityType': 'Tracked Entity Type',
+                'trackedEntityTypes': 'Tracked Entity Types'
+            };
+            
+            return mappings[resource] || resource.charAt(0).toUpperCase() + resource.slice(1).replace(/([A-Z])/g, ' $1');
+        };
+
+        // ✅ Now actually use ALL the fields that are already being passed
+        let {
+            title,
+            description,
+            items,
+            allowMultiple,
+            allowCreateNew,
+            createNewLabel,
+            confirmButtonText,
+            parentResource,
+            parentName,
+            workflowId,
+            context
+        } = selectionRequest;
+
+        // ✅ Strings are now built correctly humanized in base-tool.ts
+        // ✅ NO regex hacks or post processing needed anymore
+        // ✅ Removed all failed regex attempts completely
+
             // Add selection prompt to conversation
-            const selectionMessage = `Please select the relevant items from the ${options.length} available options${multiple ? ' (multiple selection allowed)' : ''}`;
-            this.addAssistantMessage(selectionMessage, 'selection', {
-                selectionOptions: options,
-                allowMultiple: multiple,
-                workflowId
+            this.addAssistantMessage(description, 'selection', {
+                selectionOptions: items,
+                allowMultiple,
+                allowCreateNew,
+                createNewLabel,
+                parentResource,
+                parentName,
+                workflowId,
+                context
             });
 
             // Update UI to show selection
             this.updateUIState({
                 showProcessing: false,
                 showSelection: true,
-                selectionOptions: options,
-                selectionMultiple: multiple
+                selectionOptions: items,
+                selectionMultiple: allowMultiple || true,
+                selectionRequest: selectionRequest,
+                confirmButtonText: confirmButtonText
             });
 
-            this.uiCallbacks.onSelection(options, (selectedItems) => {
+            this.uiCallbacks.onSelection(items, (selectedItems) => {
                 console.log(`▶️ Workflow ${workflowId} received selection:`, selectedItems);
 
                 // Hide selection UI

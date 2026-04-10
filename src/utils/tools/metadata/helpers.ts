@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { tool } from '@langchain/core/tools';
 import { Dhis2Schemas } from './schemas';
+import { getOrchestratorInstance } from './base-tool';
 
 // Import app-runtime functions instead of fetch-based ones
 import {
@@ -662,12 +663,49 @@ export async function resolveDependencies<T extends z.ZodSchema>(
     const resourcesToCreate: Record<string, Array<{ name: string; data: any; dep: any }>> = {};
 
     for (const dep of orderedDeps) {
-        // Check if resource exists using comprehensive existence check
-        const existing = await checkResourceExists(dep.type, dep.name);
+        // ✅ Full existence verification with user selection dialog (same as primary resources)
+        const searchLimit = 20;
+        const searchResults = await searchDhis2Metadata(dep.type, dep.name, searchLimit);
 
-        if (existing && existing.exists && existing.id) {
-            resolved[dep.name] = { id: existing.id, name: dep.name };
-        } else if (dep.createIfNotFound && dep.createParams) {
+        if (searchResults.length > 0) {
+            console.log(`⚠️ Found ${searchResults.length} existing ${dep.type} matching "${dep.name}" (dependency)`);
+            
+            const orchestrator = getOrchestratorInstance();
+            
+            if (orchestrator && orchestrator.requestSelection) {
+                // Show verification dialog with all matches (exactly same UI as primary resources)
+                const selection = await orchestrator.requestSelection({
+                    title: `Existing ${dep.type.slice(0, -1)} found (dependency)`,
+                    description: `${searchResults.length} existing ${dep.type} match "${dep.name}". Select one to use it, or create new:`,
+                    items: searchResults.map(r => ({
+                        id: r.id,
+                        name: r.name,
+                        code: r.code || '',
+                        displayName: r.displayName
+                    })),
+                    allowCreateNew: true,
+                    createNewLabel: "Create New Anyway",
+                    parentResource: dep.type.slice(0, -1),
+                    parentName: dep.name
+                });
+
+                if (selection && selection.id !== '__create_new__') {
+                    // User selected existing dependency - use it instead of creating new
+                    console.log(`✅ User selected existing ${dep.type.slice(0, -1)} dependency: ${selection.name} (${selection.id})`);
+                    resolved[dep.name] = { id: selection.id, name: selection.name };
+                    continue; // Skip creation entirely
+                }
+
+                // User selected create new - proceed with creation
+                console.log(`✅ User chose to create new ${dep.type.slice(0, -1)} dependency`);
+            } else {
+                // No UI available - log warning and proceed
+                console.log(`⚠️ ${searchResults.length} existing dependency matches found, but no selection UI available. Proceeding with creation.`);
+            }
+        }
+
+        // No existing matches or user chose to create new
+        if (dep.createIfNotFound && dep.createParams) {
             // CRITICAL STEP: Recursively resolve THIS DEPENDENCY'S nested dependencies first
             // This applies to EVERY resource type - not just categories/categoryCombos
             // The recursive resolution works by detecting reference fields in createParams and resolving them

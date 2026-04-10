@@ -3941,20 +3941,6 @@ export const createDhis2DataElement = createLLMFirstTool({
 	metadataType: "dataElements",
 	dhis2SchemaName: "DataElement",
 	preparePayload: async (input) => {
-		// Check if data element already exists
-		const existing = await checkResourceExists('dataElements', input.name);
-		if (existing.exists) {
-			console.log(`Data element "${input.name}" already exists (ID: ${existing.id})`);
-			// Return a special marker to indicate resource already exists
-			return {
-				...input,
-				_exists: true,
-				_existingId: existing.id,
-				domainType: input.domainType || 'AGGREGATE',
-				aggregationType: input.aggregationType || 'SUM'
-			};
-		}
-
 		return {
 			...input,
 			domainType: input.domainType || 'AGGREGATE',

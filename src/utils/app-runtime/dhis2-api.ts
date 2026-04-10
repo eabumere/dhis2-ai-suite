@@ -61,7 +61,7 @@ export class Dhis2Api {
 						    `code:ilike:${query}`,
 						    `id:ilike:${query}`,
 						    `description:ilike:${query}`,
-						    `shortName:ilike:${query}`
+						    //`shortName:ilike:${query}`
 					    ],
 					    rootJunction: 'OR',
 					    fields: 'id,name,code,displayName'

@@ -13,6 +13,25 @@ import {
 } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
 
+// Global Workflow Orchestrator Singleton
+// Set once by orchestrator during initialization, available to all tools
+let globalOrchestratorInstance: any = null;
+
+/**
+ * Set the global orchestrator instance - called once during application initialization
+ */
+export function setOrchestratorInstance(orchestrator: any) {
+    globalOrchestratorInstance = orchestrator;
+    console.log('✅ Global workflow orchestrator instance registered', orchestrator);
+}
+
+/**
+ * Get the global orchestrator instance - can be called from any tool
+ */
+export function getOrchestratorInstance(): any | null {
+    return globalOrchestratorInstance;
+}
+
 /**
  * Extract required field names from a Zod schema for LLM prompting
  */

@@ -2,6 +2,7 @@
 import { startNewSession } from './conversation-context';
 import { llmClassificationService } from './llm-classification-service';
 import { indexedDBStorage, FileData } from './indexeddb-storage';
+import { setOrchestratorInstance } from "./tools/metadata";
 
 export interface SelectionOptions {
     name: string;
@@ -252,6 +253,8 @@ class WorkflowOrchestrator {
         input: T,
         agentFn: (input: any) => Promise<any>
     ): Promise<any> {
+		setOrchestratorInstance(this);
+
         const workflowId = input.workflowId || `workflow_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
         console.log(`🏁 Starting workflow ${workflowId} for ${flowType}`);
@@ -626,7 +629,7 @@ class WorkflowOrchestrator {
 
     // Request user selection during workflow
     async requestSelection(workflowId: string, options: SelectionOptions[], multiple = true): Promise<SelectionOptions[]> {
-        console.log(`⏸️ Workflow ${workflowId} requesting user selection`);
+        console.log(`⏸️ Workflow ${workflowId} requesting user selection ${options}`);
 
         return new Promise((resolve, reject) => {
             if (!this.uiCallbacks?.onSelection) {

@@ -629,7 +629,7 @@ class WorkflowOrchestrator {
 
     // Request user selection during workflow
     async requestSelection(workflowId: string, options: SelectionOptions[], multiple = true): Promise<SelectionOptions[]> {
-        console.log(`⏸️ Workflow ${workflowId} requesting user selection ${options}`);
+        console.log(`⏸️ Workflow ${workflowId} requesting user selection`);
 
         return new Promise((resolve, reject) => {
             if (!this.uiCallbacks?.onSelection) {

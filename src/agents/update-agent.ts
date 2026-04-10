@@ -1,7 +1,7 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph/web';
 import { ChatModels } from '../utils/chat-model-factory';
 import { Dhis2Api } from '../utils/app-runtime/dhis2-api';
-import { METADATA_TYPE_SCHEMAS } from '../utils/tools/metadata/helpers';
+import { METADATA_TYPE_SCHEMAS, searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 
 // Import update tools
 import {
@@ -244,19 +244,19 @@ async function searchResource(state: typeof UpdateGraphAnnotation.State): Promis
 
 	try {
 		// Call updateDhis2Resource tool to find the resource
-		const searchResult = await updateDhis2Resource.invoke({
-			resourceType,
-			resourceName,
-			updates,
-			confirmUpdate
-		});
+		const searchResult = (await searchDhis2Metadata(resourceType, resourceName)).map(r => ({
+			...r,
+			type: resourceType
+		}));
 
-		const result = JSON.parse(searchResult);
-		console.log('🔍 Resource search result:', result);
+		console.log('🔍 Resource search result:', searchResult);
 
 		return {
-			resourceSearchResult: result,
-			step: 'handle_search_result'
+			resourceSearchResult: {
+				selectorOptions: searchResult,
+				action: searchResult.length > 1 ? 'SHOW_SELECTOR': ''
+			},
+			step: 'handle_search_result',
 		};
 
 	} catch (error) {
@@ -399,72 +399,110 @@ async function handleSearchResult(state: typeof UpdateGraphAnnotation.State): Pr
 
 	const result = state.resourceSearchResult;
 
-	// Check if this requires user selection
-	if (result.action === 'SHOW_SELECTOR' && result.selectorOptions) {
-		console.log('⏸️ Multiple matches found, requesting user selection');
+	// Check if we have valid search results
+	if (result.selectorOptions && result.selectorOptions.length > 0) {
+		// Case 1: Multiple matches found - show selector
+		if (result.action === 'SHOW_SELECTOR' && result.selectorOptions.length > 1) {
+			console.log('⏸️ Multiple matches found, requesting user selection');
 
-		advanceProgress(state, 4, 'User Selection', 'Multiple resources found, waiting for your selection...', true);
+			advanceProgress(state, 4, 'User Selection', 'Multiple resources found, waiting for your selection...', true);
 
-		if (!state.orchestrator) {
-			console.error('No orchestrator available for selection');
-			return {
-				step: 'completed',
-				finalResult: {
-					success: false,
-					message: 'Cannot request user selection - no orchestrator available',
-					type: 'update'
-				}
-			};
-		}
-
-		try {
-			// Transform selectorOptions to the format expected by requestSelection
-			const selectionOptions = result.selectorOptions?.map((option: any) => ({
-				name: option.name,
-				id: option.id,
-				type: option.type
-			})) || [];
-
-			// Request selection through orchestrator
-			const selectedItems = await state.orchestrator.requestSelection(state.workflowId, selectionOptions, false);
-			const selectedItem = selectedItems[0];
-
-			console.log('▶️ User selected resource:', selectedItem);
-
-			if (selectedItem) {
-				return {
-					selectedResource: selectedItem,
-					step: 'fetch_full_resource'
-				};
-			} else {
-				// Selection was cancelled
+			if (!state.orchestrator) {
+				console.error('No orchestrator available for selection');
 				return {
 					step: 'completed',
 					finalResult: {
 						success: false,
-						message: 'Resource selection was cancelled. No update performed.',
+						message: 'Cannot request user selection - no orchestrator available',
 						type: 'update'
 					}
 				};
 			}
-		} catch (selectionError) {
-			console.warn('⏸️ Metadata selection failed, falling back:', selectionError.message);
 
-			// Fallback: Auto-select the first option
-			const autoSelected = result.selectorOptions[0];
-			console.log('▶️ Auto-selected first resource due to selection failure:', autoSelected);
+			try {
+				// Transform selectorOptions to the format expected by requestSelection
+				const selectionOptions = result.selectorOptions?.map((option: any) => ({
+					name: option.name,
+					id: option.id,
+					type: option.type
+				})) || [];
 
+			// Request selection through orchestrator (single selection only, allowMultiple = false)
+			const selectedItems = await state.orchestrator.requestSelection(state.workflowId, selectionOptions, false);
+			
+			// Safety validation: ensure only one item was selected (enforce single selection)
+			if (selectedItems.length !== 1) {
+				console.warn(`⚠️ Expected exactly 1 selected item, got ${selectedItems.length}`);
+				
+				// Fallback to first item if multiple somehow got selected
+				if (selectedItems.length > 0) {
+					console.log('▶️ Falling back to first selected item');
+				} else {
+					// Selection was cancelled
+					return {
+						step: 'completed',
+						finalResult: {
+							success: false,
+							message: 'Resource selection was cancelled. No update performed.',
+							type: 'update'
+						}
+					};
+				}
+			}
+			
+			const selectedItem = selectedItems[0];
+			console.log('▶️ User selected resource:', selectedItem);
+
+			if (selectedItem) {
+					return {
+						selectedResource: selectedItem,
+						step: 'fetch_full_resource'
+					};
+				} else {
+					// Selection was cancelled
+					return {
+						step: 'completed',
+						finalResult: {
+							success: false,
+							message: 'Resource selection was cancelled. No update performed.',
+							type: 'update'
+						}
+					};
+				}
+			} catch (selectionError) {
+				console.warn('⏸️ Metadata selection failed, falling back:', selectionError.message);
+
+				// Fallback: Auto-select the first option
+				const autoSelected = result.selectorOptions[0];
+				console.log('▶️ Auto-selected first resource due to selection failure:', autoSelected);
+
+				return {
+					selectedResource: autoSelected,
+					step: 'fetch_full_resource'
+				};
+			}
+		} 
+		// Case 2: Exactly one match found - auto select and proceed directly
+		else if (result.selectorOptions.length === 1) {
+			console.log('✅ Single match found, auto-selecting resource:', result.selectorOptions[0]);
+			
 			return {
-				selectedResource: autoSelected,
+				selectedResource: result.selectorOptions[0],
 				step: 'fetch_full_resource'
 			};
 		}
-	} else {
-		// Direct result - either success or single match
-		return {
-			step: 'finalize_result'
-		};
 	}
+
+	// Case 3: No matches found or invalid result
+	console.log('❌ No resources found matching search query');
+	return {
+		step: 'finalize_result',
+		finalResult: {
+			success: false,
+			message: 'No matching resources found to update.',
+			type: 'update'
+		}
+	};
 }
 
 // Perform the actual update

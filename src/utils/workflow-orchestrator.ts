@@ -412,9 +412,6 @@ class WorkflowOrchestrator {
                         position: 'bottom-right'
                     });
 
-                    // Add completion feedback
-                    this.addProgressMessage('✅ Operation completed successfully');
-
                     // Handle rendering based on result type - orchestrator controls all UI decisions
                     if (result?.success !== false) {
                         console.log('🎭 Workflow completion: handling successful result', result);

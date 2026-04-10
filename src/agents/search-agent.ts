@@ -87,26 +87,6 @@ export const searchAgent = createReactAgent({
     searchDhis2Users,
     searchDhis2RelationshipTypes,
 
-    // Get-by-ID Tools (5 core + 9 extended = 14 tools)
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
-    getDhis2RelationshipTypeById,
-
-    // Specialized Utility Tools (2 tools)
-    getDhis2DataValues,
     resolveResourceReference,
   ],
   prompt: `
@@ -186,6 +166,7 @@ Return normal results but include recovery context for partial results:
 4. **For multiple tools**: combine into single object with multiple keys
 5. **Tool results** have {name, id, displayName} - preserve exactly
 6. **Use recovery format** when searches fail or return inadequate results
+7. **Always select a tool except when it is impossible to select 1
 
 ## EXAMPLES:
 ✅ "find data elements about HIV" → call searchDhis2DataElements → {"dataElements": [...]}

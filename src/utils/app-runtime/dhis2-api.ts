@@ -46,28 +46,35 @@ export class Dhis2Api {
      * Search for DHIS2 metadata by name
      */
     static async searchMetadata(
-        metadataType: string,
-        query: string,
-        limit: number = 10
+	    metadataType: string,
+	    query: string,
+	    limit: number = 10
     ): Promise<Array<{ id: string; name: string; code?: string; displayName: string }>> {
-        try {
-            const engine = this.getEngine();
-            const result = await engine.query({
-                search: {
-                    resource: metadataType,
-                    params: {
-                        filter: `name:ilike:${query}`,
-                        fields: 'id,name,code,displayName'
-                    }
-                }
-            });
+	    try {
+		    const engine = this.getEngine();
+		    const result = await engine.query({
+			    search: {
+				    resource: metadataType,
+				    params: {
+					    filter: [
+						    `name:ilike:${query}`,
+						    `code:ilike:${query}`,
+						    `id:ilike:${query}`,
+						    `description:ilike:${query}`,
+						    `shortName:ilike:${query}`
+					    ],
+					    rootJunction: 'OR',
+					    fields: 'id,name,code,displayName'
+				    }
+			    }
+		    });
 
-            const items = result.search?.[metadataType] || [];
-            return items.slice(0, limit);
-        } catch (error) {
-            console.error(`Error searching ${metadataType}:`, error);
-            return [];
-        }
+		    const items = result.search?.[metadataType] || [];
+		    return items.slice(0, limit);
+	    } catch (error) {
+		    console.error(`Error searching ${metadataType}:`, error);
+		    return [];
+	    }
     }
 
     /**

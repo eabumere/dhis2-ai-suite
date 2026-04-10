@@ -472,6 +472,7 @@ export class UnifiedMetadataManager {
 
             // Process results
             const results = this.processBatchResults(this.pendingOperations, apiResponse);
+			console.log('results', results);
 
             // Clear pending operations on success if atomic
             if (atomic && results.failed === 0) {
@@ -527,10 +528,10 @@ export class UnifiedMetadataManager {
             }
         });
 
-        if (!result.success) {
+        /*f (!result.success) {
             console.error('Unified metadata API Error:', result);
             throw new Error(`App-runtime metadata API error: ${result.error || 'Unknown error'}`);
-        }
+        }*/
 
         console.log('Unified metadata API Response:', result.data);
         return result.data;
@@ -549,7 +550,16 @@ export class UnifiedMetadataManager {
 
         // Process each operation based on API response
         for (const item of operations) {
-            const typeStats = apiResponse.typeReports?.find((report: any) => report.klass === item.type);
+            // Convert Java klass name to API type name (org.hisp.dhis.dataelement.DataElement -> dataElements)
+            const klassToType = (klass: string): string => {
+                const simpleName = klass.split('.').pop() || klass;
+                const camelCase = simpleName.charAt(0).toLowerCase() + simpleName.slice(1);
+                return camelCase + 's';
+            };
+            
+            const typeStats = apiResponse.response.typeReports?.find((report: any) => 
+                klassToType(report.klass) === item.type
+            );
 
             if (typeStats) {
                 const objectReports = typeStats.objectReports || [];

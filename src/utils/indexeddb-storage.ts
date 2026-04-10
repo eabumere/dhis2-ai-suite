@@ -17,6 +17,7 @@ export interface AnalyticsData {
     dataSummary?: any;
     metadata?: any;
     rawData?: any;
+    sessionId?: string; // Track which session this analytics data belongs to
 }
 
 export interface ConversationMemory {
@@ -270,6 +271,133 @@ class IndexedDBStorage {
                 } else {
                     resolve(null);
                 }
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Load latest analytics data for a specific session
+     */
+    async loadLatestAnalyticsForSession(sessionId: string): Promise<AnalyticsData | null> {
+        if (!this.db) await this.init();
+        if (!this.db) throw new Error('Database not initialized');
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db!.transaction([this.analyticsStore], 'readonly');
+            const store = transaction.objectStore(this.analyticsStore);
+            const index = store.index('timestamp');
+
+            const request = index.openCursor(null, 'prev'); // Most recent first
+
+            request.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                    const data: AnalyticsData = cursor.value;
+                    // Check if this analytics data belongs to the specified session
+                    if (data.sessionId === sessionId) {
+                        resolve(data);
+                    } else {
+                        // Continue searching for analytics from this session
+                        cursor.continue();
+                    }
+                } else {
+                    resolve(null);
+                }
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Clear all analytics data for a specific session
+     */
+    async clearAnalyticsForSession(sessionId: string): Promise<void> {
+        if (!this.db) await this.init();
+        if (!this.db) throw new Error('Database not initialized');
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db!.transaction([this.analyticsStore], 'readwrite');
+            const store = transaction.objectStore(this.analyticsStore);
+            const request = store.openCursor();
+
+            request.onsuccess = (event) => {
+                const cursor = (event.target as IDBRequest).result;
+                if (cursor) {
+                    const data: AnalyticsData = cursor.value;
+                    if (data.sessionId === sessionId) {
+                        cursor.delete();
+                    }
+                    cursor.continue();
+                } else {
+                    console.log(`🗑️ Cleared analytics data for session: ${sessionId}`);
+                    resolve();
+                }
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Clear all analytics data (for new session start)
+     */
+    async clearAllAnalytics(): Promise<void> {
+        if (!this.db) await this.init();
+        if (!this.db) throw new Error('Database not initialized');
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db!.transaction([this.analyticsStore], 'readwrite');
+            const store = transaction.objectStore(this.analyticsStore);
+            const request = store.clear();
+
+            request.onsuccess = () => {
+                console.log('🗑️ Cleared all analytics data from IndexedDB');
+                resolve();
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Clear all conversations (for new session start)
+     */
+    async clearAllConversations(): Promise<void> {
+        if (!this.db) await this.init();
+        if (!this.db) throw new Error('Database not initialized');
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db!.transaction([this.conversationsStore], 'readwrite');
+            const store = transaction.objectStore(this.conversationsStore);
+            const request = store.clear();
+
+            request.onsuccess = () => {
+                console.log('🗑️ Cleared all conversations from IndexedDB');
+                resolve();
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    /**
+     * Clear memory/conversation context (for new session start)
+     */
+    async clearMemory(key: string): Promise<void> {
+        if (!this.db) await this.init();
+        if (!this.db) throw new Error('Database not initialized');
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db!.transaction([this.memoryStore], 'readwrite');
+            const store = transaction.objectStore(this.memoryStore);
+            const request = store.delete(key);
+
+            request.onsuccess = () => {
+                console.log(`🗑️ Cleared memory for key: ${key}`);
+                resolve();
             };
 
             request.onerror = () => reject(request.error);

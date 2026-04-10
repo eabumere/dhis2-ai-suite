@@ -6,7 +6,7 @@
  */
 
 import { ChatModels } from './chat-model-factory';
-import { indexedDBStorage, type ConversationEntry as IDBConversationEntry, type ConversationMemory as IDBConversationMemory } from './indexeddb-storage';
+import { indexedDBStorage } from './indexeddb-storage';
 
 export interface ConversationEntry {
     id: string;
@@ -245,11 +245,35 @@ export class ConversationContextManager {
     /**
      * Start a new session - clear conversation history and set new session ID
      */
-    startNewSession(): string {
+    async startNewSession(): Promise<string> {
         const sessionId = this.generateId();
         const sessionStartTime = Date.now();
 
         console.log(`🔄 Starting new conversation session: ${sessionId}`);
+
+        // Clear old session's analytics data from IndexedDB
+        try {
+            await indexedDBStorage.clearAllAnalytics();
+            console.log('🗑️ Cleared previous session analytics data from IndexedDB');
+        } catch (error) {
+            console.warn('Failed to clear analytics data:', error);
+        }
+
+        // Clear old conversations from IndexedDB to prevent bleeding across sessions
+        try {
+            await indexedDBStorage.clearAllConversations();
+            console.log('🗑️ Cleared previous session conversations from IndexedDB');
+        } catch (error) {
+            console.warn('Failed to clear conversations:', error);
+        }
+
+        // Clear old memory/conversation context from IndexedDB
+        try {
+            await indexedDBStorage.clearMemory(this.storageKey);
+            console.log('🗑️ Cleared previous session memory from IndexedDB');
+        } catch (error) {
+            console.warn('Failed to clear memory:', error);
+        }
 
         this.memory = {
             conversations: [],

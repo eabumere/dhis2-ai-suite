@@ -12,21 +12,27 @@ import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM, extrac
 import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
 
 // Import conversation context
-import { addConversation, conversationContext, createAnalyticsDataContext } from '../utils/conversation-context';
+import { addConversation, createAnalyticsDataContext } from '../utils/conversation-context';
 // Initialize the ChatOpenAI model with Azure configuration
 const model = ChatModels.createAgentModel();
 
 // Direct analytics data storage functions (using IndexedDB)
 import { indexedDBStorage } from '../utils/indexeddb-storage';
+import { conversationContext } from '../utils/conversation-context';
 
 function saveAnalyticsDataDirectly(analyticsResult: any): void {
     try {
+        // Get current session ID to associate analytics with session
+        const currentSession = conversationContext.getCurrentSession();
+        const sessionId = currentSession.sessionId || 'unknown_session';
+
         // Create a compressed version with essential data only
         const analyticsData = {
             id: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             timestamp: Date.now(),
             query: analyticsResult.query || '',
             summary: analyticsResult.message || '',
+            sessionId: sessionId, // Associate with current session
             chartData: analyticsResult.chartData || null,
             dataSummary: analyticsResult.dataSummary || null,
             metadata: {
@@ -49,7 +55,7 @@ function saveAnalyticsDataDirectly(analyticsResult: any): void {
         };
 
         indexedDBStorage.saveAnalytics(analyticsData);
-        console.log('💾 Analytics data saved directly to IndexedDB', analyticsResult, analyticsData);
+        console.log('💾 Analytics data saved directly to IndexedDB for session:', sessionId, analyticsData);
     } catch (error) {
         console.warn('Failed to save analytics data directly:', error);
     }
@@ -57,17 +63,29 @@ function saveAnalyticsDataDirectly(analyticsResult: any): void {
 
 async function getAnalyticsDataDirectly(): Promise<any | null> {
     try {
-        const data = await indexedDBStorage.loadLatestAnalytics();
+        // Get current session ID to filter analytics by session
+        const currentSession = conversationContext.getCurrentSession();
+        const sessionId = currentSession.sessionId;
+
+        if (!sessionId) {
+            console.log('⚠️ No active session found, skipping analytics data retrieval');
+            return null;
+        }
+
+        // Load analytics data for the current session only
+        const data = await indexedDBStorage.loadLatestAnalyticsForSession(sessionId);
         if (data) {
-            // Check if data is recent (within last hour)
+            // Check if data is recent (within last hour) and belongs to current session
             const isRecent = Date.now() - data.timestamp < 60 * 60 * 1000;
             if (isRecent) {
-                console.log('📖 Analytics data retrieved directly from IndexedDB');
+                console.log('📖 Analytics data retrieved from IndexedDB for current session:', sessionId);
                 return data;
             } else {
                 console.log('⏰ Analytics data is too old, ignoring');
                 // Note: Old data will be cleaned up by the storage quota management
             }
+        } else {
+            console.log('📭 No analytics data found for current session:', sessionId);
         }
     } catch (error) {
         console.warn('Failed to retrieve analytics data directly:', error);
@@ -340,20 +358,7 @@ async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Part
 		directSummary: directAnalyticsData?.summary?.substring(0, 50) + '...'
 	});
 
-	// Leverage existing conversation context for follow-up detection
-	const hasExistingAnalytics = directAnalyticsData || context.lastAnalyticsData;
-
-	// If there's existing analytics data available, prefer follow-up analysis
-	// This leverages the system's existing multilingual context awareness
-	if (hasExistingAnalytics) {
-		console.log('🔄 Existing analytics data found, routing to follow-up analysis');
-		return {
-			query,
-			step: 'analyze_existing_data'
-		};
-	}
-
-	// Build context summary for LLM
+	// Build context summary for LLM - include existing analytics data if available
 	let contextSummary = '';
 	if (context.lastAnalyticsData) {
 		contextSummary = `Recent analytics summary: ${context.lastAnalyticsData.summary}`;
@@ -401,16 +406,12 @@ Return JSON:
 			};
 		}
 
-		// Check if query contains explicitly selected metadata patterns
-		const hasSelectedMetadata = query.toLowerCase().includes('selected metadata:') ||
-			query.toLowerCase().includes('analyze using these') ||
-			(query.toLowerCase().includes('indicator:') && query.toLowerCase().includes('(id:'));
-
-		if (classification.intent === 'followup_data_analysis' || classification.intent === 'follow_up' || hasSelectedMetadata) {
-			console.log('🔄 Follow-up analytics query detected');
+		// Pure LLM-based routing - no keyword checks
+		if (classification.intent === 'followup_data_analysis' || classification.intent === 'follow_up') {
+			console.log('🔄 Follow-up analytics query detected by LLM');
 			return {
 				query,
-				step: hasSelectedMetadata ? 'parse_selected_metadata' : 'analyze_existing_data'
+				step: 'analyze_existing_data'
 			};
 		} else {
 			console.log('🆕 New analytics query detected');

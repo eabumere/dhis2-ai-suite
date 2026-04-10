@@ -147,7 +147,9 @@ const MyApp: FC = () => {
 		setContextRouterAgent(agent);
 
 		// Initialize new chat session (clear conversation history)
-		workflowOrchestrator.initializeNewChatSession();
+		workflowOrchestrator.initializeNewChatSession().catch(error => {
+			console.error('Failed to initialize new chat session:', error);
+		});
 	}, []);
 
 	// Handle query submission - now adds to conversation

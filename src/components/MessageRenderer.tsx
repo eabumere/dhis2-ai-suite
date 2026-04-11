@@ -1303,8 +1303,9 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                 // Regular response handling
                 return (
                     <div>
-                        {/* Text content */}
-                        {message.content && (
+                        {/* ✅ ONLY SHOW TEXT MESSAGE IF THERE IS NO GRID DATA ✅ */}
+                        {/* ✅ SUPPRESS ALL TEXT WHEN ACTUAL RESULTS ARE PRESENT ✅ */}
+                        {message.content && !messageContainsGridData(message.data) && (
                             <div style={{ marginBottom: message.data ? '16px' : '0' }}>
                                 <ExpandableText text={message.content} maxLength={500} />
                             </div>
@@ -1681,6 +1682,24 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
         return renderDataContent(dataWithoutActions);
     };
 
+    // ✅ PERMANENT CHECK: Detect if message contains actual grid data
+    const messageContainsGridData = (data: any): boolean => {
+        if (!data) return false;
+        
+        const resultObject = data.results || data;
+        
+        // Check for search results format (multiple metadata arrays)
+        if (typeof resultObject === 'object' && !Array.isArray(resultObject)) {
+            const hasAnyResults = Object.values(resultObject).some(val => 
+                Array.isArray(val) && val.length > 0
+            );
+            
+            return hasAnyResults;
+        }
+        
+        return false;
+    };
+
     const renderDataContent = (data: any) => {
         // Handle recovery options - render as simple text suggestions instead of table
         if (data.recoveryOptions && Array.isArray(data.recoveryOptions)) {
@@ -1698,13 +1717,9 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
         // Handle tabular results - check for top-level object with arrays (search results) or nested results
         const resultObject = data.results || data; // Fall back to data itself if no .results
 
-        // Skip rendering if this is just a displayType flag without actual data
-        if (resultObject.displayType === 'search_results' && !Object.keys(resultObject).some(key =>
-            key !== 'displayType' && key !== 'originalQuery' && key !== 'totalResults' &&
-            Array.isArray(resultObject[key])
-        )) {
-            return null;
-        }
+        // ✅ ALWAYS RENDER THE GRID. NO EXCEPTIONS.
+        // ✅ Render for ANY search results, even partial, even if some types have 0 items
+        // ✅ Removed the stupid check that was hiding actual data from users
 
         const hasMultipleResults = resultObject &&
             typeof resultObject === 'object' &&
@@ -1730,80 +1745,100 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                     {type.replace(/([A-Z])/g, ' $1').trim()}
                                 </h5>
                                 <div style={{
-                                    border: '1px solid #ddd',
-                                    borderRadius: '4px',
+                                    border: '2px solid #e3f2fd',
+                                    borderRadius: '12px',
                                     overflow: 'hidden',
-                                    maxHeight: '300px',
-                                    overflowY: 'auto'
+                                    maxHeight: '450px',
+                                    overflowY: 'auto',
+                                    boxShadow: '0 4px 16px rgba(33, 150, 243, 0.1)',
+                                    width: '100%'
                                 }}>
                                     <table style={{
                                         width: '100%',
                                         borderCollapse: 'collapse'
                                     }}>
                                         <thead>
-                                            <tr style={{ backgroundColor: '#f5f5f5' }}>
+                                            <tr style={{ 
+                                                background: 'linear-gradient(135deg, #2196f3, #1976d2)',
+                                                color: 'white'
+                                            }}>
                                                 <th style={{
-                                                    padding: '8px 12px',
+                                                    padding: '12px 16px',
                                                     textAlign: 'left',
-                                                    borderBottom: '1px solid #ddd',
-                                                    fontWeight: 'bold',
-                                                    fontSize: '12px'
+                                                    borderBottom: 'none',
+                                                    fontWeight: '600',
+                                                    fontSize: '13px',
+                                                    textTransform: 'uppercase',
+                                                    letterSpacing: '0.5px'
                                                 }}>
-                                                    ID
+                                                    🆔 ID
                                                 </th>
                                                 <th style={{
-                                                    padding: '8px 12px',
+                                                    padding: '12px 16px',
                                                     textAlign: 'left',
-                                                    borderBottom: '1px solid #ddd',
-                                                    fontWeight: 'bold',
-                                                    fontSize: '12px'
+                                                    borderBottom: 'none',
+                                                    fontWeight: '600',
+                                                    fontSize: '13px',
+                                                    textTransform: 'uppercase',
+                                                    letterSpacing: '0.5px'
                                                 }}>
-                                                    Name
+                                                    📋 Name
                                                 </th>
                                                 <th style={{
-                                                    padding: '8px 12px',
+                                                    padding: '12px 16px',
                                                     textAlign: 'left',
-                                                    borderBottom: '1px solid #ddd',
-                                                    fontWeight: 'bold',
-                                                    fontSize: '12px'
+                                                    borderBottom: 'none',
+                                                    fontWeight: '600',
+                                                    fontSize: '13px',
+                                                    textTransform: 'uppercase',
+                                                    letterSpacing: '0.5px'
                                                 }}>
-                                                    Description
+                                                    ℹ️ Description
                                                 </th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {items.slice(0, 10).map((item: any, index: number) => (
                                                 <tr key={item.id || index} style={{
-                                                    backgroundColor: index % 2 === 0 ? 'white' : '#f9f9f9'
-                                                }}>
+                                                    backgroundColor: index % 2 === 0 ? 'white' : '#f8fbff',
+                                                    transition: 'background-color 0.2s ease'
+                                                }}
+                                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e3f2fd'}
+                                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : '#f8fbff'}
+                                                >
                                                     <td style={{
-                                                        padding: '8px 12px',
-                                                        borderBottom: '1px solid #eee',
+                                                        padding: '12px 16px',
+                                                        borderBottom: '1px solid #e0e0e0',
                                                         fontFamily: 'monospace',
                                                         fontSize: '12px',
-                                                        maxWidth: '150px',
+                                                        maxWidth: '180px',
                                                         overflow: 'hidden',
-                                                        textOverflow: 'ellipsis'
+                                                        textOverflow: 'ellipsis',
+                                                        color: '#1976d2',
+                                                        fontWeight: '500'
                                                     }}>
                                                         {item.id || ''}
                                                     </td>
                                                     <td style={{
-                                                        padding: '8px 12px',
-                                                        borderBottom: '1px solid #eee',
-                                                        fontSize: '12px',
-                                                        maxWidth: '200px',
+                                                        padding: '12px 16px',
+                                                        borderBottom: '1px solid #e0e0e0',
+                                                        fontSize: '14px',
+                                                        maxWidth: '280px',
                                                         overflow: 'hidden',
-                                                        textOverflow: 'ellipsis'
+                                                        textOverflow: 'ellipsis',
+                                                        fontWeight: '500',
+                                                        color: '#333'
                                                     }}>
                                                         {item.name || ''}
                                                     </td>
                                                     <td style={{
-                                                        padding: '8px 12px',
-                                                        borderBottom: '1px solid #eee',
-                                                        fontSize: '12px',
-                                                        maxWidth: '250px',
+                                                        padding: '12px 16px',
+                                                        borderBottom: '1px solid #e0e0e0',
+                                                        fontSize: '13px',
+                                                        maxWidth: '350px',
                                                         overflow: 'hidden',
-                                                        textOverflow: 'ellipsis'
+                                                        textOverflow: 'ellipsis',
+                                                        color: '#666'
                                                     }}>
                                                         {item.description || item.displayName || '-'}
                                                     </td>
@@ -1813,13 +1848,15 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                     </table>
                                     {items.length > 10 && (
                                         <div style={{
-                                            padding: '8px',
+                                            padding: '14px',
                                             textAlign: 'center',
-                                            backgroundColor: '#f5f5f5',
-                                            fontSize: '12px',
-                                            color: '#666'
+                                            background: 'linear-gradient(90deg, #e3f2fd, #bbdefb)',
+                                            fontSize: '13px',
+                                            color: '#1565c0',
+                                            fontWeight: '500',
+                                            borderTop: '1px solid #90caf9'
                                         }}>
-                                            ... and {items.length - 10} more results
+                                            ➕ ... and {items.length - 10} more {items.length - 10 === 1 ? 'result' : 'results'}
                                         </div>
                                     )}
                                 </div>

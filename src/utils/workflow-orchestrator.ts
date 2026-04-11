@@ -1014,30 +1014,23 @@ class WorkflowOrchestrator {
             }
         }
 
-        // Check if we have actual search results to render
-        if (!cleanSearchResult || (!Array.isArray(cleanSearchResult) && Object.keys(cleanSearchResult).length === 0)) {
-            // No search data, just add a simple message
-            return this.addAssistantMessage(
-                'Search completed',
-                'response',
-                { searchResult, originalQuery }
-            );
-        }
+        // ✅ ALWAYS RENDER THE GRID. NO EXCEPTIONS.
+        // ✅ Show actual grid for ANY results, even partial, even 1 item
+        // ✅ No more stupid text message fallback
 
         // Create a rich search result message
-        const totalResults = this.calculateTotalResults(cleanSearchResult);
+        const totalResults = this.calculateTotalResults(searchResult);
         const content = `Found ${totalResults} metadata ${totalResults === 1 ? 'item' : 'items'} matching "${originalQuery}"`;
 
         // Preserve the original multi-type structure that MessageRenderer expects
-        // Search agent should return the correct format: { dataElements: [...], indicators: [...], etc. }
         const messageData = {
-            ...cleanSearchResult,
+            ...searchResult,
             displayType: 'search_results', // Flag for specialized rendering
             originalQuery,
             totalResults
         };
 
-        // Add the search result as a specialized message type
+        // Add the search result as a specialized message type - GRID WILL RENDER
         return this.addAssistantMessage(
             content,
             'response',
@@ -1369,18 +1362,7 @@ class WorkflowOrchestrator {
             return;
         }
 
-        // Check if this is a search result that should be rendered in conversation
-        const isSearchResult = result && (
-            result.dataElements || result.indicators || result.organisationUnits ||
-            result.dataSets || result.programs || result.categories ||
-            (result.data && Array.isArray(result.data))
-        );
-
-        if (isSearchResult) {
-            console.log('🔍 Detected search result, calling requestSearchRender');
-            this.requestSearchRender(result, input?.input?.messages?.[0]?.content || 'Search query');
-            return;
-        }
+        // ✅ SEARCH RENDER CALLED ONCE ABOVE - REMOVED DUPLICATE CALL TO PREVENT DOUBLE RENDER
 
         // Check if this is a chart result
         if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {

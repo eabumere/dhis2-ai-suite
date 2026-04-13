@@ -248,7 +248,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                             const humanizedSingular = humanizeResourceName(singular);
                             const humanizedPlural = humanizeResourceName(config.metadataType);
 
-                            const selection = await orchestrator.requestSelection({
+                            const selections = await orchestrator.requestSelection({
                                 title: `Existing ${humanizedSingular} found`,
                                 description: `${searchResults.length} existing ${humanizedPlural} match "${llmInput.name}". Select one to use it, or create new:`,
                                 items: searchResults.map(r => ({
@@ -263,6 +263,8 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                                 parentResource: singular,
                                 parentName: llmInput.name
                             });
+
+							const selection = selections.length && selections[0]
 
                             if (selection && selection.id !== '__create_new__') {
                                 // User selected existing resource

@@ -124,6 +124,73 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 // LLM provides structured parameters directly
                 const llmInput = resource as any;
 
+                // ✅ PRE-VALIDATION: Check for sufficient information BEFORE any processing
+                // First get all required fields from schema
+                const requiredFields = getRequiredFieldsFromSchema(config.schema);
+                
+                // Fields that can be safely auto-generated with defaults
+                const autoGeneratableFields = ['id', 'shortName', 'code', 'displayName'];
+                
+                // Find required fields that user did NOT provide AND cannot be auto-generated
+                const missingUserFields = requiredFields.filter(field => 
+                    // Field is required
+                    // User did NOT provide this field
+                    llmInput[field] === undefined && 
+                    // Field CANNOT be auto-generated
+                    !autoGeneratableFields.includes(field)
+                );
+
+                // ✅ Also validate dependencies if configured
+                const missingDependencyInfo: Record<string, string[]> = {};
+                
+                if (config.dependencies && config.dependencies.length > 0) {
+                    for (const dep of config.dependencies) {
+                        // Check if dependency has sufficient information to be created
+                        if (dep.createIfNotFound && dep.createParams) {
+                            const depSchemaName = Object.keys((await import('./schemas')).Dhis2Schemas)
+                                .find(s => s.toLowerCase() === dep.type.slice(0, -1).toLowerCase());
+                            
+                            if (depSchemaName) {
+                                const depSchema = (await import('./schemas')).Dhis2Schemas[depSchemaName as keyof typeof import('./schemas').Dhis2Schemas];
+                                const depRequiredFields = getRequiredFieldsFromSchema(depSchema);
+                                
+                                const depMissingFields = depRequiredFields.filter(field => 
+                                    dep.createParams![field] === undefined && 
+                                    !autoGeneratableFields.includes(field)
+                                );
+                                
+                                if (depMissingFields.length > 0) {
+                                    missingDependencyInfo[dep.type] = depMissingFields;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // If ANY required information is missing - STOP HERE and inform user
+                if (missingUserFields.length > 0 || Object.keys(missingDependencyInfo).length > 0) {
+                    const errorResponse: any = {
+                        success: false,
+                        error: "Insufficient information provided to create metadata",
+                        message: "Please provide the following missing information before proceeding:",
+                        missingFields: {}
+                    };
+
+                    if (missingUserFields.length > 0) {
+                        errorResponse.missingFields.mainResource = missingUserFields;
+                    }
+
+                    if (Object.keys(missingDependencyInfo).length > 0) {
+                        errorResponse.missingFields.dependencies = missingDependencyInfo;
+                    }
+
+                    console.log('⚠️ Cannot create metadata: Missing required information', errorResponse.missingFields);
+                    
+                    return JSON.stringify(errorResponse);
+                }
+
+                // ✅ All required information is present - proceed with creation
+
                 // ✅ GLOBAL EXISTENCE VERIFICATION (APPLIES TO ALL TOOLS)
                 // Enable by default for all tools unless explicitly disabled
                 const shouldCheckExistence = config.checkExistence !== false;

@@ -1146,65 +1146,93 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
 		const resolveExpression = async (expression: string): Promise<string> => {
 			console.log(`Resolving expression: ${expression}`);
 
-			// Always extract content inside #{...} if present (LLM wraps names in brackets incorrectly)
-			let searchQuery = expression;
-
-			// Extract content inside brackets if wrapped
-			const bracketMatch = expression.match(/#\{([^}]+)\}/);
-			if (bracketMatch && bracketMatch[1]) {
-				searchQuery = bracketMatch[1].trim();
-				console.log(`Extracted search query from brackets: "${searchQuery}" from original: "${expression}"`);
+			// Extract ALL #{...} references from the expression (supports mathematical operations)
+			const referencePattern = /#\{([^}]+)\}/g;
+			const references: Array<{ match: string; query: string; resolved?: string }> = [];
+			
+			// Find all references in the expression
+			let match;
+			while ((match = referencePattern.exec(expression)) !== null) {
+				references.push({
+					match: match[0],
+					query: match[1].trim()
+				});
 			}
 
-			// Search both data elements and indicators
-			const [dataElementResults, indicatorResults] = await Promise.all([
-				searchDhis2Metadata('dataElements', searchQuery, 10),
-				searchDhis2Metadata('indicators', searchQuery, 10)
-			]);
+			// If no #{...} references found, treat entire expression as single reference
+			if (references.length === 0) {
+				references.push({
+					match: expression,
+					query: expression.trim()
+				});
+			}
 
-			const allMatches = [...dataElementResults, ...indicatorResults];
+			console.log(`Found ${references.length} references in expression`);
 
-			if (allMatches.length === 0) {
-				// No matches found, fallback to 1
-				console.warn(`No matches found for expression "${expression}", falling back to 1`);
-				return '1';
-			} else if (allMatches.length === 1) {
-				// Single match found, use it directly
-				console.log(`Resolved expression "${expression}" to ${allMatches[0].name} (${allMatches[0].id})`);
-				return `#{${allMatches[0].id}}`;
-			} else {
-				// Multiple matches found
-				console.log(`Multiple matches found for "${expression}" (${allMatches.length} matches)`);
+			// Resolve each reference individually
+			for (const ref of references) {
+				console.log(`Resolving reference: "${ref.query}"`);
+				
+				// Search both data elements and indicators
+				const [dataElementResults, indicatorResults] = await Promise.all([
+					searchDhis2Metadata('dataElements', ref.query, 10),
+					searchDhis2Metadata('indicators', ref.query, 10)
+				]);
 
-				// Create selector options
-				const selectorOptions = allMatches.map(item => ({
-					id: item.id,
-					name: item.name,
-					type: dataElementResults.includes(item) ? 'dataElement' : 'indicator'
-				}));
+				const allMatches = [...dataElementResults, ...indicatorResults];
 
-				// Use orchestrator selection if available
-				const orchestrator = getOrchestratorInstance();
-				if (orchestrator && typeof orchestrator.requestSelection === 'function') {
-					console.log(`Calling orchestrator selection dialog for ${expression}`);
-					const selected = await orchestrator.requestSelection(
-						`expression_selection_${expression}`,
-						selectorOptions,
-						false
-					);
+				if (allMatches.length === 0) {
+					// No matches found, fallback to 1
+					console.warn(`No matches found for reference "${ref.query}", falling back to 1`);
+					ref.resolved = '1';
+				} else if (allMatches.length === 1) {
+					// Single match found, use it directly
+					console.log(`Resolved reference "${ref.query}" to ${allMatches[0].name} (${allMatches[0].id})`);
+					ref.resolved = `#{${allMatches[0].id}}`;
+				} else {
+					// Multiple matches found
+					console.log(`Multiple matches found for "${ref.query}" (${allMatches.length} matches)`);
 
-					if (selected && selected.length) {
-						console.log(`User selected: ${selected[0].name} (${selected[0].id})`);
-						return `#{${selected[0].id}}`;
+					// Create selector options
+					const selectorOptions = allMatches.map(item => ({
+						id: item.id,
+						name: item.name,
+						type: dataElementResults.includes(item) ? 'dataElement' : 'indicator'
+					}));
+
+					// Use orchestrator selection if available
+					const orchestrator = getOrchestratorInstance();
+					if (orchestrator && typeof orchestrator.requestSelection === 'function') {
+						console.log(`Calling orchestrator selection dialog for ${ref.query}`);
+						const selected = await orchestrator.requestSelection(
+							`expression_selection_${ref.query}`,
+							selectorOptions,
+							false
+						);
+
+						if (selected && selected.length) {
+							console.log(`User selected: ${selected[0].name} (${selected[0].id})`);
+							ref.resolved = `#{${selected[0].id}}`;
+						} else {
+							console.warn(`User canceled selection, falling back to first match`);
+							ref.resolved = `#{${selectorOptions[0].id}}`;
+						}
 					} else {
-						console.warn(`User canceled selection, falling back to first match`);
+						// Fallback: use first match with warning
+						console.warn(`Using first match: ${selectorOptions[0].name} (${selectorOptions[0].id})`);
+						ref.resolved = `#{${selectorOptions[0].id}}`;
 					}
 				}
-
-				// Fallback: use first match with warning
-				console.warn(`Using first match: ${selectorOptions[0].name} (${selectorOptions[0].id})`);
-				return `#{${selectorOptions[0].id}}`;
 			}
+
+			// Replace all references in the original expression
+			let resolvedExpression = expression;
+			for (const ref of references) {
+				resolvedExpression = resolvedExpression.replace(ref.match, ref.resolved!);
+			}
+
+			console.log(`✅ Final resolved expression: ${resolvedExpression}`);
+			return resolvedExpression;
 		};
 
 		// Resolve both expressions - orchestrator is accessed via global singleton

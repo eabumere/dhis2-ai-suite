@@ -350,7 +350,35 @@ export async function searchDhis2Metadata(
         console.log('No external search results available, using DHIS2 results only');
     }
 
-    return dhis2Results;
+    // ✅ EXACT ID MATCH DETECTION
+    // If search query exactly matches any resource ID, return ONLY that resource
+    let allResults: Array<{ id: string; name: string; code?: string; displayName: string }>;
+    
+    if (externalResults) {
+        // Need to re-check filteredExternalResults here since it's scoped
+        const filteredExternalResults = filterExternalResultsByType(externalResults, metadataType);
+        
+        if (filteredExternalResults.length > 0) {
+            const transformedExternalResults = transformExternalResults(filteredExternalResults);
+            allResults = mergeSearchResults(dhis2Results, transformedExternalResults, limit);
+        } else {
+            allResults = dhis2Results;
+        }
+    } else {
+        allResults = dhis2Results;
+    }
+    
+    // Check for exact ID match (case insensitive)
+    const exactIdMatch = allResults.find(result => 
+        result.id.toLowerCase() === query.toLowerCase().trim()
+    );
+    
+    if (exactIdMatch) {
+        console.log(`✅ Exact ID match found for "${query}" - returning only this resource`);
+        return [exactIdMatch];
+    }
+
+    return allResults;
 }
 
 /**

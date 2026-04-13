@@ -54,9 +54,9 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
             .filter(({ option, originalIndex }) => {
                 // Search filter
                 const matchesSearch = !searchQuery ||
-                    option.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    option.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    option.type.toLowerCase().includes(searchQuery.toLowerCase());
+                    option.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    option.id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    option.type?.toLowerCase().includes(searchQuery.toLowerCase());
 
                 // Type filter
                 const matchesType = selectedTypes.size === 0 || selectedTypes.has(option.type);

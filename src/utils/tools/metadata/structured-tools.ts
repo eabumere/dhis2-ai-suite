@@ -1146,7 +1146,13 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
 		const resolveExpression = async (expression: string): Promise<string> => {
 			console.log(`Resolving expression: ${expression}`);
 
-			// Extract ALL #{...} references from the expression (supports mathematical operations)
+			// Handle empty/null/undefined expression - default to 1
+			if (!expression || expression.trim().length === 0) {
+				console.log(`Empty expression, defaulting to 1`);
+				return '1';
+			}
+
+			// Extract ONLY #{...} references from the expression - leave all other characters UNTOUCHED
 			const referencePattern = /#\{([^}]+)\}/g;
 			const references: Array<{ match: string; query: string; resolved?: string }> = [];
 			
@@ -1159,15 +1165,14 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
 				});
 			}
 
-			// If no #{...} references found, treat entire expression as single reference
+			// If there are NO #{...} references, return the expression AS-IS (could be literal number, operator, etc.)
+			// We NO LONGER try to resolve plain numbers or other text as data elements!
 			if (references.length === 0) {
-				references.push({
-					match: expression,
-					query: expression.trim()
-				});
+				console.log(`No #{...} references found, returning expression as-is: "${expression}"`);
+				return expression.trim();
 			}
 
-			console.log(`Found ${references.length} references in expression`);
+			console.log(`Found ${references.length} #{...} references in expression`);
 
 			// Resolve each reference individually
 			for (const ref of references) {
@@ -1225,7 +1230,7 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
 				}
 			}
 
-			// Replace all references in the original expression
+			// Replace all references in the original expression, leaving everything else EXACTLY as it was
 			let resolvedExpression = expression;
 			for (const ref of references) {
 				resolvedExpression = resolvedExpression.replace(ref.match, ref.resolved!);

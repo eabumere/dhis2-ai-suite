@@ -304,9 +304,14 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                     
                     // Handle arrays
                     if (Array.isArray(obj)) {
-                        return await Promise.all(obj.map((item, index) => 
-                            checkNestedExistence(item, `${resourcePath}[${index}]`)
-                        ));
+                        // ✅ Process array items SEQUENTIALLY one after another
+                        // This ensures selection dialogs open one at a time, not all in parallel
+                        const results = [];
+                        for (let index = 0; index < obj.length; index++) {
+                            const resolvedItem = await checkNestedExistence(obj[index], `${resourcePath}[${index}]`);
+                            results.push(resolvedItem);
+                        }
+                        return results;
                     }
                     
                     // Detect resources with name and id fields (potential metadata objects)
@@ -374,8 +379,6 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                         const orchestrator = getOrchestratorInstance();
                         
                         if (orchestrator && orchestrator.requestSelection) {
-                            // Show verification dialog with all matches
-                            // ✅ Build properly humanized strings directly (NO regex hacks needed)
 
                             const humanizedSingular = getSingularResourceName(config.metadataType);
                             const humanizedPlural = getPluralResourceName(config.metadataType);
@@ -703,9 +706,14 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 
                     // Handle arrays
                     if (Array.isArray(obj)) {
-                        return Promise.all(obj.map((item, index) =>
-                            resolveNamesToIds(item, `${path}[${index}]`)
-                        ));
+                        // ✅ Process array items SEQUENTIALLY one after another
+                        // This ensures selection dialogs open one at a time, not all in parallel
+                        const results = [];
+                        for (let index = 0; index < obj.length; index++) {
+                            const resolvedItem = await resolveNamesToIds(obj[index], `${path}[${index}]`);
+                            results.push(resolvedItem);
+                        }
+                        return results;
                     }
 
                     // ✅ FIRST PROCESS ALL CHILDREN RECURSIVELY!
@@ -837,7 +845,8 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                                         })),
                                         allowCreateNew: true,
                                         createNewLabel: "Create New",
-                                        confirmButtonText: "Select"
+                                        confirmButtonText: "Select",
+                                        selectionMode: 'single'
                                     });
 
                                     const selection = selections.length && selections[0];

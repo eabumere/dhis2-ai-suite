@@ -940,10 +940,16 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 										// Append new items to existing array
 										result[key] = [...existingArray, ...updateValue];
 
-										// Remove duplicates if they have id
-										result[key] = result[key].filter((item: any, index: number, self: any[]) =>
-											index === self.findIndex((i: any) => i.id === item.id)
-										);
+										// ✅ Remove duplicates for standard objects ONLY
+										// ❌ SKIP deduplication completely for dataSetElements - DHIS2 handles this server side
+										if (key !== 'dataSetElements') {
+											result[key] = result[key].filter((item: any, index: number, self: any[]) => {
+												if (item.id) {
+													return index === self.findIndex((i: any) => i.id === item.id);
+												}
+												return true;
+											});
+										}
 									} else if (updateValue && typeof updateValue === 'object' && (updateValue as any).id) {
 										// ✅ NESTED OBJECT REFERENCE: Replace directly
 										console.log(`✅ Replacing reference object field ${path}.${key}`);
@@ -1167,6 +1173,14 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 				delete (cleanedResourceData as any)['user'];
 				delete (cleanedResourceData as any)['href'];
 				delete (cleanedResourceData as any)['categoryOptionCombos'];
+
+				// ✅ FINAL CLEANUP: Ensure dataSetElements are in EXACT correct DHIS2 format
+				// Strip ALL properties except dataElement reference, NO root id allowed
+				if ((cleanedResourceData as any).dataSetElements && Array.isArray((cleanedResourceData as any).dataSetElements)) {
+					(cleanedResourceData as any).dataSetElements = (cleanedResourceData as any).dataSetElements
+						.filter((item: any) => item?.dataElement?.id)
+						.map((item: any) => ({ dataElement: { id: item.dataElement.id } }));
+				}
 
 				const updateResult = await updateDhis2Metadata(
 					config.metadataType,

@@ -99,7 +99,7 @@ export const CategoryComboSchema = z.object({
 
 // DataSet Schema
 export const DataSetElementSchema = z.object({
-  dataElement: z.object({ id: z.string() }),
+  dataElement: z.object({ id: z.string().optional(), name: z.string().optional() }),
   categoryCombo: z.object({ id: z.string() }).optional(),
 });
 

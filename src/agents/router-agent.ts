@@ -272,14 +272,28 @@ async function invoke_crud_agent(state: typeof RouterAnnotation.State): Promise<
 			orchestrator: state.orchestrator // Pass orchestrator for UI feedback
 		});
 
-		const responseContent = result.messages[result.messages.length - 1].content as string;
-
-		// Parse response
+		// Handle both response formats: new StateGraph direct result and old messages array format
 		let parsedResponse: { success?: any; rawResponse?: string; };
-		try {
-			parsedResponse = JSON.parse(responseContent);
-		} catch (parseError) {
-			parsedResponse = { rawResponse: responseContent };
+		
+		// Check for new StateGraph format (direct result object with success property)
+		if (result && result.success !== undefined) {
+			parsedResponse = result;
+		} 
+		// Fall back to old messages array format for backward compatibility
+		else if (result && result.messages && Array.isArray(result.messages) && result.messages.length > 0) {
+			const responseContent = result.messages[result.messages.length - 1].content as string;
+			try {
+				parsedResponse = JSON.parse(responseContent);
+			} catch (parseError) {
+				parsedResponse = { rawResponse: responseContent };
+			}
+		}
+		// Fallback error case
+		else {
+			parsedResponse = {
+				success: false,
+				rawResponse: "Invalid response format received from CRUD agent"
+			};
 		}
 
 		// Add to conversation context

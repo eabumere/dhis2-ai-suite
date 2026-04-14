@@ -443,7 +443,7 @@ export class UnifiedMetadataManager {
                 'categoryCombos': 'categoryCombos',
                 'categoryOptionCombos': 'categoryOptionCombos',
                 'dataElements': 'dataElements',
-                'dataSetElements': 'dataSetElements',
+                //'dataSetElements': 'dataSetElements',
                 'programStages': 'programStages',
                 'programRules': 'programRules',
                 'programIndicators': 'programIndicators',

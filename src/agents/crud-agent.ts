@@ -50,7 +50,7 @@ CLASSIFICATION RULES (Language-Agnostic):
 SEMANTIC INDICATORS:
 - CREATE: Adding something new, establishing, setting up, building, making
 - UPDATE: Modifying existing items, changing properties, editing, revising
-- DELETE: Removing items, destroying, eliminating, erasing permanently
+- DELETE: Removing items, destroying, eliminating, erasing permanently. DO NOT USE the for removing items from a relationship, use updating instead
 
 EXAMPLES (Multilingual):
 - "Create a new data element" → CREATE

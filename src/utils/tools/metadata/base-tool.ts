@@ -21,6 +21,55 @@ let globalOrchestratorInstance: any = null;
 // Cache for humanized resource names
 const resourceNameCache = new Map<string, string>();
 
+// ==================================================
+// ✅ ACTIVITY PROGRESS EVENT SYSTEM
+// ==================================================
+export interface ActivityEvent {
+    type: 'start' | 'progress' | 'complete' | 'error' | 'wait' | 'api_call';
+    message: string;
+    resourceType?: string;
+    resourceName?: string;
+    percentage?: number;
+    detail?: string;
+    step?: string;
+}
+
+// Activity event emitter that broadcasts progress to the UI
+export function emitActivity(event: ActivityEvent) {
+    const orchestrator = getOrchestratorInstance();
+    if (orchestrator && orchestrator.emitActivity) {
+        orchestrator.emitActivity(event);
+    }
+    // Always log to console for debugging
+    console.log(`📊 [${event.type.toUpperCase()}] ${event.message}${event.percentage ? ` (${event.percentage}%)` : ''}`);
+}
+
+// Helper for standard progress messages
+export function emitProgress(message: string, percentage: number = 0, detail?: string) {
+    emitActivity({
+        type: 'progress',
+        message,
+        percentage,
+        detail
+    });
+}
+
+// Helper for waiting state (user input required)
+export function emitWaiting(message: string) {
+    emitActivity({
+        type: 'wait',
+        message
+    });
+}
+
+// Helper for API calls
+export function emitApiCall(message: string) {
+    emitActivity({
+        type: 'api_call',
+        message
+    });
+}
+
 /**
  * Complete DHIS2 resource type mappings
  * Contains both singular and plural forms for all known metadata types
@@ -293,6 +342,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 				}
 
 				// ✅ All required information is present - proceed with creation
+				emitProgress(`Creating ${getSingularResourceName(config.metadataType)}: ${llmInput.name}`, 10, 'Preparing payload');
 
 				// ✅ GLOBAL EXISTENCE VERIFICATION (APPLIES TO ALL TOOLS)
 				// Enable by default for all tools unless explicitly disabled
@@ -362,6 +412,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
 				// Run nested existence check before proceeding
 				if (shouldCheckExistence) {
+					emitProgress(`Checking existence for all nested resources...`, 20);
 					console.log(`🔍 Checking existence for all nested resources in payload...`);
 					const resolvedPayload = await checkNestedExistence(transformedInput, config.metadataType);
 
@@ -372,6 +423,8 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
 				// Check existence for main resource after resolving nested ones
 				if (shouldCheckExistence && transformedInput.name) {
+					emitProgress(`Searching for existing ${getPluralResourceName(config.metadataType)} matching "${transformedInput.name}"...`, 30);
+					
 					const searchLimit = config.searchLimit || 20;
 					const searchResults = await searchDhis2Metadata(config.metadataType, transformedInput.name, searchLimit);
 
@@ -381,6 +434,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 						const orchestrator = getOrchestratorInstance();
 
 						if (orchestrator && orchestrator.requestSelection) {
+							emitWaiting(`Waiting for user selection: ${searchResults.length} existing matches found`);
 
 							const humanizedSingular = getSingularResourceName(config.metadataType);
 							const humanizedPlural = getPluralResourceName(config.metadataType);
@@ -483,6 +537,8 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 					}
 				}
 
+				emitProgress(`Validating payload against DHIS2 schema...`, 60);
+
 				// 2. Use DLHIS2 schema for validation if provided
 				const schemaToUse = config.dhis2SchemaName ?
 					(await import('./schemas')).Dhis2Schemas[config.dhis2SchemaName] :
@@ -512,6 +568,8 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
 				// 3. Resolve dependencies (default category combos for data elements, etc.)
 				if (config.dependencies && config.dependencies.length > 0) {
+					emitProgress(`Resolving dependencies...`, 70);
+					
 					const resolvedDeps = await resolveDependencies(
 						schemaToUse,
 						config.dependencies
@@ -523,6 +581,8 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 				}
 
 				// 4. Create in DHIS2
+				emitApiCall(`Sending request to DHIS2 API to create resource...`);
+				
 				const createResult = await createDhis2Metadata(
 					config.metadataType,
 					[validation.data]
@@ -535,8 +595,7 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 					console.warn('Failed to add resource to context:', contextError);
 				}
 
-				// 6. Return success response
-
+				emitProgress(`${getSingularResourceName(config.metadataType)} created successfully!`, 100);
 
 				// 6. Return success response
                 return JSON.stringify({

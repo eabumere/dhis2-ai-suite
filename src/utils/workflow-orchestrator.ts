@@ -933,6 +933,25 @@ class WorkflowOrchestrator {
         return progressMessage;
     }
 
+    // ✅ ACTIVITY EVENT HANDLER - called from metadata tools
+    public emitActivity(event: any) {
+        if (event.percentage) {
+            // Update progress percentage in UI
+            this.updateUIState({
+                processingMessage: event.message
+            });
+        }
+
+        // Update the live progress message in the conversation stream
+        this.addProgressMessage(event.message, {
+            type: event.type,
+            percentage: event.percentage,
+            detail: event.detail,
+            resourceType: event.resourceType,
+            resourceName: event.resourceName
+        });
+    }
+
     // Get the current thread ID (most recent user message thread)
     private getCurrentThreadId(): string | undefined {
         // Find the most recent user message and return its threadId

@@ -995,6 +995,8 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 
 				// ✅ REFERENCE REMOVAL PROCESSING
 				// Process removeReferences entries - remove items from arrays
+				const failedRemovals: string[] = [];
+				
 				if (removeReferences && removeReferences.length > 0) {
 					console.log(`🔍 Processing reference removal requests:`, removeReferences);
 
@@ -1087,6 +1089,12 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 									}
 								}
 
+								// ✅ SPECIAL CASE: dataSetElements are not top level resources
+								// We actually need to search dataElements, not dataSetElements
+								if (resourceType === 'dataSetElements') {
+									resourceType = 'dataElements';
+								}
+								
 								if (resourceType) {
 									const matches = await searchDhis2Metadata(resourceType, name, 10);
 
@@ -1116,9 +1124,17 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 
 											const selection = selections.length && selections[0];
 											if (selection && selection.id) {
-												finalData[property] = finalData[property].filter(
-													(item: any) => !(item && item.id === selection.id)
-												);
+												// ✅ SPECIAL CASE: dataSetElements have nested dataElement.id not root id
+												if (property === 'dataSetElements') {
+													finalData[property] = finalData[property].filter(
+														(item: any) => !(item?.dataElement?.id === selection.id)
+													);
+												} else {
+													// Standard case: check root id property
+													finalData[property] = finalData[property].filter(
+														(item: any) => !(item && item.id === selection.id)
+													);
+												}
 												console.log(`✅ User selected to remove reference: ${selection.name} (${selection.id}) from ${property}`);
 											}
 										} else {
@@ -1130,10 +1146,12 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 										}
 									} else {
 										console.warn(`⚠️ Could not find reference "${name}" in ${resourceType} to remove`);
+										failedRemovals.push(name);
 									}
 								}
 							} catch (e) {
 								console.error(`❌ Failed to remove reference "${name}" from ${property}:`, e);
+								failedRemovals.push(name);
 							}
 						}
 					}
@@ -1186,6 +1204,18 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 					config.metadataType,
 					[cleanedResourceData]
 				);
+
+				if (failedRemovals.length > 0) {
+					return JSON.stringify({
+						success: true,
+						warning: true,
+						message: `${config.metadataType} updated successfully. Note: ${failedRemovals.length} item(s) were not found: ${failedRemovals.join(', ')}`,
+						failedRemovals: failedRemovals,
+						data: finalResourceData,
+						resource: finalData,
+						apiResponse: updateResult
+					});
+				}
 
 				return JSON.stringify({
 					success: true,

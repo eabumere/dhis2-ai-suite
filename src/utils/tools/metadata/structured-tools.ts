@@ -16,13 +16,15 @@ import {
 	searchDhis2Metadata, transformExternalResults
 } from './helpers';
 import {
-	createDhis2GetByIdTool,
-	createDhis2SearchTool,
-	createDhis2UpdateTool,
-	createDhis2DeleteTool,
-	createLLMFirstTool,
-	getOrchestratorInstance
+    createDhis2GetByIdTool,
+    createDhis2SearchTool,
+    createDhis2UpdateTool,
+    createDhis2DeleteTool,
+    createLLMFirstTool,
+    getOrchestratorInstance
 } from './base-tool';
+
+import { createUpdateSchema } from './create-update-schema';
 import type { ProcessedDocumentData } from '../../azure-document-intelligence';
 
 // Schemas
@@ -885,7 +887,7 @@ function generateAnalyticsMemoryId(): string {
 
 export const createDhis2Category = createLLMFirstTool({
 	name: "create_dhis2_category",
-	description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option and are created with separate option entities.",
+	description: "Create DHIS2 categories that define disaggregation dimensions for data collection. Categories organize your data by dividing it into subgroups like Age categories ('<5', '5-14', '>14') or Gender categories ('Male', 'Female'). Categories require at least one category option and are created with separate option entities. **DO NOT SELECT** this tool if you need to create categories as part of a category combo (combination)",
 	schema: Dhis2Schemas.Category,
 	metadataType: "categories",
 	dhis2SchemaName: "Category",
@@ -912,20 +914,20 @@ export const createDhis2CategoryCombo = createLLMFirstTool({
 		for (const categoryName of categoryNames) {
 			try {
 				// Search for existing category by name (exact match preferred)
-				const searchResults = await searchDhis2Metadata('categories', categoryName, 10);
+				const searchResults = await searchDhis2Metadata('categories', categoryName['id'], 10);
 
 				let categoryId: string;
 
 				// First check for exact name match
-				const exactMatch = searchResults.find((cat: any) => cat.name === categoryName);
+				const exactMatch = searchResults.find((cat: any) => cat.name === categoryName['id']);
 
 				if (exactMatch) {
 					// Found existing category with exact name match
 					categoryId = exactMatch.id;
-					console.log(`Found existing category "${categoryName}" with ID: ${categoryId}`);
+					console.log(`Found existing category "${categoryName['id']}" with ID: ${categoryId}`);
 				} else {
 					// No exact match found - create a new category with appropriate options
-					console.log(`No exact match for "${categoryName}". Attempting to create new category.`);
+					console.log(`No exact match for "${categoryName['id']}". Attempting to create new category.`);
 
 					// Generate default options based on common category types
 					let defaultOptions: string[] = [];
@@ -1276,14 +1278,14 @@ export const searchDhis2RelationshipTypes = createDhis2SearchTool("relationshipT
 // Update Relationship Tools
 export const updateDhis2RelationshipType = createDhis2UpdateTool({
 	name: "update_dhis2_relationship_type",
-	description: "Update DHIS2 relationship types using schema-compliant properties",
+	description: "Update DHIS2 relationship types that define the nature of connections between entities in tracker programs. Relationship types specify what kinds of relationships are possible, such as 'Program partner', 'Spouse', 'Supervisor', 'Referral source'. Examples: 'Mother-Child', 'Doctor-Patient', 'Facility-Referral'.",
 	schema: Dhis2Schemas.RelationshipType,
 	metadataType: "relationshipTypes",
 });
 
 export const updateDhis2Relationship = createDhis2UpdateTool({
 	name: "update_dhis2_relationship",
-	description: "Update DHIS2 relationships using schema-compliant properties",
+	description: "Update DHIS2 relationships that link entities together in tracker programs. Relationships represent connections between tracked entities, such as parent-child relationships, referral links, or treatment partnerships. Examples: 'Mother-Child linkage', 'Referral from clinic A to clinic B'.",
 	schema: Dhis2Schemas.Relationship,
 	metadataType: "relationships",
 });
@@ -1310,28 +1312,28 @@ export const getDhis2DashboardById = createDhis2GetByIdTool("dashboards", "Dashb
 
 export const updateDhis2Option = createDhis2UpdateTool({
 	name: "update_dhis2_option",
-	description: "Update DHIS2 option values using schema-compliant properties",
+	description: "Update individual DHIS2 option values like 'Yes', 'No', 'Male', 'Female', 'High', 'Low', 'Positive', 'Negative'. Use for modifying option values that appear in dropdown lists, not for modifying data collection fields.",
 	schema: Dhis2Schemas.Option,
 	metadataType: "options",
 });
 
 export const updateDhis2TrackedEntityInstance = createDhis2UpdateTool({
 	name: "update_dhis2_tracked_entity_instance",
-	description: "Update DHIS2 tracked entity instances using schema-compliant properties",
+	description: "Update DHIS2 tracked entity instances with relationships. Use this when modifying existing individual records, patients, contacts, or entities tracked in programs.",
 	schema: Dhis2Schemas.TrackedEntityInstance,
 	metadataType: "trackedEntityInstances",
 });
 
 export const updateDhis2Enrollment = createDhis2UpdateTool({
 	name: "update_dhis2_enrollment",
-	description: "Update DHIS2 enrollments using schema-compliant properties",
+	description: "Update DHIS2 enrollments. Use this when modifying existing program enrollments, enrollment dates, statuses, or program assignment for tracked entities.",
 	schema: Dhis2Schemas.Enrollment,
 	metadataType: "enrollments",
 });
 
 export const updateDhis2Event = createDhis2UpdateTool({
 	name: "update_dhis2_event",
-	description: "Update DHIS2 events using schema-compliant properties",
+	description: "Update DHIS2 events. Use this when modifying existing events, visits, consultations, or program stage data entries in tracker programs.",
 	schema: Dhis2Schemas.Event,
 	metadataType: "events",
 });
@@ -1339,106 +1341,106 @@ export const updateDhis2Event = createDhis2UpdateTool({
 // Update Tools - Direct CRUD
 export const updateDhis2DataElement = createDhis2UpdateTool({
 	name: "update_dhis2_data_element",
-	description: "Update DHIS2 data elements using schema-compliant properties",
-	schema: Dhis2Schemas.DataElement,
+	description: "Update DHIS2 data elements that collect data values. Data elements are fields in forms that store measurable data like numbers, text, dates, or selections from option sets.",
+	schema: createUpdateSchema(Dhis2Schemas.DataElement),
 	metadataType: "dataElements",
 });
 
 export const updateDhis2OrganisationUnit = createDhis2UpdateTool({
 	name: "update_dhis2_organisation_unit",
-	description: "Update DHIS2 organisation units using schema-compliant properties",
-	schema: Dhis2Schemas.OrganisationUnit,
+	description: "Update DHIS2 organisation units for geographic/administrative hierarchy. Use this when modifying existing facilities, regions, districts, or administrative divisions in your health system.",
+	schema: createUpdateSchema(Dhis2Schemas.OrganisationUnit),
 	metadataType: "organisationUnits",
 });
 
 export const updateDhis2Category = createDhis2UpdateTool({
 	name: "update_dhis2_category",
-	description: "Update DHIS2 categories using schema-compliant properties",
-	schema: Dhis2Schemas.Category,
+	description: "Update DHIS2 categories that define disaggregation dimensions for data collection. Use this when modifying existing categories that organize data into subgroups like Age or Gender.",
+	schema: createUpdateSchema(Dhis2Schemas.Category),
 	metadataType: "categories",
 });
 
 export const updateDhis2CategoryCombo = createDhis2UpdateTool({
 	name: "update_dhis2_category_combo",
-	description: "Update DHIS2 category combinations using schema-compliant properties",
-	schema: Dhis2Schemas.CategoryCombo,
+	description: "Update DHIS2 category combinations that combine multiple categories for complex disaggregation. Use this when modifying existing category combinations like Age x Gender breakdowns.",
+	schema: createUpdateSchema(Dhis2Schemas.CategoryCombo),
 	metadataType: "categoryCombos",
 });
 
 export const updateDhis2CategoryOption = createDhis2UpdateTool({
 	name: "update_dhis2_category_option",
-	description: "Update DHIS2 category options using schema-compliant properties",
-	schema: Dhis2Schemas.CategoryOption,
+	description: "Update DHIS2 category options that represent values within disaggregation dimensions. Use this when modifying existing category options like 'Male', 'Female', '<5 years' for categories.",
+	schema: createUpdateSchema(Dhis2Schemas.CategoryOption),
 	metadataType: "categoryOptions",
 });
 
 export const updateDhis2DataSet = createDhis2UpdateTool({
 	name: "update_dhis2_data_set",
-	description: "Update DHIS2 data sets using schema-compliant properties",
-	schema: Dhis2Schemas.DataSet,
+	description: "Update DHIS2 data sets that define reporting forms and data collection templates. Use this when modifying existing reporting forms, frequencies, or indicator collections.",
+	schema: createUpdateSchema(Dhis2Schemas.DataSet),
 	metadataType: "dataSets",
 });
 
 export const updateDhis2OrganisationUnitGroup = createDhis2UpdateTool({
 	name: "update_dhis2_organisation_unit_group",
-	description: "Update DHIS2 organisation unit groups using schema-compliant properties",
-	schema: Dhis2Schemas.OrganisationUnitGroup,
+	description: "Update DHIS2 organisation unit groups that organize facilities into logical collections. Use this when modifying existing groups like 'Public Hospitals', 'Rural Clinics', 'Regional Facilities'.",
+	schema: createUpdateSchema(Dhis2Schemas.OrganisationUnitGroup),
 	metadataType: "organisationUnitGroups",
 });
 
 export const updateDhis2OrganisationUnitGroupSet = createDhis2UpdateTool({
 	name: "update_dhis2_organisation_unit_group_set",
-	description: "Update DHIS2 organisation unit group sets using schema-compliant properties",
-	schema: Dhis2Schemas.OrganisationUnitGroupSet,
+	description: "Update DHIS2 organisation unit group sets to categorize different types of facility groupings. Use this when modifying existing classification systems like 'Ownership Type' or 'Facility Tier'.",
+	schema: createUpdateSchema(Dhis2Schemas.OrganisationUnitGroupSet),
 	metadataType: "organisationUnitGroupSets",
 });
 
 export const updateDhis2Program = createDhis2UpdateTool({
 	name: "update_dhis2_program",
-	description: "Update DHIS2 programs using schema-compliant properties",
-	schema: Dhis2Schemas.Program,
+	description: "Update DHIS2 programs that define tracker or event-based data collection workflows. Use this when modifying existing programs like 'HIV Care Program', 'Tuberculosis Case Surveillance'.",
+	schema: createUpdateSchema(Dhis2Schemas.Program),
 	metadataType: "programs",
 });
 
 export const updateDhis2TrackedEntityType = createDhis2UpdateTool({
 	name: "update_dhis2_tracked_entity_type",
-	description: "Update DHIS2 tracked entity types using schema-compliant properties",
-	schema: Dhis2Schemas.TrackedEntityType,
+	description: "Update DHIS2 tracked entity types that define the entities being tracked in tracker programs. Use this when modifying existing entity definitions like 'Person', 'Patient', 'Contact Person'.",
+	schema: createUpdateSchema(Dhis2Schemas.TrackedEntityType),
 	metadataType: "trackedEntityTypes",
 });
 
 export const updateDhis2TrackedEntityAttribute = createDhis2UpdateTool({
 	name: "update_dhis2_tracked_entity_attribute",
-	description: "Update DHIS2 tracked entity attributes using schema-compliant properties",
-	schema: Dhis2Schemas.TrackedEntityAttribute,
+	description: "Update DHIS2 tracked entity attributes that define the properties/fields of tracked entities. Use this when modifying existing attributes like name, age, phone number, date of birth.",
+	schema: createUpdateSchema(Dhis2Schemas.TrackedEntityAttribute),
 	metadataType: "trackedEntityAttributes",
 });
 
 export const updateDhis2Indicator = createDhis2UpdateTool({
 	name: "update_dhis2_indicator",
-	description: "Update DHIS2 indicators using schema-compliant properties",
-	schema: Dhis2Schemas.Indicator,
+	description: "Update DHIS2 indicators that calculate performance measures and KPIs from data. Use this when modifying existing indicators like 'HIV Testing Coverage', 'Vaccination Rate', 'Treatment Success Rate'.",
+	schema: createUpdateSchema(Dhis2Schemas.Indicator),
 	metadataType: "indicators",
 });
 
 export const updateDhis2IndicatorType = createDhis2UpdateTool({
 	name: "update_dhis2_indicator_type",
-	description: "Update DHIS2 indicator types using schema-compliant properties",
-	schema: Dhis2Schemas.IndicatorType,
+	description: "Update DHIS2 indicator types that define how indicator calculations are performed. Use this when modifying existing calculation methods like 'Percentage', 'Count', 'Average', 'Ratio'.",
+	schema: createUpdateSchema(Dhis2Schemas.IndicatorType),
 	metadataType: "indicatorTypes",
 });
 
 export const updateDhis2ValidationRule = createDhis2UpdateTool({
 	name: "update_dhis2_validation_rule",
-	description: "Update DHIS2 validation rules using schema-compliant properties",
-	schema: Dhis2Schemas.ValidationRule,
+	description: "Update DHIS2 validation rules that enforce data quality and consistency checks on submitted data. Use this when modifying existing data validation logic like cross-field comparisons.",
+	schema: createUpdateSchema(Dhis2Schemas.ValidationRule),
 	metadataType: "validationRules",
 });
 
 export const updateDhis2OptionSet = createDhis2UpdateTool({
 	name: "update_dhis2_option_set",
-	description: "Update DHIS2 option sets using schema-compliant properties",
-	schema: Dhis2Schemas.OptionSet,
+	description: "Update DHIS2 option sets that define dropdown lists for data elements. Use this when modifying existing dropdown lists like 'Sex (Male/Female)', 'Vaccine Types', 'Blood Groups'.",
+	schema: createUpdateSchema(Dhis2Schemas.OptionSet),
 	metadataType: "optionSets",
 });
 

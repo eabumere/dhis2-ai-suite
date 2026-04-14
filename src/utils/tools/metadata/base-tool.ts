@@ -1,15 +1,15 @@
-import { tool, DynamicStructuredTool } from '@langchain/core/tools';
+import { DynamicStructuredTool, tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import {
-    createDhis2Metadata,
-    generateDhis2Id,
-    generateShortName,
-    resolveDependencies,
-    searchDhis2Metadata,
-    validateResourceData,
-    addResourceToContext,
-    updateDhis2Metadata,
-    deleteDhis2Metadata,
+	addResourceToContext,
+	createDhis2Metadata,
+	deleteDhis2Metadata,
+	generateDhis2Id,
+	generateShortName,
+	resolveDependencies,
+	searchDhis2Metadata,
+	updateDhis2Metadata,
+	validateResourceData,
 } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
 
@@ -17,12 +17,108 @@ import { dhis2Api } from '../../app-runtime/dhis2-api';
 // Set once by orchestrator during initialization, available to all tools
 let globalOrchestratorInstance: any = null;
 
+// Cache for humanized resource names
+const resourceNameCache = new Map<string, string>();
+
+/**
+ * Complete DHIS2 resource type mappings
+ * Contains both singular and plural forms for all known metadata types
+ */
+const resourceMappings: Record<string, { singular: string; plural: string }> = {
+    'dataElement': { singular: 'Data Element', plural: 'Data Elements' },
+    'dataElements': { singular: 'Data Element', plural: 'Data Elements' },
+    'indicator': { singular: 'Indicator', plural: 'Indicators' },
+    'indicators': { singular: 'Indicator', plural: 'Indicators' },
+    'organisationUnit': { singular: 'Organisation Unit', plural: 'Organisation Units' },
+    'organisationUnits': { singular: 'Organisation Unit', plural: 'Organisation Units' },
+    'dataSet': { singular: 'Data Set', plural: 'Data Sets' },
+    'dataSets': { singular: 'Data Set', plural: 'Data Sets' },
+    'program': { singular: 'Program', plural: 'Programs' },
+    'programs': { singular: 'Program', plural: 'Programs' },
+    'category': { singular: 'Category', plural: 'Categories' },
+    'categories': { singular: 'Category', plural: 'Categories' },
+    'categoryCombo': { singular: 'Category Combo', plural: 'Category Combos' },
+    'categoryCombos': { singular: 'Category Combo', plural: 'Category Combos' },
+    'optionSet': { singular: 'Option Set', plural: 'Option Sets' },
+    'optionSets': { singular: 'Option Set', plural: 'Option Sets' },
+    'validationRule': { singular: 'Validation Rule', plural: 'Validation Rules' },
+    'validationRules': { singular: 'Validation Rule', plural: 'Validation Rules' },
+    'visualization': { singular: 'Visualization', plural: 'Visualizations' },
+    'visualizations': { singular: 'Visualization', plural: 'Visualizations' },
+    'dashboard': { singular: 'Dashboard', plural: 'Dashboards' },
+    'dashboards': { singular: 'Dashboard', plural: 'Dashboards' },
+    'user': { singular: 'User', plural: 'Users' },
+    'users': { singular: 'User', plural: 'Users' },
+    'categoryOption': { singular: 'Category Option', plural: 'Category Options' },
+    'categoryOptions': { singular: 'Category Option', plural: 'Category Options' },
+    'organisationUnitGroup': { singular: 'Organisation Unit Group', plural: 'Organisation Unit Groups' },
+    'organisationUnitGroups': { singular: 'Organisation Unit Group', plural: 'Organisation Unit Groups' },
+    'trackedEntityType': { singular: 'Tracked Entity Type', plural: 'Tracked Entity Types' },
+    'trackedEntityTypes': { singular: 'Tracked Entity Type', plural: 'Tracked Entity Types' },
+    'option': { singular: 'Option', plural: 'Options' },
+    'options': { singular: 'Option', plural: 'Options' },
+    'userRole': { singular: 'User Role', plural: 'User Roles' },
+    'userRoles': { singular: 'User Role', plural: 'User Roles' },
+    'userGroup': { singular: 'User Group', plural: 'User Groups' },
+    'userGroups': { singular: 'User Group', plural: 'User Groups' }
+};
+
+/**
+ * Get properly humanized singular form for any resource type
+ * ✅ Automatically works for both singular and plural inputs
+ * ✅ Never uses slice(0, -1) hacks
+ * ✅ Categories → Category
+ * ✅ CategoryCombos → Category Combo
+ */
+function getSingularResourceName(resource: string): string {
+    if (resourceMappings[resource]) {
+        return resourceMappings[resource].singular;
+    }
+
+    const cacheKey = `singular:${resource}`;
+    if (resourceNameCache.has(cacheKey)) {
+        return resourceNameCache.get(cacheKey)!;
+    }
+
+    // Fallback formatting
+    const name = resource.charAt(0).toUpperCase() + resource.slice(1).replace(/([A-Z])/g, ' $1');
+    resourceNameCache.set(cacheKey, name);
+    return name;
+}
+
+/**
+ * Get properly humanized plural form for any resource type
+ * ✅ Automatically works for both singular and plural inputs
+ */
+function getPluralResourceName(resource: string): string {
+    if (resourceMappings[resource]) {
+        return resourceMappings[resource].plural;
+    }
+
+    const cacheKey = `plural:${resource}`;
+    if (resourceNameCache.has(cacheKey)) {
+        return resourceNameCache.get(cacheKey)!;
+    }
+
+    // Fallback formatting
+    const name = resource.charAt(0).toUpperCase() + resource.slice(1).replace(/([A-Z])/g, ' $1');
+    resourceNameCache.set(cacheKey, name);
+    return name;
+}
+
+/**
+ * @deprecated Use getSingularResourceName() or getPluralResourceName() instead
+ * Kept for backwards compatibility
+ */
+function humanizeResourceName(resource: string): string {
+    return getSingularResourceName(resource);
+}
+
 /**
  * Set the global orchestrator instance - called once during application initialization
  */
 export function setOrchestratorInstance(orchestrator: any) {
     globalOrchestratorInstance = orchestrator;
-    console.log('✅ Global workflow orchestrator instance registered', orchestrator);
 }
 
 /**
@@ -124,18 +220,24 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 // LLM provides structured parameters directly
                 const llmInput = resource as any;
 
-                // ✅ PRE-VALIDATION: Check for sufficient information BEFORE any processing
+                // ✅ FIRST: Run tool-specific payload transformation if provided
+                // This may resolve references, fetch dependencies, apply defaults
+                const transformedInput = config.preparePayload ?
+                    await config.preparePayload(llmInput) : {...llmInput};
+
+
+                // ✅ PRE-VALIDATION: Check for sufficient information AFTER payload transformation
                 // First get all required fields from schema
                 const requiredFields = getRequiredFieldsFromSchema(config.schema);
                 
                 // Fields that can be safely auto-generated with defaults
                 const autoGeneratableFields = ['id', 'shortName', 'code', 'displayName'];
                 
-                // Find required fields that user did NOT provide AND cannot be auto-generated
+                // Find required fields that are NOT present AFTER preparePayload AND cannot be auto-generated
                 const missingUserFields = requiredFields.filter(field => 
                     // Field is required
-                    // User did NOT provide this field
-                    llmInput[field] === undefined && 
+                    // Field IS STILL MISSING after preparePayload ran
+                    transformedInput[field] === undefined && 
                     // Field CANNOT be auto-generated
                     !autoGeneratableFields.includes(field)
                 );
@@ -195,62 +297,92 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                 // Enable by default for all tools unless explicitly disabled
                 const shouldCheckExistence = config.checkExistence !== false;
                 
-                if (shouldCheckExistence && llmInput.name) {
+                // Recursively check existence for ALL nested resources in payload
+                // This prevents 409 conflicts when dependent resources already exist
+                async function checkNestedExistence(obj: any, resourcePath: string = ''): Promise<any> {
+                    if (!obj || typeof obj !== 'object') return obj;
+                    
+                    // Handle arrays
+                    if (Array.isArray(obj)) {
+                        return await Promise.all(obj.map((item, index) => 
+                            checkNestedExistence(item, `${resourcePath}[${index}]`)
+                        ));
+                    }
+                    
+                    // Detect resources with name and id fields (potential metadata objects)
+                    if (obj.name) {
+                        // Try to detect resource type from context
+                        let resourceType: string | null = null;
+                        
+                        // Guess type from property name patterns
+                        if (resourcePath.includes('categoryOption')) resourceType = 'categoryOptions';
+                        else if (resourcePath.includes('category')) resourceType = 'categories';
+                        else if (resourcePath.includes('option')) resourceType = 'options';
+                        else if (resourcePath.includes('indicator')) resourceType = 'indicators';
+                        else if (resourcePath.includes('dataElement')) resourceType = 'dataElements';
+                        else if (resourcePath.includes('dataSet')) resourceType = 'dataSets';
+                        else if (resourcePath.includes('orgUnit')) resourceType = 'organisationUnits';
+                        else if (resourcePath.includes('program')) resourceType = 'programs';
+                        else if (resourcePath.includes('user')) resourceType = 'users';
+                        else if (resourcePath.includes('optionSet')) resourceType = 'optionSets';
+                        
+                        if (resourceType) {
+                            try {
+                                const matches = await searchDhis2Metadata(resourceType, obj.name, 10);
+                                const exact = matches.find((m: any) => m.name === obj.name);
+                                
+                                if (exact) {
+                                    console.log(`✅ Found existing nested resource ${resourcePath}: "${obj.name}" (${exact.id}) - using existing ID`);
+                                    // Keep all original fields, only replace ID with existing one
+                                    return {
+                                        ...obj,
+                                        id: exact.id
+                                    };
+                                }
+                            } catch (e) {
+                                console.warn(`⚠️ Failed to check existence for ${resourcePath}:`, e);
+                            }
+                        }
+                    }
+                    
+                    // Recursively check all properties
+                    const result: any = {};
+                    for (const [key, value] of Object.entries(obj)) {
+                        result[key] = await checkNestedExistence(value, `${resourcePath}.${key}`);
+                    }
+                    return result;
+                }
+                
+                // Run nested existence check before proceeding
+                if (shouldCheckExistence) {
+                    console.log(`🔍 Checking existence for all nested resources in payload...`);
+                    const resolvedPayload = await checkNestedExistence(transformedInput, config.metadataType);
+                    
+                    // Replace transformed input with resolved payload where existing IDs were found
+                    Object.assign(transformedInput, resolvedPayload);
+                    console.log(`✅ Nested existence check complete`);
+                }
+                
+                // Check existence for main resource after resolving nested ones
+                if (shouldCheckExistence && transformedInput.name) {
                     const searchLimit = config.searchLimit || 20;
-                    const searchResults = await searchDhis2Metadata(config.metadataType, llmInput.name, searchLimit);
+                    const searchResults = await searchDhis2Metadata(config.metadataType, transformedInput.name, searchLimit);
 
                     if (searchResults.length > 0) {
-                        console.log(`⚠️ Found ${searchResults.length} existing ${config.metadataType} matching "${llmInput.name}"`);
+                        console.log(`⚠️ Found ${searchResults.length} existing ${config.metadataType} matching "${transformedInput.name}"`);
                         
                         const orchestrator = getOrchestratorInstance();
                         
                         if (orchestrator && orchestrator.requestSelection) {
                             // Show verification dialog with all matches
                             // ✅ Build properly humanized strings directly (NO regex hacks needed)
-                            const humanizeResourceName = (resource: string): string => {
-                                const mappings: Record<string, string> = {
-                                    'dataElement': 'Data Element',
-                                    'dataElements': 'Data Elements',
-                                    'indicator': 'Indicator',
-                                    'indicators': 'Indicators',
-                                    'organisationUnit': 'Organisation Unit',
-                                    'organisationUnits': 'Organisation Units',
-                                    'dataSet': 'Data Set',
-                                    'dataSets': 'Data Sets',
-                                    'program': 'Program',
-                                    'programs': 'Programs',
-                                    'category': 'Category',
-                                    'categories': 'Categories',
-                                    'categoryCombo': 'Category Combo',
-                                    'categoryCombos': 'Category Combos',
-                                    'optionSet': 'Option Set',
-                                    'optionSets': 'Option Sets',
-                                    'validationRule': 'Validation Rule',
-                                    'validationRules': 'Validation Rules',
-                                    'visualization': 'Visualization',
-                                    'visualizations': 'Visualizations',
-                                    'dashboard': 'Dashboard',
-                                    'dashboards': 'Dashboards',
-                                    'user': 'User',
-                                    'users': 'Users',
-                                    'categoryOption': 'Category Option',
-                                    'categoryOptions': 'Category Options',
-                                    'organisationUnitGroup': 'Organisation Unit Group',
-                                    'organisationUnitGroups': 'Organisation Unit Groups',
-                                    'trackedEntityType': 'Tracked Entity Type',
-                                    'trackedEntityTypes': 'Tracked Entity Types'
-                                };
-                                
-                                return mappings[resource] || resource.charAt(0).toUpperCase() + resource.slice(1).replace(/([A-Z])/g, ' $1');
-                            };
 
-                            const singular = config.metadataType.slice(0, -1);
-                            const humanizedSingular = humanizeResourceName(singular);
-                            const humanizedPlural = humanizeResourceName(config.metadataType);
+                            const humanizedSingular = getSingularResourceName(config.metadataType);
+                            const humanizedPlural = getPluralResourceName(config.metadataType);
 
                             const selections = await orchestrator.requestSelection({
                                 title: `Existing ${humanizedSingular} found`,
-                                description: `${searchResults.length} existing ${humanizedPlural} match "${llmInput.name}". Select one to use it, or create new:`,
+                                description: `${searchResults.length} existing ${humanizedPlural} match "${transformedInput.name}". Select one to use it, or create new:`,
                                 items: searchResults.map(r => ({
                                     id: r.id,
                                     name: r.name,
@@ -260,8 +392,8 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                                 allowCreateNew: true,
                                 createNewLabel: "Create New Anyway",
                                 confirmButtonText: "Use Existing",
-                                parentResource: singular,
-                                parentName: llmInput.name
+                                parentResource: humanizedSingular,
+                                parentName: transformedInput.name
                             });
 
 							const selection = selections.length && selections[0]
@@ -288,10 +420,6 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
                         }
                     }
                 }
-
-                // 1. Run tool-specific payload transformation if provided
-                const transformedInput = config.preparePayload ?
-                    await config.preparePayload(llmInput) : llmInput;
 
                 // 1.5. Check if resource already exists (set by preparePayload)
                 if ((transformedInput as any)._exists) {
@@ -487,11 +615,13 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
         async ({
             id,
             resource,
+            originalIdentifier,
             customId,
             dependencies = []
         }: {
             id?: string;
             resource?: Record<string, any>;
+            originalIdentifier?: string | { name?: string; code?: string };
             customId?: string;
             dependencies?: Array<{
                 type: string;
@@ -501,32 +631,319 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
             }>;
         }) => {
             try {
-                if (!id && !resource?.id) {
-                    throw new Error('Must provide either id parameter or include id in resource object');
-                }
-
-                const resourceId = id || resource!.id;
+				console.log('Updating resource:', resource);
+                let resourceId = id || resource?.id;
                 let updatedResource: Record<string, any> = resource || {};
 
-                // Handle partial updates - merge with existing resource
-                if (resource && Object.keys(resource).length > 0) {
-                    try {
-                        const existingResult = await dhis2Api.query({
-                            resource: config.metadataType,
-                            id: resourceId,
-                            type: 'read'
+                // ✅ FIRST: AUTOMATICALLY RESOLVE ROOT RESOURCE BY ORIGINAL IDENTIFIER
+                // Always use originalIdentifier first - this is the name the user referred to in their query
+                // This preserves the original reference even when renaming the resource
+                const searchName = typeof originalIdentifier === 'string' 
+                    ? originalIdentifier 
+                    : originalIdentifier?.name || updatedResource.name;
+
+                // ✅ FIRST: AUTOMATICALLY RESOLVE ROOT RESOURCE BY NAME IF NO ID PROVIDED
+                // If only name is provided, search and let user select the correct resource
+                if (!resourceId && searchName) {
+                    console.log(`🔍 No ID provided, searching for ${config.metadataType} with name: ${searchName}`);
+                    
+                    const searchResults = await searchDhis2Metadata(config.metadataType, searchName, 20);
+                    
+                    if (searchResults.length === 0) {
+                        return JSON.stringify({
+                            success: false,
+                            error: "Resource not found",
+                            message: `Could not find any ${config.metadataType} matching "${searchName}". Please verify the name or provide an ID.`
+                        });
+                    }
+                    
+                    const orchestrator = getOrchestratorInstance();
+                    
+                    if (orchestrator && orchestrator.requestSelection) {
+                        const selections = await orchestrator.requestSelection({
+                            title: `Select ${getSingularResourceName(config.metadataType)} to update`,
+                            description: `Found ${searchResults.length} ${getPluralResourceName(config.metadataType)} matching "${searchName}". Select which one you want to update:`,
+                            items: searchResults.map(r => ({
+                                id: r.id,
+                                name: r.name,
+                                code: r.code || '',
+                                displayName: r.displayName
+                            })),
+                            confirmButtonText: "Update this resource"
                         });
 
-                        if (existingResult.success) {
-                            const existingData = existingResult.data;
-                            // Merge existing data with updates
-                            updatedResource = {
-                                ...existingData,
-                                ...resource,
-                                id: resourceId
-                            };
+                        const selection = selections.length && selections[0];
+                        
+                        if (selection && selection.id) {
+                            resourceId = selection.id;
+                            console.log(`✅ User selected resource to update: ${selection.name} (${resourceId})`);
+                        } else {
+                            return JSON.stringify({
+                                success: false,
+                                error: "No resource selected",
+                                message: "No resource was selected for update. Operation cancelled."
+                            });
+                        }
+                    } else {
+                        // No UI available - use first match
+                        resourceId = searchResults[0].id;
+                        console.log(`⚠️ No selection UI available, using first match: ${searchResults[0].name} (${resourceId})`);
+                    }
+                }
+
+                if (!resourceId) {
+                    throw new Error('Must provide either id parameter, include id in resource object, or provide a valid resource name that can be resolved');
+                }
+
+                // ✅ NAME → ID RESOLUTION FOR UPDATE PAYLOAD
+                // ✅ SCHEMA-INDEPENDENT IMPLEMENTATION!
+                // ✅ Works automatically for ALL nested objects and arrays
+                async function resolveNamesToIds(obj: any, path: string = ''): Promise<any> {
+                    if (!obj || typeof obj !== 'object') return obj;
+
+                    // Handle arrays
+                    if (Array.isArray(obj)) {
+                        return Promise.all(obj.map((item, index) =>
+                            resolveNamesToIds(item, `${path}[${index}]`)
+                        ));
+                    }
+
+                    // ✅ FIRST PROCESS ALL CHILDREN RECURSIVELY!
+                    // Always process nested properties first, no matter what
+                    const result: any = {};
+                    for (const [key, value] of Object.entries(obj)) {
+                        result[key] = await resolveNamesToIds(value, `${path}.${key}`);
+                    }
+
+                    // ✅ NOW resolve current object after children are processed
+                    if (result.name && !result.id) {
+                        // Complete DHIS2 resource type mapping
+                        // ✅ BOTH singular AND plural patterns match the correct plural resource type
+                        const fieldToResourceMap: Record<string, string> = {
+                            // Data Elements
+                            'dataelement': 'dataElements',
+                            'dataelements': 'dataElements',
+                            // Organisation Units
+                            'organisationunit': 'organisationUnits',
+                            'organisationunits': 'organisationUnits',
+                            // Categories
+                            'category': 'categories',
+                            'categories': 'categories',
+                            // Category Combos
+                            'categorycombo': 'categoryCombos',
+                            'categorycombos': 'categoryCombos',
+                            // Category Options
+                            'categoryoption': 'categoryOptions',
+                            'categoryoptions': 'categoryOptions',
+                            // Data Sets
+                            'dataset': 'dataSets',
+                            'datasets': 'dataSets',
+                            // Indicators
+                            'indicator': 'indicators',
+                            'indicators': 'indicators',
+                            // Option Sets
+                            'optionset': 'optionSets',
+                            'optionsets': 'optionSets',
+                            // Validation Rules
+                            'validationrule': 'validationRules',
+                            'validationrules': 'validationRules',
+                            // Visualizations
+                            'visualization': 'visualizations',
+                            'visualizations': 'visualizations',
+                            // Dashboards
+                            'dashboard': 'dashboards',
+                            'dashboards': 'dashboards',
+                            'dashboarditem': 'dashboardItems',
+                            'dashboarditems': 'dashboardItems',
+                            // Users
+                            'user': 'users',
+                            'users': 'users',
+                            // User Roles
+                            'userrole': 'userRoles',
+                            'userroles': 'userRoles',
+                            // User Groups
+                            'usergroup': 'userGroups',
+                            'usergroups': 'userGroups',
+                            // Programs
+                            'program': 'programs',
+                            'programs': 'programs',
+                            // Program Stages
+                            'programstage': 'programStages',
+                            'programstages': 'programStages',
+                            // Program Rules
+                            'programrule': 'programRules',
+                            'programrules': 'programRules',
+                            // Program Indicators
+                            'programindicator': 'programIndicators',
+                            'programindicators': 'programIndicators',
+                            // Tracked Entity Types
+                            'trackedentitytype': 'trackedEntityTypes',
+                            'trackedentitytypes': 'trackedEntityTypes',
+                            // Tracked Entity Attributes
+                            'trackedentityattribute': 'trackedEntityAttributes',
+                            'trackedentityattributes': 'trackedEntityAttributes',
+                            // Options
+                            'option': 'options',
+                            'options': 'options',
+                            // Reporting Forms
+                            'reportingform': 'reportingForms',
+                            'reportingforms': 'reportingForms',
+                            // Organisation Unit Groups
+                            'organisationunitgroup': 'organisationUnitGroups',
+                            'organisationunitgroups': 'organisationUnitGroups',
+                            // Organisation Unit Group Sets
+                            'organisationunitgroupset': 'organisationUnitGroupSets',
+                            'organisationunitgroupsets': 'organisationUnitGroupSets',
+                            // Indicator Types
+                            'indicatortype': 'indicatorTypes',
+                            'indicatortypes': 'indicatorTypes',
+                            // Relationship Types
+                            'relationshiptype': 'relationshipTypes',
+                            'relationshiptypes': 'relationshipTypes',
+                        };
+
+                        // Match path against resource mapping
+                        const lowerPath = path.toLowerCase();
+                        let resourceType: string | null = null;
+
+                        for (const [pattern, type] of Object.entries(fieldToResourceMap)) {
+                            if (lowerPath.includes(pattern)) {
+                                resourceType = type;
+                                break;
+                            }
+                        }
+
+                        if (resourceType) {
+                            console.log(`🔍 Resolving ${resourceType} "${result.name}" from name to ID at ${path}`);
+
+                            const matches = await searchDhis2Metadata(resourceType, result.name, 10);
+
+                            if (matches.length === 1) {
+                                // Exactly one match - use automatically
+                                console.log(`✅ Auto-resolved ${resourceType} "${result.name}" to ID: ${matches[0].id}`);
+                                return { id: matches[0].id };
+                            } else if (matches.length > 1) {
+                                // Multiple matches - show selection dialog
+                                const orchestrator = getOrchestratorInstance();
+                                if (orchestrator && orchestrator.requestSelection) {
+                                    const selections = await orchestrator.requestSelection({
+                                        title: `Select ${getSingularResourceName(resourceType as string)}`,
+                                        description: `Multiple ${getPluralResourceName(resourceType as string)} found matching "${result.name}". Select one:`,
+                                        items: matches.map(r => ({
+                                            id: r.id,
+                                            name: r.name,
+                                            code: r.code || '',
+                                            displayName: r.displayName
+                                        })),
+                                        allowCreateNew: true,
+                                        createNewLabel: "Create New",
+                                        confirmButtonText: "Select"
+                                    });
+
+                                    const selection = selections.length && selections[0];
+                                    if (selection && selection.id !== '__create_new__') {
+                                        console.log(`✅ User selected ${resourceType}: ${selection.name} (${selection.id})`);
+                                        // ✅ USE SELECTED ID! No extra fields, do not create new resource
+                                        return { id: selection.id };
+                                    } else {
+                                        // User chose to create new
+                                        console.log(`✅ Creating new ${resourceType} "${result.name}"`);
+                                        const newId = await generateDhis2Id();
+                                        return { id: newId };
+                                    }
+                                } else {
+                                    // No UI, use first match
+                                    return { id: matches[0].id };
+                                }
+                            } else {
+                                // No matches - create new object with generated ID
+                                console.log(`✅ No matches for ${resourceType} "${result.name}", creating new with ID`);
+                                const newId = await generateDhis2Id();
+                                return { id: newId };
+                            }
+                        }
+                    }
+
+                    return result;
+                }
+
+                console.log(`🔍 Resolving names to IDs in update payload...`);
+	            // ✅ ONLY resolve NESTED properties, NEVER resolve the ROOT OBJECT itself
+	            // Skip processing the root object, start directly with its properties
+	            const resolvedResult: any = {};
+                for (const [key, value] of Object.entries(updatedResource)) {
+                    resolvedResult[key] = await resolveNamesToIds(value, `${config.metadataType}.${key}`);
+                }
+                updatedResource = resolvedResult;
+                console.log(`✅ Name → ID resolution complete`);
+
+                // ✅ SMART MERGING WITH EXISTING RESOURCE
+                // Fetch full existing object first, then merge intelligently
+                if (resource && Object.keys(resource).length > 0) {
+                    try {
+                        console.log(`🔍 Fetching existing ${config.metadataType} ${resourceId} for smart merge`);
+                        const existingResult = await dhis2Api.query({
+                            existing: {
+                                resource: `${config.metadataType}/${resourceId}`,
+                                params: {
+                                    fields: '*' // Fetch ALL fields
+                                }
+                            }
+                        });
+
+                        if (existingResult.success && existingResult.data?.existing) {
+                            const existingData = existingResult.data.existing;
+                            console.log(`✅ Fetched existing resource, performing smart merge`);
+                            
+                            // ✅ SCHEMA INDEPENDENT SMART MERGE
+                            async function smartMerge(existing: any, updates: any, path: string = ''): Promise<any> {
+                                if (!updates || typeof updates !== 'object') {
+                                    return updates;
+                                }
+                                
+                                if (Array.isArray(updates)) {
+                                    return updates;
+                                }
+                                
+                                const result: any = { ...existing };
+                                
+                                // Merge each field by inspecting values directly
+                                for (const [key, updateValue] of Object.entries(updates)) {
+                                    if (Array.isArray(updateValue)) {
+                                        // ✅ ARRAY FIELD: APPEND instead of replace
+                                        console.log(`✅ Appending to array field ${path}.${key}`);
+                                        
+                                        const existingArray = existing[key] || [];
+                                        
+                                        // Append new items to existing array
+                                        result[key] = [...existingArray, ...updateValue];
+                                        
+                                        // Remove duplicates if they have id
+                                        result[key] = result[key].filter((item: any, index: number, self: any[]) =>
+                                            index === self.findIndex((i: any) => i.id === item.id)
+                                        );
+                                    } else if (updateValue && typeof updateValue === 'object' && (updateValue as any).id) {
+                                        // ✅ NESTED OBJECT REFERENCE: Replace directly
+                                        console.log(`✅ Replacing reference object field ${path}.${key}`);
+                                        result[key] = updateValue;
+                                    } else {
+                                        // ✅ PRIMITIVE FIELD: Replace value
+                                        console.log(`✅ Replacing primitive field ${path}.${key}`);
+                                        result[key] = updateValue;
+                                    }
+                                }
+                                
+                                return result;
+                            }
+                            
+                            // Perform smart merge
+                            updatedResource = await smartMerge(existingData, updatedResource, config.metadataType);
+                            updatedResource.id = resourceId;
+                            
+                            console.log(`✅ Smart merge completed successfully`);
                         } else {
                             // If can't fetch existing, use provided data
+                            console.warn(`⚠️ Could not fetch existing resource, falling back to simple update`);
                             updatedResource = {
                                 ...resource,
                                 id: resourceId
@@ -534,6 +951,7 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                         }
                     } catch (fetchError) {
                         // Fallback to provided data only
+                        console.error(`❌ Error fetching existing resource:`, fetchError);
                         updatedResource = {
                             ...resource,
                             id: resourceId
@@ -544,10 +962,7 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                 // Generate derived fields if not provided
                 const finalData = {
                     ...updatedResource,
-                    id: resourceId,
-                    name: updatedResource.name || `Unnamed ${config.metadataType}`,
-                    displayName: updatedResource.displayName || updatedResource.name || `Unnamed ${config.metadataType}`,
-                    shortName: updatedResource.shortName || generateShortName(updatedResource.name || `Unnamed ${config.metadataType}`),
+                    id: resourceId
                 };
 
                 // Combine default and custom dependencies
@@ -568,26 +983,22 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
                     ...resolvedDeps,
                 };
 
-                // Validate against schema
-                const validation = validateResourceData(config.schema, finalResourceData);
-                if (!validation.success) {
-                    return JSON.stringify({
-                        success: false,
-                        error: `Validation failed: ${(validation as any).errors?.join(', ') || 'Unknown validation error'}`,
-                        resource: finalResourceData
-                    });
-                }
+                const cleanedResourceData = { ...finalResourceData };
+                delete (cleanedResourceData as any)['createdBy'];
+                delete (cleanedResourceData as any)['lastUpdatedBy'];
+                delete (cleanedResourceData as any)['user'];
+	            delete (cleanedResourceData as any)['href'];
+				delete (cleanedResourceData as any)['categoryOptionCombos'];
 
-                // Update in DHIS2
                 const updateResult = await updateDhis2Metadata(
                     config.metadataType,
-                    [validation.data]
+                    [cleanedResourceData]
                 );
 
                 return JSON.stringify({
                     success: true,
                     message: `${config.metadataType} updated successfully`,
-                    data: validation.data,
+                    data: finalResourceData,
                     resource: finalData,
                     apiResponse: updateResult
                 });
@@ -604,9 +1015,12 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
         },
         {
             name: `update_dhis2_${config.metadataType.toLowerCase()}`,
-            description: `Update an existing DHIS2 ${config.description.split(' ')[0]} resource using schema-compliant data`,
+            description: `Update an existing DHIS2 ${config.metadataType.slice(0, -1)} resource. Use this tool when specifically modifying a ${config.metadataType.slice(0, -1)}.`,
             schema: z.object({
                 id: z.string().optional().describe("The ID of the resource to update"),
+                originalIdentifier: z.union([z.string(), z.object({ name: z.string().optional(), code: z.string().optional() })]).optional().describe(
+                    "Original name/identifier the user referred to in their query. Use this when renaming resources - this preserves the original reference for lookup"
+                ),
                 resource: config.schema.describe(
                     "Schema-compliant resource object with updated properties"
                 ),

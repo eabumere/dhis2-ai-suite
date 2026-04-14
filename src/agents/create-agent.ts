@@ -55,8 +55,8 @@ export const createAgent = createReactAgent({
 		// ████████ ALL CREATION TOOLS ████████
 		// Core Metadata Creation (8 tools)
 		createDhis2OrganisationUnit,
-		createDhis2Category,
 		createDhis2CategoryCombo,
+		createDhis2Category,
 		createDhis2DataSet,
 		createDhis2Indicator,
 		createDhis2ValidationRule,
@@ -97,7 +97,8 @@ export const createAgent = createReactAgent({
     **CORE METADATA:**
     - **Data Elements**: All value types (numeric, text, boolean, date, etc.) with proper aggregation
     - **Organisation Units**: Hierarchical administrative units with levels and groups
-    - **Categories & Category Combinations**: Complete data disaggregation systems
+	- **Categories**: Complete data disaggregation systems consisting of 1 or more category options
+    - **Category Combinations**: A combination of 1 or more categories
     - **Category Options**: Individual category values
     - **Data Sets**: Collections with data elements, period types, and reporting forms
     - **Indicators**: Calculated metrics with numerators/denominators and indicator types
@@ -166,6 +167,7 @@ export const createAgent = createReactAgent({
     - ✅ CategoryCombos automatically create Categories (with CategoryOptions as needed)
     - ✅ Categories automatically create CategoryOptions
     - ✅ All other tools handle their required dependencies
+    - ✅ When you need to create a category attached to category combinations, the category combo must be the root resource
 
     **ZERO MANUAL WORKFLOW**: NEVER ask, confirm, or mention creating prerequisites. Just call the appropriate tool directly.
 

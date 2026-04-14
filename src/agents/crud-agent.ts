@@ -43,9 +43,9 @@ Analyze this DHIS2 CRUD request and classify it as CREATE, UPDATE, or DELETE ope
 IMPORTANT: This system supports MULTIPLE LANGUAGES. Users may query in English, French, Spanish, Arabic, Portuguese, or any other language. Focus on INTENT and MEANING, not specific keywords.
 
 CLASSIFICATION RULES (Language-Agnostic):
-- CREATE: Actions that ADD NEW resources, entities, or metadata to the system
-- UPDATE: Actions that MODIFY, CHANGE, or ALTER existing resources
-- DELETE: Actions that REMOVE, DESTROY, or ELIMINATE existing resources
+- CREATE: Actions that CREATE NEW resources, entities, or metadata to the system
+- UPDATE: Actions that UPDATE, MODIFY, CHANGE, ADD TO, REMOVE FROM, or ALTER existing resources
+- DELETE: Actions that DELETE, DESTROY, or ELIMINATE existing resources from the system
 
 SEMANTIC INDICATORS:
 - CREATE: Adding something new, establishing, setting up, building, making
@@ -251,14 +251,8 @@ export function createCrudAgent() {
 			const result = await crudStateGraph.invoke(initialState);
 
 			// Format for compatibility with existing interface
-			return {
-				messages: [{
-					content: JSON.stringify(result.finalResult),
-					name: undefined,
-					additional_kwargs: {},
-					response_metadata: {}
-				}]
-			};
+			// Return plain object directly without extra messages array wrapping
+			return result.finalResult;
 		}
 	};
 }

@@ -3,6 +3,7 @@ import { startNewSession } from './conversation-context';
 import { llmClassificationService } from './llm-classification-service';
 import { indexedDBStorage, FileData } from './indexeddb-storage';
 import { setOrchestratorInstance } from "./tools/metadata";
+import { updateAgent } from "../agents/update-agent";
 
 export interface SelectionOptions {
     id: string;
@@ -679,44 +680,6 @@ class WorkflowOrchestrator {
                 return;
             }
 
-        // Resource name humanization mappings
-        const humanizeResourceName = (resource: string): string => {
-            const mappings: Record<string, string> = {
-                'dataElement': 'Data Element',
-                'dataElements': 'Data Elements',
-                'indicator': 'Indicator',
-                'indicators': 'Indicators',
-                'organisationUnit': 'Organisation Unit',
-                'organisationUnits': 'Organisation Units',
-                'dataSet': 'Data Set',
-                'dataSets': 'Data Sets',
-                'program': 'Program',
-                'programs': 'Programs',
-                'category': 'Category',
-                'categories': 'Categories',
-                'categoryCombo': 'Category Combo',
-                'categoryCombos': 'Category Combos',
-                'optionSet': 'Option Set',
-                'optionSets': 'Option Sets',
-                'validationRule': 'Validation Rule',
-                'validationRules': 'Validation Rules',
-                'visualization': 'Visualization',
-                'visualizations': 'Visualizations',
-                'dashboard': 'Dashboard',
-                'dashboards': 'Dashboards',
-                'user': 'User',
-                'users': 'Users',
-                'categoryOption': 'Category Option',
-                'categoryOptions': 'Category Options',
-                'organisationUnitGroup': 'Organisation Unit Group',
-                'organisationUnitGroups': 'Organisation Unit Groups',
-                'trackedEntityType': 'Tracked Entity Type',
-                'trackedEntityTypes': 'Tracked Entity Types'
-            };
-            
-            return mappings[resource] || resource.charAt(0).toUpperCase() + resource.slice(1).replace(/([A-Z])/g, ' $1');
-        };
-
         // ✅ Now actually use ALL the fields that are already being passed
         let {
             title,
@@ -731,10 +694,6 @@ class WorkflowOrchestrator {
             workflowId,
             context
         } = selectionRequest;
-
-        // ✅ Strings are now built correctly humanized in base-tool.ts
-        // ✅ NO regex hacks or post processing needed anymore
-        // ✅ Removed all failed regex attempts completely
 
             // Add selection prompt to conversation
             this.addAssistantMessage(description, 'selection', {
@@ -840,9 +799,8 @@ class WorkflowOrchestrator {
                 };
             case 'update':
                 return async (input: any) => {
-                    const { createUpdateGraphAgent } = await import('../agents/update-agent');
-                    const updateAgent = createUpdateGraphAgent(this);
-                    return updateAgent.invoke(input);
+                    const { updateAgent } = await import('../agents/update-agent');
+                    return updateAgent.invoke(input.input);
                 };
             case 'data_entry':
                 return async (input: any) => {

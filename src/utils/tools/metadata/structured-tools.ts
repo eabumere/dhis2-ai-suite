@@ -15,6 +15,7 @@ import {
 	generateDhis2Id,
 	searchDhis2Metadata, transformExternalResults
 } from './helpers';
+import { resolveNameToId } from './name-resolution';
 import {
     createDhis2GetByIdTool,
     createDhis2SearchTool,
@@ -1921,6 +1922,10 @@ async function createDhis2ReportingFormAggregated({
 		const existingDataElement = await checkResourceExists('dataElements', dataElementName);
 		console.log(`Data Element "${dataElementName}": ${existingDataElement.exists ? 'EXISTS' : 'DOES NOT EXIST'}${existingDataElement.exists ? ` (ID: ${existingDataElement.id})` : ''}`);
 
+		// ✅ Check if categoryCombo already exists for this category
+		const existingCategoryCombo = await checkResourceExists('categoryCombos', `${categoryName} Combo`);
+		console.log(`Category Combo "${categoryName} Combo": ${existingCategoryCombo.exists ? 'EXISTS' : 'DOES NOT EXIST'}${existingCategoryCombo.exists ? ` (ID: ${existingCategoryCombo.id})` : ''}`);
+
 		// Generate IDs only for resources that don't exist
 		const categoryOptionIds = existingCategory.exists ? [] : await Promise.all(
 			categoryOptions.map(async (_, index) => ({
@@ -1930,7 +1935,7 @@ async function createDhis2ReportingFormAggregated({
 		);
 
 		const categoryId = existingCategory.exists ? existingCategory.id! : await generateDhis2Id();
-		const categoryComboId = await generateDhis2Id(); // Category combo is always created new
+		const categoryComboId = existingCategoryCombo.exists ? existingCategoryCombo.id! : await generateDhis2Id();
 		const dataElementId = existingDataElement.exists ? existingDataElement.id! : await generateDhis2Id();
 		const dataSetId = await generateDhis2Id();
 
@@ -1962,15 +1967,17 @@ async function createDhis2ReportingFormAggregated({
 			}];
 		}
 
-		// Always include category combo (new resource)
-		aggregatedPayload.categoryCombos = [{
-			id: categoryComboId,
-			name: `${categoryName} Combo`,
-			displayName: `${categoryName} Combo`,
-			shortName: `${categoryName} Combo`.substring(0, 50),
-			dataDimensionType: 'DISAGGREGATION',
-			categories: [{id: categoryId}],
-		}];
+		// Only include category combo if it doesn't exist already
+		if (!existingCategoryCombo.exists) {
+			aggregatedPayload.categoryCombos = [{
+				id: categoryComboId,
+				name: `${categoryName} Combo`,
+				displayName: `${categoryName} Combo`,
+				shortName: `${categoryName} Combo`.substring(0, 50),
+				dataDimensionType: 'DISAGGREGATION',
+				categories: [{id: categoryId}],
+			}];
+		}
 
 		// Only include data element if it doesn't exist
 		if (!existingDataElement.exists) {

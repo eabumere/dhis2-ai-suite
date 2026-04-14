@@ -155,8 +155,8 @@ export const DataSetSchema = z.object({
     'FinancialApril', 'FinancialJuly', 'FinancialOct'
   ]),
   categoryCombo: z.object({ id: z.string() }).optional(),
-  dataSetElements: z.array(DataSetElementSchema),
-  organisationUnits: z.array(z.object({ id: z.string() })),
+  dataSetElements: z.array(DataSetElementSchema).optional(),
+  organisationUnits: z.array(z.object({ id: z.string() })).optional(),
   sections: z.array(SectionSchema).optional(),
   compulsoryDataElementOperands: z.array(DataElementOperandSchema).optional(),
   expiryDays: z.number().int().min(1).optional(),

@@ -11,6 +11,7 @@ import {
 	updateDhis2Metadata,
 	validateResourceData,
 } from './helpers';
+import { resolveNameToId } from './name-resolution';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
 
 // Global Workflow Orchestrator Singleton
@@ -70,7 +71,7 @@ const resourceMappings: Record<string, { singular: string; plural: string }> = {
  * ✅ Categories → Category
  * ✅ CategoryCombos → Category Combo
  */
-function getSingularResourceName(resource: string): string {
+export function getSingularResourceName(resource: string): string {
 	if (resourceMappings[resource]) {
 		return resourceMappings[resource].singular;
 	}
@@ -90,7 +91,7 @@ function getSingularResourceName(resource: string): string {
  * Get properly humanized plural form for any resource type
  * ✅ Automatically works for both singular and plural inputs
  */
-function getPluralResourceName(resource: string): string {
+export function getPluralResourceName(resource: string): string {
 	if (resourceMappings[resource]) {
 		return resourceMappings[resource].plural;
 	}
@@ -333,17 +334,18 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
 						if (resourceType) {
 							try {
-								const matches = await searchDhis2Metadata(resourceType, obj.name, 10);
-								const exact = matches.find((m: any) => m.name === obj.name);
-
-								if (exact) {
-									console.log(`✅ Found existing nested resource ${resourcePath}: "${obj.name}" (${exact.id}) - using existing ID`);
-									// Keep all original fields, only replace ID with existing one
-									return {
-										...obj,
-										id: exact.id
-									};
-								}
+								const resolution = await resolveNameToId(resourceType, obj.name, {
+									allowCreateNew: true,
+									createNewLabel: "Create New Anyway"
+								});
+								
+								console.log(`✅ Resolved nested resource ${resourcePath}: "${obj.name}" to ID: ${resolution.id}`);
+								
+								// Keep all original fields, only replace ID with resolved one
+								return {
+									...obj,
+									id: resolution.id
+								};
 							} catch (e) {
 								console.warn(`⚠️ Failed to check existence for ${resourcePath}:`, e);
 							}
@@ -537,16 +539,17 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 
 
 				// 6. Return success response
-				return JSON.stringify({
-					success: true,
-					message: `Successfully created ${config.metadataType.slice(0, -1)}: ${validation.data.name}`,
-					id: validation.data.id,
-					name: validation.data.name,
-					code: validation.data.code,
-					sortOrder: validation.data.sortOrder,
-					llm_input: llmInput,
-					dhis2_object: validation.data
-				});
+                return JSON.stringify({
+                    success: true,
+                    message: `Successfully created ${config.metadataType.slice(0, -1)}: ${validation.data.name}`,
+                    id: validation.data.id,
+                    name: validation.data.name,
+                    code: validation.data.code,
+                    sortOrder: validation.data.sortOrder,
+                    llm_input: llmInput,
+                    dhis2_object: validation.data,
+                    messages: []
+                });
 
 			} catch (error) {
 				console.error(`Error in ${config.name}:`, error);
@@ -830,50 +833,56 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 
 							const matches = await searchDhis2Metadata(resourceType, result.name, 10);
 
-							if (matches.length === 1) {
-								// Exactly one match - use automatically
-								console.log(`✅ Auto-resolved ${resourceType} "${result.name}" to ID: ${matches[0].id}`);
-								return {id: matches[0].id};
-							} else if (matches.length > 1) {
-								// Multiple matches - show selection dialog
-								const orchestrator = getOrchestratorInstance();
-								if (orchestrator && orchestrator.requestSelection) {
-									const selections = await orchestrator.requestSelection({
-										title: `Select ${getSingularResourceName(resourceType as string)}`,
-										description: `Multiple ${getPluralResourceName(resourceType as string)} found matching "${result.name}". Select one:`,
-										items: matches.map(r => ({
-											id: r.id,
-											name: r.name,
-											code: r.code || '',
-											displayName: r.displayName
-										})),
-										allowCreateNew: true,
-										createNewLabel: "Create New",
-										confirmButtonText: "Select",
-										selectionMode: 'single'
-									});
+                            if (matches.length === 1) {
+                                // Exactly one match - verify it's an exact name match first
+                                const exactMatch = matches.find((m: any) => m.name.toLowerCase().trim() === result.name.toLowerCase().trim());
+                                
+                                if (exactMatch) {
+                                    console.log(`✅ Auto-resolved ${resourceType} "${result.name}" to ID: ${exactMatch.id}`);
+                                    return { id: exactMatch.id };
+                                }
+                                
+                                // No exact match even though there is 1 result - show selection anyway
+                                console.log(`⚠ Found 1 ${resourceType} but name doesn't exactly match "${result.name}" - showing selection dialog`);
+                            }
+                            
+                            // Multiple matches OR no exact match - show selection dialog ALWAYS
+                            const orchestrator = getOrchestratorInstance();
+                            if (orchestrator && orchestrator.requestSelection) {
+                                const selections = await orchestrator.requestSelection({
+                                    title: `Select ${getSingularResourceName(resourceType as string)}`,
+                                    description: `${matches.length} ${getPluralResourceName(resourceType as string)} found matching "${result.name}". Select which one you want to use:`,
+                                    items: matches.map(r => ({
+                                        id: r.id,
+                                        name: r.name,
+                                        code: r.code || '',
+                                        displayName: r.displayName
+                                    })),
+                                    allowCreateNew: true,
+                                    createNewLabel: "Create New",
+                                    confirmButtonText: "Select",
+                                    selectionMode: 'single'
+                                });
 
-									const selection = selections.length && selections[0];
-									if (selection && selection.id !== '__create_new__') {
-										console.log(`✅ User selected ${resourceType}: ${selection.name} (${selection.id})`);
-										// ✅ USE SELECTED ID! No extra fields, do not create new resource
-										return {id: selection.id};
-									} else {
-										// User chose to create new
-										console.log(`✅ Creating new ${resourceType} "${result.name}"`);
-										const newId = await generateDhis2Id();
-										return {id: newId};
-									}
-								} else {
-									// No UI, use first match
-									return {id: matches[0].id};
-								}
-							} else {
-								// No matches - create new object with generated ID
-								console.log(`✅ No matches for ${resourceType} "${result.name}", creating new with ID`);
-								const newId = await generateDhis2Id();
-								return {id: newId};
-							}
+                                const selection = selections.length && selections[0];
+                                if (selection && selection.id !== '__create_new__') {
+                                    console.log(`✅ User selected ${resourceType}: ${selection.name} (${selection.id})`);
+                                    return { id: selection.id };
+                                } else if (selection && selection.id === '__create_new__') {
+                                    // User chose to create new
+                                    console.log(`✅ Creating new ${resourceType} "${result.name}"`);
+                                    const newId = await generateDhis2Id();
+                                    return { id: newId };
+                                } else {
+                                    // User cancelled - use first match as fallback
+                                    console.log(`⚠ No selection made, using first match: ${matches[0].name} (${matches[0].id})`);
+                                    return { id: matches[0].id };
+                                }
+                            } else {
+                                // No UI available - use first match
+                                console.log(`⚠ No selection UI available, using first match: ${matches[0].name} (${matches[0].id})`);
+                                return { id: matches[0].id };
+                            }
 						}
 					}
 

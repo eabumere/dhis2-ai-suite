@@ -702,7 +702,7 @@ export async function resolveDependencies<T extends z.ZodSchema>(
             
             if (orchestrator && orchestrator.requestSelection) {
                 // Show verification dialog with all matches (exactly same UI as primary resources)
-                const selection = await orchestrator.requestSelection({
+                const selections = await orchestrator.requestSelection({
                     title: `Existing ${dep.type.slice(0, -1)} found (dependency)`,
                     description: `${searchResults.length} existing ${dep.type} match "${dep.name}". Select one to use it, or create new:`,
                     items: searchResults.map(r => ({
@@ -717,6 +717,8 @@ export async function resolveDependencies<T extends z.ZodSchema>(
                     parentName: dep.name
                 });
 
+                const selection = selections.length && selections[0];
+                
                 if (selection && selection.id !== '__create_new__') {
                     // User selected existing dependency - use it instead of creating new
                     console.log(`✅ User selected existing ${dep.type.slice(0, -1)} dependency: ${selection.name} (${selection.id})`);

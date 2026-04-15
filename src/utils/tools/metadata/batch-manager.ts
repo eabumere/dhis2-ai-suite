@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { generateDhis2Id, searchDhis2Metadata, validateResourceData, checkResourceExists } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
+import { getOrchestratorInstance } from "./base-tool";
 
 // Note: DHIS2 authentication now handled by app-runtime automatically
 
@@ -24,6 +25,7 @@ export interface MetadataItem {
         createParams?: Record<string, any>;
     }>;
     schema?: z.ZodSchema;
+    forceCreateAttempted?: boolean;
 }
 
 /**
@@ -87,6 +89,7 @@ export class UnifiedMetadataManager {
             id?: string;
             dependencies?: MetadataItem['dependencies'];
             schema?: z.ZodSchema;
+            forceCreateAttempted?: boolean;
         } = {}
     ): Promise<string> {
         // For CREATE operations, check if resource already exists
@@ -95,6 +98,8 @@ export class UnifiedMetadataManager {
             if (existing.exists) {
                 // Resource already exists, return success without creating
                 console.log(`✓ Resource already exists: ${existing.name} (${existing.id})`);
+				const orchestrator = getOrchestratorInstance();
+				orchestrator.addAssistantMessage('Resource already exists, not created');
                 return existing.id;
             }
         }
@@ -112,6 +117,7 @@ export class UnifiedMetadataManager {
             data: { ...data, ...(itemId ? { id: itemId } : {}) },
             dependencies: options.dependencies,
             schema: options.schema,
+            forceCreateAttempted: options.forceCreateAttempted,
         };
 
         // Validate data if schema provided
@@ -216,17 +222,37 @@ export class UnifiedMetadataManager {
             return {
                 success: true,
                 total: this.pendingOperations.length,
-                successful: this.pendingOperations.length,
-                failed: 0,
-                results: this.pendingOperations.map(item => ({
-                    type: item.type,
-                    operation: item.operation,
-                    id: item.id,
-                    success: true,
-                    data: item.data,
-                    error: undefined,
-                    apiResponse: { message: 'Resource already exists, skipped creation' }
-                })),
+                successful: this.pendingOperations.filter(item => !item.forceCreateAttempted).length,
+                failed: this.pendingOperations.filter(item => item.forceCreateAttempted).length,
+                results: this.pendingOperations.map(item => {
+                    if (item.forceCreateAttempted) {
+                        return {
+                            type: item.type,
+                            operation: item.operation,
+                            id: item.id,
+                            success: false,
+                            data: item.data,
+                            error: undefined,
+                            apiResponse: {
+                                message: 'Resource already exists, was not created',
+                                duplicate: true,
+                                warning: true,
+                                exists: true,
+                                action: 'skipped_creation'
+                            }
+                        };
+                    } else {
+                        return {
+                            type: item.type,
+                            operation: item.operation,
+                            id: item.id,
+                            success: true,
+                            data: item.data,
+                            error: undefined,
+                            apiResponse: { message: 'Resource already exists, skipped creation' }
+                        };
+                    }
+                }),
             };
         }
 
@@ -277,18 +303,44 @@ export class UnifiedMetadataManager {
 
         // Add entries for existing resources that were skipped
         for (const existing of existingResources) {
-            enhancedResults.push({
-                type: existing.type,
-                operation: 'CREATE' as MetadataOperation,
-                id: existing.id,
-                success: true,
-                data: { name: existing.name, id: existing.id },
-                error: undefined,
-                apiResponse: {
-                    message: 'Resource already exists, creation skipped',
-                    duplicate: true
-                }
-            });
+            // Find the original item to check if forceCreateAttempted was set
+            const originalItem = this.pendingOperations.find(item =>
+                item.type === existing.type &&
+                (item.data.name === existing.name || item.data.displayName === existing.name)
+            );
+
+            if (originalItem?.forceCreateAttempted) {
+                // User explicitly selected "Create New Anyway" but resource already exists
+                enhancedResults.push({
+                    type: existing.type,
+                    operation: 'CREATE' as MetadataOperation,
+                    id: existing.id,
+                    success: false,
+                    data: { name: existing.name, id: existing.id },
+                    error: undefined,
+                    apiResponse: {
+                        message: 'Resource already exists, was not created',
+                        duplicate: true,
+                        warning: true,
+                        exists: true,
+                        action: 'skipped_creation'
+                    }
+                });
+            } else {
+                // Normal case - no explicit force create requested
+                enhancedResults.push({
+                    type: existing.type,
+                    operation: 'CREATE' as MetadataOperation,
+                    id: existing.id,
+                    success: true,
+                    data: { name: existing.name, id: existing.id },
+                    error: undefined,
+                    apiResponse: {
+                        message: 'Resource already exists, creation skipped',
+                        duplicate: true
+                    }
+                });
+            }
         }
 
         return enhancedResults;

@@ -471,8 +471,24 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 								});
 							}
 
-							// User selected create new or dismissed - proceed with creation
-							console.log(`✅ User chose to create new ${config.metadataType.slice(0, -1)}`);
+							// User selected create new - check existence ONE FINAL TIME before proceeding
+							console.log(`✅ User chose to create new ${config.metadataType.slice(0, -1)}, performing final existence check`);
+							
+							// FINAL EXISTENCE CHECK BEFORE ALLOWING CREATION
+							const finalCheck = await this.checkExistingResource(config.metadataType, transformedInput);
+							if (finalCheck.exists) {
+								console.log(`⚠️ Resource still exists even after user requested creation: ${finalCheck.name} (${finalCheck.id})`);
+								return JSON.stringify({
+									success: false,
+									warning: true,
+									message: `⚠️ ${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists. Was not created.`,
+									id: finalCheck.id,
+									name: finalCheck.name,
+									exists: true,
+									action: 'skipped_creation',
+									llm_input: llmInput
+								});
+							}
 						} else {
 							// No UI available - log warning and proceed
 							console.log(`⚠️ ${searchResults.length} existing matches found, but no selection UI available. Proceeding with creation.`);

@@ -58,6 +58,7 @@ export interface BatchMetadataResponse {
         apiResponse?: any;
     }>;
     apiResponse?: any;
+	skipped?: string;
     errors?: string[];
 }
 
@@ -96,11 +97,10 @@ export class UnifiedMetadataManager {
         if (operation === 'CREATE') {
             const existing = await this.checkExistingResource(type, data);
             if (existing.exists) {
-                // Resource already exists, return success without creating
+                // Resource already exists, throw error to indicate creation was skipped
                 console.log(`✓ Resource already exists: ${existing.name} (${existing.id})`);
-				const orchestrator = getOrchestratorInstance();
-				orchestrator.addAssistantMessage('Resource already exists, not created');
-                return existing.id;
+                
+                throw new Error(`Resource already exists: ${existing.name} (${existing.id})`);
             }
         }
 
@@ -332,12 +332,15 @@ export class UnifiedMetadataManager {
                     type: existing.type,
                     operation: 'CREATE' as MetadataOperation,
                     id: existing.id,
-                    success: true,
+                    success: false,
                     data: { name: existing.name, id: existing.id },
-                    error: undefined,
+                    error: 'Resource already exists, was not created',
                     apiResponse: {
                         message: 'Resource already exists, creation skipped',
-                        duplicate: true
+                        duplicate: true,
+                        warning: true,
+                        exists: true,
+                        action: 'skipped_creation'
                     }
                 });
             }
@@ -881,8 +884,9 @@ export async function batchCreateMetadata(
     manager.clear();
 
     // Add all items to the batch
+	const result = [];
     for (const item of items) {
-        await manager.addOperation(
+		result.push(await manager.addOperation(
             item.type,
             'CREATE',
             item.data,
@@ -890,11 +894,23 @@ export async function batchCreateMetadata(
                 dependencies: item.dependencies,
                 schema: item.schema,
             }
-        );
+        ));
     }
+
+	if (result.some(r => r.inclus))
 
     // Execute the batch with enhanced duplicate detection
     return manager.executeBatchWithDuplicateDetection(options);
+}
+
+/**
+ * Export checkExistingResource for direct usage from other modules
+ */
+export async function checkExistingResource(
+    type: string,
+    data: Record<string, any>
+): Promise<{ exists: boolean; id?: string; name?: string }> {
+    return UnifiedMetadataManager.getInstance()['checkExistingResource'](type, data);
 }
 
 /**

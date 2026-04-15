@@ -475,13 +475,14 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 							console.log(`✅ User chose to create new ${config.metadataType.slice(0, -1)}, performing final existence check`);
 							
 							// FINAL EXISTENCE CHECK BEFORE ALLOWING CREATION
-							const finalCheck = await this.checkExistingResource(config.metadataType, transformedInput);
+                            const { checkExistingResource } = await import('./batch-manager');
+							const finalCheck = await checkExistingResource(config.metadataType, transformedInput);
 							if (finalCheck.exists) {
 								console.log(`⚠️ Resource still exists even after user requested creation: ${finalCheck.name} (${finalCheck.id})`);
 								return JSON.stringify({
-									success: false,
+									success: true,
 									warning: true,
-									message: `⚠️ ${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists. Was not created.`,
+									message: `${config.metadataType.slice(0, -1)} "${llmInput.name}" already exists. Creation was skipped.`,
 									id: finalCheck.id,
 									name: finalCheck.name,
 									exists: true,

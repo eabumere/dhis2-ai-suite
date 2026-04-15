@@ -468,17 +468,22 @@ export class UnifiedMetadataManager {
                 const result: Record<string, any> = {};
 
                 for (const [key, value] of Object.entries(obj)) {
+					console.log('Key', key, value);
                     // Check if this is a reference collection field
                     if (REFERENCE_COLLECTION_MAPPING[key] && Array.isArray(value)) {
                         const targetType = REFERENCE_COLLECTION_MAPPING[key];
                         result[key] = [];
 
                         for (const embeddedItem of value) {
-                            // Only process if this is an actual object (not just an id reference)
-                            if (embeddedItem && typeof embeddedItem === 'object' && !embeddedItem.id) {
-                                // Generate proper DHIS2 UID
-                                const generatedId = await generateDhis2Id();
-                                embeddedItem.id = generatedId;
+							console.log('EmbeddedItem', embeddedItem);
+                            // Only skip if this is already just an id reference (no other properties)
+                            const isIdOnlyReference = Object.keys(embeddedItem).length === 1 && embeddedItem.id !== undefined;
+                            
+                            if (embeddedItem && typeof embeddedItem === 'object' && !isIdOnlyReference) {
+                                // Generate proper DHIS2 UID only if not already present
+                                if (!embeddedItem.id) {
+                                    embeddedItem.id = await generateDhis2Id();
+                                }
 
                                 // Add to root payload
                                 if (!targetPayload[targetType]) {
@@ -487,7 +492,7 @@ export class UnifiedMetadataManager {
                                 targetPayload[targetType].push(embeddedItem);
 
                                 // Replace with id reference
-                                result[key].push({ id: generatedId });
+                                result[key].push({ id: embeddedItem.id });
                             } else {
                                 // Already an id reference, pass through
                                 result[key].push(embeddedItem);
@@ -515,6 +520,7 @@ export class UnifiedMetadataManager {
 
                 // Normalize payload - extract all embedded references
                 const normalizedData = await normalizePayload(payloadData, metadataPayload);
+				console.log('NormalizedData', normalizedData);
 
                 metadataPayload[item.type].push(normalizedData);
             }

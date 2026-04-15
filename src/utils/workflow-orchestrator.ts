@@ -651,7 +651,7 @@ class WorkflowOrchestrator {
     }
 
     // Request user selection during workflow
-    async requestSelection(request: SelectionRequest | string, options?: SelectionOptions[], multiple = true): Promise<SelectionOptions[]> {
+    async requestSelection(request: SelectionRequest | string, options?: SelectionOptions[], multiple = false): Promise<SelectionOptions[]> {
         // ✅ Full backward compatibility + new interface:
         // ✅ Accept both new signature: requestSelection(SelectionRequest)
         // ✅ Accept old signature: requestSelection(workflowId, options, multiple)

@@ -1086,6 +1086,8 @@ export const createDhis2IndicatorAdvanced = createLLMFirstTool({
 		description: z.string().optional().describe("Description of what this indicator measures"),
 		numeratorExpression: z.string().min(1).describe("Mathematical expression for the numerator (e.g., '#{HIV_Tests_Completed}')"),
 		denominatorExpression: z.string().min(1).describe("Mathematical expression for the denominator (e.g., '#{Target_Population}')"),
+		numeratorDescription: z.string().min(1).describe("A description for the numerator (e.g., 'Number of cases reported')"),
+		denominatorDescription: z.string().min(1).describe("A description for the denominator (e.g., 'Cases verified')"),
 		annualized: z.boolean().default(false).describe("Whether this is an annualized indicator"),
 		indicatorTypeId: z.string().optional().describe("ID of indicator type to use (specifies calculation method like percentage/count/etc)")
 	}),

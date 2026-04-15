@@ -25,6 +25,7 @@ export const DataElementSchema = z.object({
   displayName: z.string().min(1),
   shortName: z.string().min(1),
   code: z.string().optional(),
+	optionSet: z.object({id: z.string()}).optional(),
   valueType: z.enum([
     'NUMBER', 'INTEGER', 'POSITIVE_INT', 'NEGATIVE_INT', 'ZERO_OR_POSITIVE_INT',
     'TEXT', 'LONG_TEXT', 'LETTER', 'PHONE_NUMBER', 'EMAIL', 'BOOLEAN', 'TRUE_ONLY',

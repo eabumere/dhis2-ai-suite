@@ -36,25 +36,26 @@ export async function resolveNameToId(
         };
     }
 
+    // Check for EXACT match FIRST - regardless of total match count
+    const exactMatch = matches.find((m: any) => m.name.toLowerCase().trim() === name.toLowerCase().trim());
+
+    if (exactMatch) {
+        // ✅ Found exact name match - AUTO SELECT ALWAYS, no UI shown
+        console.log(`✅ Auto-resolved ${resourceType} "${name}" via exact name match to ID: ${exactMatch.id} (from ${matches.length} total matches)`);
+        return {
+            id: exactMatch.id,
+            name: exactMatch.name,
+            selected: false,
+            created: false
+        };
+    }
+
     if (matches.length === 1) {
-        // Exactly one match - verify it's an exact name match first
-        const exactMatch = matches.find((m: any) => m.name.toLowerCase().trim() === name.toLowerCase().trim());
-
-        if (exactMatch) {
-            console.log(`✅ Auto-resolved ${resourceType} "${name}" to ID: ${exactMatch.id}`);
-            return {
-                id: exactMatch.id,
-                name: exactMatch.name,
-                selected: false,
-                created: false
-            };
-        }
-
-        // No exact match even though there is 1 result - show selection anyway
+        // Only one match but no exact name match - still show selection
         console.log(`⚠ Found 1 ${resourceType} but name doesn't exactly match "${name}" - showing selection dialog`);
     }
 
-    // Multiple matches OR no exact match - show selection dialog ALWAYS
+    // Multiple matches AND NO exact name match - show selection dialog
     const orchestrator = getOrchestratorInstance();
     if (orchestrator && orchestrator.requestSelection) {
         const selections = await orchestrator.requestSelection({

@@ -717,7 +717,6 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 			clearReferences?: string[];
 		}) => {
 			try {
-				console.log('Updating resource:', resource);
 				let resourceId = id || resource?.id;
 				let updatedResource: Record<string, any> = resource || {};
 
@@ -742,38 +741,43 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 							message: `Could not find any ${config.metadataType} matching "${searchName}". Please verify the name or provide an ID.`
 						});
 					}
+					const match = searchResults.find(r => r.name.trim().toLowerCase() === searchName.trim().toLowerCase());
+					if (match) {
+						console.log(`Automatically selecting exact name match - ${match.name}`)
+						resourceId = match.id;
+					}  else {
+						const orchestrator = getOrchestratorInstance();
 
-					const orchestrator = getOrchestratorInstance();
-
-					if (orchestrator && orchestrator.requestSelection) {
-						const selections = await orchestrator.requestSelection({
-							title: `Select ${getSingularResourceName(config.metadataType)} to update`,
-							description: `Found ${searchResults.length} ${getPluralResourceName(config.metadataType)} matching "${searchName}". Select which one you want to update:`,
-							items: searchResults.map(r => ({
-								id: r.id,
-								name: r.name,
-								code: r.code || '',
-								displayName: r.displayName
-							})),
-							confirmButtonText: "Update this resource"
-						});
-
-						const selection = selections.length && selections[0];
-
-						if (selection && selection.id) {
-							resourceId = selection.id;
-							console.log(`✅ User selected resource to update: ${selection.name} (${resourceId})`);
-						} else {
-							return JSON.stringify({
-								success: false,
-								error: "No resource selected",
-								message: "No resource was selected for update. Operation cancelled."
+						if (orchestrator && orchestrator.requestSelection) {
+							const selections = await orchestrator.requestSelection({
+								title: `Select ${getSingularResourceName(config.metadataType)} to update`,
+								description: `Found ${searchResults.length} ${getPluralResourceName(config.metadataType)} matching "${searchName}". Select which one you want to update:`,
+								items: searchResults.map(r => ({
+									id: r.id,
+									name: r.name,
+									code: r.code || '',
+									displayName: r.displayName
+								})),
+								confirmButtonText: "Update this resource"
 							});
+
+							const selection = selections.length && selections[0];
+
+							if (selection && selection.id) {
+								resourceId = selection.id;
+								console.log(`✅ User selected resource to update: ${selection.name} (${resourceId})`);
+							} else {
+								return JSON.stringify({
+									success: false,
+									error: "No resource selected",
+									message: "No resource was selected for update. Operation cancelled."
+								});
+							}
+						} else {
+							// No UI available - use first match
+							resourceId = searchResults[0].id;
+							console.log(`⚠️ No selection UI available, using first match: ${searchResults[0].name} (${resourceId})`);
 						}
-					} else {
-						// No UI available - use first match
-						resourceId = searchResults[0].id;
-						console.log(`⚠️ No selection UI available, using first match: ${searchResults[0].name} (${resourceId})`);
 					}
 				}
 
@@ -896,8 +900,13 @@ export function createDhis2UpdateTool<T extends z.ZodSchema>(
 						// Match path against resource mapping
 						const lowerPath = path.toLowerCase();
 						let resourceType: string | null = null;
+						
+						// Sort patterns from LONGEST to SHORTEST to avoid substring matching issues
+						// This ensures "categoryoption" matches before "category"
+						const sortedEntries = Object.entries(fieldToResourceMap)
+							.sort((a, b) => b[0].length - a[0].length);
 
-						for (const [pattern, type] of Object.entries(fieldToResourceMap)) {
+						for (const [pattern, type] of sortedEntries) {
 							if (lowerPath.includes(pattern)) {
 								resourceType = type;
 								break;

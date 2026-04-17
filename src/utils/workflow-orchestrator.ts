@@ -319,7 +319,7 @@ class WorkflowOrchestrator {
                 console.log(`🔄 Workflow ${workflowId} iteration ${iterationCount} with input:`, currentInput);
 
                 // Update progress message for agent execution
-                this.addProgressMessage(`Processing with ${flowType} agent...`);
+                //this.addProgressMessage(`Processing with ${flowType} agent...`);
 
                 const result = await agentFn(currentInput);
                 console.log(`📋 Workflow ${workflowId} iteration ${iterationCount} result:`, result);
@@ -514,7 +514,7 @@ class WorkflowOrchestrator {
                                 (actualResult.data && Array.isArray(actualResult.data))
                             )) {
                                 console.log('🔍 Detected search result, calling requestSearchRender');
-                                this.requestSearchRender(actualResult, input?.input?.messages?.[0]?.content || 'Search query');
+                                //this.requestSearchRender(actualResult, input?.input?.messages?.[0]?.content || 'Search query');
                                 // Reset UI state for search results - they are handled through conversation
                                 this.updateUIState({
                                     showProcessing: false,

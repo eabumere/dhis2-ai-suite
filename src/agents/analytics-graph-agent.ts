@@ -772,8 +772,9 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 		}
 
 		// Search for indicators and data elements using 2-level search (external API first, then DHIS2)
-		const indicators = await searchDhis2Metadata('indicators', searchQuery);
-		const dataElements = await searchDhis2Metadata('dataElements', searchQuery);
+		// limit: 0 = UNLIMITED - returns ALL matching results with paging=false
+		const indicators = await searchDhis2Metadata('indicators', searchQuery, 0);
+		const dataElements = await searchDhis2Metadata('dataElements', searchQuery, 0);
 
 		console.log(`📊 Found ${indicators.length} indicators and ${dataElements.length} data elements`);
 

@@ -48,29 +48,41 @@ export class Dhis2Api {
     static async searchMetadata(
 	    metadataType: string,
 	    query: string,
-	    limit: number = 10
+	    limit: number = 0
     ): Promise<Array<{ id: string; name: string; code?: string; displayName: string }>> {
 	    try {
 		    const engine = this.getEngine();
+		    
+		    const params: any = {
+			    filter: [
+				    `name:ilike:${query}`,
+				    `code:ilike:${query}`,
+				    `id:ilike:${query}`,
+				    `description:ilike:${query}`,
+				    //`shortName:ilike:${query}`
+			    ],
+			    rootJunction: 'OR',
+			    fields: 'id,name,code,displayName'
+		    };
+		    
+		    // When limit = 0: disable paging to get ALL results
+		    if (limit === 0) {
+			    params.paging = false;
+		    } else {
+			    params.pageSize = limit;
+		    }
+		    
 		    const result = await engine.query({
 			    search: {
 				    resource: metadataType,
-				    params: {
-					    filter: [
-						    `name:ilike:${query}`,
-						    `code:ilike:${query}`,
-						    `id:ilike:${query}`,
-						    `description:ilike:${query}`,
-						    //`shortName:ilike:${query}`
-					    ],
-					    rootJunction: 'OR',
-					    fields: 'id,name,code,displayName'
-				    }
+				    params
 			    }
 		    });
 
 		    const items = result.search?.[metadataType] || [];
-		    return items.slice(0, limit);
+			
+			// Only slice when limit > 0, otherwise return all items
+		    return limit > 0 ? items.slice(0, limit) : items;
 	    } catch (error) {
 		    console.error(`Error searching ${metadataType}:`, error);
 		    return [];

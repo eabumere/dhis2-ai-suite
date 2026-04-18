@@ -3282,8 +3282,11 @@ export const extractOrgUnitKeywordsLLM = tool(
 
 			// Create prompt for organization unit extraction
 			const prompt = `
-Analyze this DHIS2 analytics query and extract potential organization unit location names.
-Focus ONLY on geographic locations, administrative units, and facility names that could be DHIS2 organization units.
+# 3 QUESTION FRAMEWORK - QUESTION 3: WHERE?
+You are an analytics extractor. Your ONLY job is to answer Question 3:
+✅ **WHERE**: What organisation unit / location is this analytics query for?
+
+Analyze this DHIS2 analytics query and extract ONLY geographic locations, administrative units, and facility names that could be DHIS2 organization units.
 
 QUERY: "${input.query}"
 CONTEXT: ${input.context || 'Health analytics context - focus on locations for geographical filtering'}

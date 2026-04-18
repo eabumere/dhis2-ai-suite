@@ -748,66 +748,229 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 		updateProgress(2, 'Finding Indicators', 'Searching for relevant data indicators...', false);
 		state.orchestrator?.addProgressMessage('Searching for relevant data indicators...');
 
-		// First, extract indicator/data element keywords using LLM
-		const llmResult = await extractIndicatorKeywordsLLM.invoke({
-			query: state.query,
-			context: 'health analytics - extract measurable indicators and data elements'
+		// ✅ SINGLE UNIFIED LLM EXTRACTION
+		// Extract ALL 4 types (indicators, orgUnits, periods, disaggregations) in ONE LLM CALL
+		// This is 4x faster, uses less tokens, and maintains context across all extraction types
+
+		// Initialize extraction model
+		const llm = ChatModels.createExtractionModel({
+			maxTokens: 500,
+			temperature: 1
 		});
 
-		const llmResponse = JSON.parse(llmResult as string);
-		console.log('📊 LLM indicator extraction result:', llmResponse);
+		// ✅ 3 QUESTION FRAMEWORK EXTRACTION
+		// Every analytics query answers exactly 3 questions: WHAT, WHERE, WHEN
+		// This is mathematically clean, eliminates cross contamination, 100% maps to DHIS2 dimensions
 
-		// Extract keywords from LLM response
-		const indicatorKeywords = llmResponse.keywordCandidates || [];
-		console.log('📊 Extracted indicator keywords from LLM:', indicatorKeywords);
+		const unifiedPrompt = `
+# DHIS2 ANALYTICS QUERY PARAMETER EXTRACTION
 
-		// Create search query from extracted keywords
-		let searchQuery = state.query; // Fallback to original query
+Answer ONLY these THREE QUESTIONS. This is your ONLY job.
+
+## 🔹 QUESTION 1: WHAT?
+What indicators, metrics, rates or counts are being requested?
+✅ MEASURABLE THINGS ONLY. No locations, no dates.
+Example: TX_CURR, Malaria Cases
+
+## 🔹 QUESTION 2: WHERE?
+What organisation units, locations, facilities, districts or regions?
+✅ PLACES ONLY. No metrics, no dates.
+Example: Region A, Central Hospital
+
+## 🔹 QUESTION 3: WHEN?
+What time periods, dates, months, years or time ranges?
+✅ TIMES ONLY. No metrics, no locations.
+Example: last 12 months, 2024, Q1
+
+---
+QUERY: "${state.query}"
+
+Return ONLY a valid JSON object:
+{
+  "indicators": [],
+  "orgUnits": [],
+  "periods": [],
+  "disaggregations": []
+}
+
+✅ RULES:
+- A term can ONLY belong to ONE array. No duplicates.
+- Extract exact terms from query, do not invent anything
+- Ignore general verbs: show, calculate, total, find, get
+- Return empty array [] for types not mentioned
+
+Return ONLY JSON. No explanation. No markdown. No extra text.
+`;
+
+		const unifiedResult = await llm.invoke([
+			{role: "system", content: unifiedPrompt},
+			{role: "user", content: state.query}
+		]);
+
+		let extraction: any;
+		try {
+			extraction = JSON.parse(unifiedResult.content as string);
+			console.log('✅ Unified LLM extraction result:', extraction);
+		} catch (parseError) {
+			console.warn('⚠️ Unified extraction failed, falling back to individual extractors');
+
+			// Fallback to original individual extractors
+			const indicatorResult = await extractIndicatorKeywordsLLM.invoke({
+				query: state.query,
+				context: 'health analytics - extract measurable indicators and data elements'
+			});
+
+			const indicatorResponse = JSON.parse(indicatorResult as string);
+			extraction = {
+				indicators: indicatorResponse.keywordCandidates || [],
+				orgUnits: [],
+				periods: [],
+				disaggregations: []
+			};
+		}
+
+		const indicatorKeywords = extraction.indicators || [];
+		const orgUnitKeywords = extraction.orgUnits || [];
+		const periodKeywords = extraction.periods || [];
+
+		console.log('📊 Extracted from unified LLM:', {
+			indicators: indicatorKeywords,
+			orgUnits: orgUnitKeywords,
+			periods: periodKeywords
+		});
+
+		// Create search queries from extracted keywords
+		let searchQueries: string[] = [state.query]; // Fallback to original query
 		if (indicatorKeywords.length > 0) {
-			// Use extracted keywords for more targeted search
-			searchQuery = indicatorKeywords.join(' ');
-			console.log('📊 Using LLM-extracted keywords for search:', searchQuery);
+			// ✅ Use EACH extracted keyword INDIVIDUALLY for targeted search (multi-indicator support)
+			// LLM returns separate indicators like ["TX_CURR", "HIV Case Finding Rate"] - search each separately
+			searchQueries = indicatorKeywords;
+			console.log('📊 Using LLM-extracted keywords for individual search:', searchQueries);
 		} else {
 			console.log('📊 No keywords extracted by LLM, using original query for search');
 		}
 
-		// Search for indicators and data elements using 2-level search (external API first, then DHIS2)
-		// limit: 0 = UNLIMITED - returns ALL matching results with paging=false
-		const indicators = await searchDhis2Metadata('indicators', searchQuery, 0);
-		const dataElements = await searchDhis2Metadata('dataElements', searchQuery, 0);
+		// ✅ 100% PER KEYWORD PROCESSING ONLY
+		// No bulk search, no merged results, no aggregate lists
+		// Each keyword is processed independently, results never merged
 
-		console.log(`📊 Found ${indicators.length} indicators and ${dataElements.length} data elements`);
+		const selection: any[] = [];
+		const collision: string[] = [];
+		const autoSelection: any[] = [];
+		const processedIds = new Set<string>();
 
-		// Combine and transform results into analytics metadata format
-		const suggestions = [];
+		// Process each extracted keyword INDIVIDUALLY
+		for (const keyword of indicatorKeywords) {
+			// Clean keyword: remove quotes, trim whitespace
+			const cleanedKeyword = keyword.trim().replace(/^['"]|['"]$/g, '');
+			
+			console.log(`🔍 Processing keyword: "${cleanedKeyword}"`);
+			
+			// Run separate search FOR THIS KEYWORD ONLY
+			const indicatorResults = await searchDhis2Metadata('indicators', cleanedKeyword, 1000);
+			const dataElementResults = await searchDhis2Metadata('dataElements', cleanedKeyword, 1000);
+			
+			console.log(`✅ Results: ${indicatorResults.length} indicators, ${dataElementResults.length} dataElements`);
 
-		// Transform indicators
-		suggestions.push(...indicators.map(item => ({
-			name: item.name,
-			id: item.id,
-			type: 'indicator'
-		})));
+			// Find EXACT MATCH ONLY (no partial matches)
+			const indicatorMatch = indicatorResults.find(i => 
+				i.id.trim() === cleanedKeyword.trim() || 
+				i.name.trim().toLowerCase() === cleanedKeyword.trim().toLowerCase()
+			);
+			
+			const dataElementMatch = dataElementResults.find(i => 
+				i.id.trim() === cleanedKeyword.trim() || 
+				i.name.trim().toLowerCase() === cleanedKeyword.trim().toLowerCase()
+			);
 
-		// Transform data elements
-		suggestions.push(...dataElements.map(item => ({
-			name: item.name,
-			id: item.id,
-			type: 'dataElement'
-		})));
+			if (indicatorMatch && dataElementMatch) {
+				// ✅ COLLISION: exists in both types
+				if (!processedIds.has(indicatorMatch.id)) {
+					selection.push({
+						name: indicatorMatch.name,
+						id: indicatorMatch.id,
+						type: 'indicator'
+					});
+					processedIds.add(indicatorMatch.id);
+				}
+				if (!processedIds.has(dataElementMatch.id)) {
+					selection.push({
+						name: dataElementMatch.name,
+						id: dataElementMatch.id,
+						type: 'dataElement'
+					});
+					processedIds.add(dataElementMatch.id);
+				}
+				collision.push(cleanedKeyword);
+				console.log(`⚠️ Collision detected for: "${cleanedKeyword}" - added 2 items to selection`);
+			}
+			else if (indicatorMatch && !dataElementMatch) {
+				// ✅ AUTO SELECT: only exists as indicator
+				if (!processedIds.has(indicatorMatch.id)) {
+					autoSelection.push({
+						name: indicatorMatch.name,
+						id: indicatorMatch.id,
+						type: 'indicator'
+					});
+					processedIds.add(indicatorMatch.id);
+					console.log(`✅ Auto-selected indicator: "${indicatorMatch.name}"`);
+				}
+			}
+			else if (dataElementMatch && !indicatorMatch) {
+				// ✅ AUTO SELECT: only exists as dataElement
+				if (!processedIds.has(dataElementMatch.id)) {
+					autoSelection.push({
+						name: dataElementMatch.name,
+						id: dataElementMatch.id,
+						type: 'dataElement'
+					});
+					processedIds.add(dataElementMatch.id);
+					console.log(`✅ Auto-selected dataElement: "${dataElementMatch.name}"`);
+				}
+			}
+			else {
+				// ✅ NO EXACT MATCH: add all search results to selection
+				console.log(`⚠️ No exact match for "${cleanedKeyword}" - adding all ${indicatorResults.length + dataElementResults.length} results to selection`);
+				
+				for (const item of indicatorResults) {
+					if (!processedIds.has(item.id)) {
+						selection.push({
+							name: item.name,
+							id: item.id,
+							type: 'indicator'
+						});
+						processedIds.add(item.id);
+					}
+				}
+				
+				for (const item of dataElementResults) {
+					if (!processedIds.has(item.id)) {
+						selection.push({
+							name: item.name,
+							id: item.id,
+							type: 'dataElement'
+						});
+						processedIds.add(item.id);
+					}
+				}
+			}
+		}
 
 		// Create metadata object in expected format
 		const metadata = {
-			status: suggestions.length > 1 ? 'multiple_matches' :
-				suggestions.length === 1 ? 'auto_selected' : 'no_match',
-			suggestions,
+			status: selection.length > 0 ? 'multiple_matches' : 
+				autoSelection.length >= 1 ? 'auto_selected' : 'no_match',
+			suggestions: [...autoSelection, ...selection],
 			query: state.query,
-			rawSearchResults: {indicators, dataElements}
+			rawSearchResults: {
+				extraction // ✅ SAVE THE FULL EXTRACTION OBJECT WITH orgUnits AND periods
+			}
 		};
 
 		console.log('📊 Analytics metadata:', metadata);
 
 		// Check if we found relevant metadata
-		const hasResults = suggestions.length > 0;
+		const hasResults = autoSelection.length + selection.length > 0;
 		const autoSelected = metadata.status === 'auto_selected';
 		const multipleMatches = metadata.status === 'multiple_matches';
 
@@ -842,48 +1005,86 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 			}
 
 			try {
-				// Request selection through orchestrator (this will show UI and wait)
-				const selectedItems = await state.orchestrator.requestSelection(
-					state.workflowId || 'analytics_workflow',
-					suggestions,
-					true // Allow multiple selection
-				);
+				console.log(`📊 Processing complete: ${autoSelection.length} auto-selected, ${selection.length} require user selection`);
 
-				console.log('▶️ Received selection from orchestrator:', selectedItems);
+				// ✅ ONLY SHOW SELECTION UI IF THERE ARE ITEMS TO SELECT
+				let userSelectedItems: any[] = [];
+				
+				if (selection.length > 0) {
+					// ✅ Build dialog with proper requested items list (HTML <br> for proper line breaks)
+					let dialogDescription = "You requested the following items:<br><br>";
+					
+					// List ALL extracted keywords first
+					indicatorKeywords.forEach(keyword => {
+						dialogDescription += `• ${keyword.trim().replace(/^['"]|['"]$/g, '')}<br>`;
+					});
+					
+					// Add collision warnings if any exist
+					if (collision.length > 0) {
+						dialogDescription += "<br>Additional information:<br>";
+						collision.forEach(name => {
+							dialogDescription += `⚠️ ${name} appears both as a Data Element and an Indicator<br>`;
+						});
+					}
+					
+					dialogDescription += "<br>Please select which versions you would like to use.";
 
-				if (selectedItems && selectedItems.length > 0) {
-					// Update metadata with selected items
-					const updatedMetadata = {
-						...metadata,
-						suggestions: selectedItems,
-						status: 'user_selected'
-					};
+					console.log(`⏸️ Showing selection UI with ${selection.length} items`);
+					
+					const selectedResult = await state.orchestrator.requestSelection({
+						workflowId: state.workflowId,
+						title: "Indicators / Data Elements selection",
+						description: dialogDescription,
+						items: selection,
+						allowMultiple: true,
+						confirmButtonText: "Continue Analysis"
+					});
 
-					// Progress continues after user selection - advance to next step
-					advanceProgress(state, 3, 'Processing Selection', 'Indicator selection completed, proceeding to data resolution...', false);
+					if (selectedResult && selectedResult.length > 0) {
+						userSelectedItems = selectedResult;
+						console.log(`✅ User selected ${userSelectedItems.length} items`);
+					} else {
+						console.log('⚠️ Selection cancelled by user');
+					}
+				}
 
-					// Continue with query_data using selected items
-					return {
-						metadata: updatedMetadata,
-						step: 'query_data'
-					};
-				} else {
-					// Selection was cancelled
+				// ✅ MERGE FINAL SELECTION
+				const finalItems = [...autoSelection, ...userSelectedItems];
+
+				if (finalItems.length === 0) {
 					return {
 						step: 'completed',
 						finalResult: {
 							success: false,
-							message: 'Selection was cancelled by user',
+							message: 'No valid items found for analysis',
 							type: 'analytics'
 						}
 					};
 				}
+
+				console.log(`✅ Final selection: ${finalItems.length} total items (${autoSelection.length} auto + ${userSelectedItems.length} user)`);
+
+				const updatedMetadata = {
+					...metadata,
+					suggestions: finalItems,
+					status: userSelectedItems.length > 0 ? 'user_selected' : 'auto_selected',
+					autoSelectedCount: autoSelection.length,
+					userSelectedCount: userSelectedItems.length
+				};
+
+				advanceProgress(state, 3, 'Processing Selection', 'Selection completed, proceeding...', false);
+
+				return {
+					metadata: updatedMetadata,
+					step: 'search_date_periods'
+				};
 			} catch (selectionError) {
 				// Handle case where orchestrator selection fails (e.g., no UI callbacks registered)
 				console.warn('⏸️ Orchestrator selection failed, falling back to auto-selection:', selectionError.message);
 
-				// Fallback: Auto-select the first suggestion to continue workflow
-				const autoSelectedItem = suggestions[0];
+				// Fallback: Auto-select the first available item to continue workflow
+				const allItems = [...autoSelection, ...selection];
+				const autoSelectedItem = allItems[0];
 				console.log('▶️ Auto-selected first item due to selection failure:', autoSelectedItem);
 
 				const updatedMetadata = {
@@ -896,15 +1097,15 @@ async function searchMetadata(state: typeof GraphAnnotation.State): Promise<Part
 				// Continue with query_data using auto-selected item
 				return {
 					metadata: updatedMetadata,
-					step: 'query_data'
+					step: 'search_date_periods'
 				};
 			}
 		} else {
-			// Single match or auto-selected - proceed to query
-			return {
-				metadata,
-				step: 'query_data'
-			};
+		// Single match or auto-selected - proceed to query
+		return {
+			metadata,
+			step: 'search_date_periods'
+		};
 		}
 	} catch (error) {
 		console.error('Metadata search failed:', error);
@@ -983,6 +1184,23 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 		const hasIndicators = indicators.length > 0;
 		const hasDataElements = dataElements.length > 0;
 
+		// ✅ CRITICAL RULE: INDICATORS CANNOT BE DISAGGREGATED
+		// If ANY selected item is an indicator, we CANNOT do disaggregation
+		// Disaggregation only works for dataElements
+		const disaggregationAllowed = hasDataElements && !hasIndicators;
+
+		// Set disaggregations to empty array when indicators are present
+
+		if (disaggregationAllowed) {
+			// Only extract disaggregation metadata when using dataElements only
+			if (state.disaggregationsMetadata?.suggestions?.length > 0) {
+				disaggregationDimensions = state.disaggregationsMetadata.suggestions.map((suggestion: any) => suggestion.formattedDimension);
+			}
+		} else {
+			console.log('✅ SKIPPING disaggregation: selection contains indicators which cannot be disaggregated');
+			// NO RETURN STATEMENT HERE. Just continue to API call normally.
+		}
+
 		// Validate we have something to query
 		if (!hasIndicators && !hasDataElements) {
 			return {
@@ -1002,7 +1220,7 @@ async function queryData(state: typeof GraphAnnotation.State): Promise<Partial<t
 
 		// OPTION A: Merge dataElements into indicators since DHIS2 dx dimension accepts mixed ID types
 		const dxDimensionIds = [...indicators, ...dataElements];
-
+console.log('invoking analytics', 'Indicators', dxDimensionIds, 'Periods', periods, 'Org Units', orgUnitIds);
 		const result = await queryAnalytics.invoke({
 			indicators: dxDimensionIds,     // All IDs (indicators + dataElements) go to dx dimension
 			doc_type: primaryType,
@@ -1312,70 +1530,53 @@ async function buildChart(state: typeof GraphAnnotation.State): Promise<Partial<
 // New organisation unit resolution function
 async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
 	try {
-		console.log('🏥 Searching for organisation units in query using LLM extraction');
+		console.log('🏥 Resolving organisation units');
 
 		// Update progress - advance to org unit search step
-		advanceProgress(state, 4, 'Finding Locations', 'Searching for relevant organisation units...', false);
+		advanceProgress(state, 4, 'Finding Locations', 'Resolving organisation units...', false);
 
-		// Extract organisation unit keywords using LLM-powered tool
-		const llmResult = await extractOrgUnitKeywordsLLM.invoke({
-			query: state.query,
-			context: 'health analytics - extract geographic locations and organization unit names'
-		});
+		// ✅ USE ALREADY EXTRACTED ORG UNITS FROM UNIFIED EXTRACTION
+		// NO NEED TO RUN ANOTHER LLM CALL. WE ALREADY DID THIS ONCE.
+		let orgUnitKeywords: string[] = [];
 
-		const llmResponse = JSON.parse(llmResult as string);
-		console.log('🏥 LLM extraction result:', llmResponse);
+		// Check if we already have extraction results stored
+		if (state.metadata?.rawSearchResults?.extraction?.orgUnits) {
+			orgUnitKeywords = state.metadata.rawSearchResults.extraction.orgUnits;
+			console.log('✅ Using already extracted org units from unified extraction:', orgUnitKeywords);
+		} else {
+			// Fallback only if unified extraction not available
+			console.log('⚠️ No unified extraction org units found, falling back to separate LLM call');
+			const llmResult = await extractOrgUnitKeywordsLLM.invoke({
+				query: state.query,
+				context: 'health analytics - extract geographic locations and organization unit names'
+			});
 
-		// Extract keyword candidates from LLM response
-		const orgUnitKeywords = llmResponse.keywordCandidates || [];
-		console.log('🏥 Extracted org unit keywords from LLM:', orgUnitKeywords);
-
-		// If no keywords found by LLM, fallback to regex extraction as backup
-		let keywordsForSearch = orgUnitKeywords;
-		if (keywordsForSearch.length === 0) {
-			console.log('🏥 No keywords found by LLM, using regex fallback');
-			keywordsForSearch = extractOrgUnitKeywords(state.query);
+			const llmResponse = JSON.parse(llmResult as string);
+			orgUnitKeywords = llmResponse.keywordCandidates || [];
 		}
 
-		if (keywordsForSearch.length === 0) {
-			console.log('🏥 No organisation unit keywords found, using default org unit');
+		// ✅ 3 Question Framework: WHERE = Organisation Unit
+		// When LLM returns empty array [] it means NO org units mentioned in query
+		// This is NOT a failure - this is successful classification
+		if (orgUnitKeywords.length === 0) {
+			console.log('🏥 No organisation unit mentioned in query. Requesting user selection.');
 
-			// Get the first available org unit as default (often the top-level/root org unit)
-			const allOrgUnits = await searchDhis2Metadata('organisationUnits', '', 1); // Get at least one
-
-			if (allOrgUnits.length > 0) {
-				const defaultOrgUnit = {
-					status: 'default_selected',
-					suggestions: [{
-						name: allOrgUnits[0].name,
-						id: allOrgUnits[0].id,
-						type: 'organisationUnit'
-					}],
-					query: state.query
-				};
-
-				console.log('🏥 Using default org unit:', defaultOrgUnit);
-				return {
-					orgUnitsMetadata: defaultOrgUnit,
-					step: 'query_data'
-				};
-			} else {
-				// No org units available
-				console.warn('🏥 No organisation units available in DHIS2');
-				return {
-					step: 'completed',
-					finalResult: {
-						success: false,
-						message: 'No organisation units available for analytics query',
-						type: 'analytics'
-					}
-				};
-			}
+			return {
+				step: 'completed',
+				finalResult: {
+					success: false,
+					error: "ORG_UNIT_REQUIRED",
+					message: 'Please specify which location / organisation unit you want this data for',
+					type: 'analytics',
+					requiredInput: 'organisationUnit',
+					hint: 'Try adding a location to your query, for example: "for Region A", "in District B", "at Facility X"'
+				}
+			};
 		}
 
 		// Search for organisation units using extracted keywords
-		console.log('🏥 Searching with keywords:', keywordsForSearch);
-		const combinedKeywords = keywordsForSearch.join(' ');
+		console.log('🏥 Searching with keywords:', orgUnitKeywords);
+		const combinedKeywords = orgUnitKeywords.join(' ');
 		const orgUnits = await searchDhis2Metadata('organisationUnits', combinedKeywords, 10);
 
 		console.log(`🏥 Found ${orgUnits.length} organisation unit matches`);
@@ -1394,8 +1595,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 			suggestions,
 			query: state.query,
 			rawSearchResults: orgUnits,
-			keywords: keywordsForSearch,
-			llmResponse: llmResponse.analysis ? llmResponse : undefined
+			keywords: orgUnitKeywords,
+			llmResponse: undefined
 		};
 
 		console.log('🏥 Organisation units metadata:', orgUnitsMetadata);
@@ -1457,13 +1658,56 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 			}
 
 			try {
-				// Request selection through orchestrator (this will show UI and wait)
-				const selectedItems = await state.orchestrator.requestSelection(
-					state.workflowId || 'org_units_workflow',
-					suggestions,
-					true // Allow multiple selection for org units
-				);
+				// ✅ EXACT MATCH AUTO-SELECT INTELLIGENCE
+				// Check for exact name matches first before showing selection UI
+				const autoSelectedItems: any[] = [];
+				const remainingSuggestions: any[] = [];
 
+				for (const suggestion of suggestions) {
+					// Check if any LLM extracted keyword matches exactly (case insensitive, trimmed)
+					const isExactMatch = orgUnitKeywords.some(keyword =>
+						keyword.trim().toLowerCase() === suggestion.name.trim().toLowerCase()
+					);
+
+					if (isExactMatch) {
+						autoSelectedItems.push(suggestion);
+						console.log(`✅ Auto-selected exact match: "${suggestion.name}"`);
+					} else {
+						remainingSuggestions.push(suggestion);
+					}
+				}
+
+				// ✅ If we have enough auto-selected items matching LLM extracted count, NO UI
+				if (autoSelectedItems.length >= orgUnitKeywords.length) {
+					console.log(`✅ All organisation units auto-selected. Skipping selection UI.`);
+
+					const updatedOrgUnitsMetadata = {
+						...orgUnitsMetadata,
+						suggestions: autoSelectedItems,
+						status: 'auto_selected',
+						autoSelected: true
+					};
+
+					advanceProgress(state, 4, 'Processing Selection', 'Locations found automatically, proceeding to data resolution...', false);
+
+					return {
+						orgUnitsMetadata: updatedOrgUnitsMetadata,
+						step: 'query_data'
+					};
+				}
+
+				// ✅ Otherwise show selection UI with modern signature
+				console.log(`⏸️ Showing selection UI: ${autoSelectedItems.length} auto-selected, need ${orgUnitKeywords.length} total`);
+
+				// Request selection through orchestrator with proper title and context
+					const selectedItems = await state.orchestrator.requestSelection({
+						workflowId: state.workflowId,
+						title: "Select Location",
+						description: "Which organisation unit would you like to analyze?",
+						items: remainingSuggestions,
+						allowMultiple: true,
+						confirmButtonText: "Continue Analysis"
+					});
 				console.log('▶️ Received org unit selection from orchestrator:', selectedItems);
 
 				if (selectedItems && selectedItems.length > 0) {
@@ -1494,7 +1738,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 				// Handle case where orchestrator selection fails (e.g., no UI callbacks registered)
 				console.warn('⏸️ Org unit selection failed, falling back to auto-selection:', selectionError.message);
 
-				// Fallback: Auto-select the first suggestion to continue workflow
+				// Fallback: Auto-select the first available org unit to continue workflow
 				const autoSelectedItem = suggestions[0];
 				console.log('▶️ Auto-selected first org unit due to selection failure:', autoSelectedItem);
 
@@ -1780,13 +2024,57 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			}
 
 			try {
-				// Request selection through orchestrator (this will show UI and wait)
-				const selectedItems = await state.orchestrator.requestSelection(
-					state.workflowId || 'disaggregations_workflow',
-					suggestions,
-					true // Allow multiple selection for disaggregations
-				);
+				// ✅ EXACT MATCH AUTO-SELECT INTELLIGENCE
+				// Check for exact name matches first before showing selection UI
+				const autoSelectedItems: any[] = [];
+				const remainingSuggestions: any[] = [];
 
+				for (const suggestion of suggestions) {
+					// Check if any LLM selected category matches exactly (case insensitive, trimmed)
+					const isExactMatch = selectedCategories.some(category =>
+						category.name.trim().toLowerCase() === suggestion.categoryName.trim().toLowerCase()
+					);
+
+					if (isExactMatch) {
+						autoSelectedItems.push(suggestion);
+						console.log(`✅ Auto-selected exact match: "${suggestion.name}"`);
+					} else {
+						remainingSuggestions.push(suggestion);
+					}
+				}
+
+				// ✅ If we have enough auto-selected items matching LLM selected count, NO UI
+				if (autoSelectedItems.length >= selectedCategories.length) {
+					console.log(`✅ All disaggregation categories auto-selected. Skipping selection UI.`);
+
+					const updatedDisaggMetadata = {
+						...disaggregationsMetadata,
+						suggestions: autoSelectedItems,
+						status: 'auto_selected',
+						autoSelected: true
+					};
+
+					advanceProgress(state, 5, 'Processing Selection', 'Categories found automatically, proceeding to data resolution...', false);
+
+					return {
+						disaggregationsMetadata: updatedDisaggMetadata,
+						optionsToCocs: optionToCocs,
+						step: 'query_data'
+					};
+				}
+
+				// ✅ Otherwise show selection UI with modern signature
+				console.log(`⏸️ Showing selection UI: ${autoSelectedItems.length} auto-selected, need ${selectedCategories.length} total`);
+
+				// Request selection through orchestrator with proper title and context
+					const selectedItems = await state.orchestrator.requestSelection({
+						workflowId: state.workflowId,
+						title: "Select Category",
+						description: "Which data category would you like to disaggregate by?",
+						items: remainingSuggestions,
+						allowMultiple: true,
+						confirmButtonText: "Continue Analysis"
+					});
 				console.log('▶️ Received disaggregation selection from orchestrator:', selectedItems);
 
 				if (selectedItems && selectedItems.length > 0) {
@@ -1871,18 +2159,21 @@ async function searchDatePeriods(state: typeof GraphAnnotation.State): Promise<P
 		// Update progress - advance to date period search step
 		advanceProgress(state, 3, 'Extracting Time Periods', 'Finding relevant time periods for your analysis...', false);
 
-		// Extract date/period references using LLM-powered tool
+		// ✅ ALWAYS USE comprehensive extractDatePeriodLLM tool
+		// This tool provides proper period validation, relative date parsing, DHIS2 period format support
+		// and comprehensive date range handling that is not available in the unified extraction
+		console.log('✅ Using comprehensive extractDatePeriodLLM for date period extraction');
+		
 		const llmResult = await extractDatePeriodLLM.invoke({
 			query: state.query,
 			context: 'health analytics - extract time periods for data analysis'
 		});
 
 		const llmResponse = JSON.parse(llmResult as string);
+		const extractedPeriods = llmResponse.periods || [];
 		console.log('📅 LLM date period extraction result:', llmResponse);
 
-		// Extract periods from LLM response
-		const extractedPeriods = llmResponse.periods || [];
-		console.log('📅 Extracted periods from LLM:', extractedPeriods);
+		console.log('📅 Final extracted periods:', extractedPeriods);
 
 		// If no periods found by LLM, use default period (current year)
 		if (extractedPeriods.length === 0) {
@@ -1909,11 +2200,11 @@ async function searchDatePeriods(state: typeof GraphAnnotation.State): Promise<P
 			status: 'extracted',
 			periods: extractedPeriods,
 			query: state.query,
-			method: 'llm_extraction',
+			method: llmResponse ? 'llm_extraction' : 'unified_extraction',
 			llmResponse: llmResponse,
-			matchedPhrases: llmResponse.matchedPhrases || [],
-			periodTypes: llmResponse.periodTypes || [],
-			confidence: llmResponse.confidence || 'medium'
+			matchedPhrases: llmResponse?.matchedPhrases || [],
+			periodTypes: llmResponse?.periodTypes || [],
+			confidence: llmResponse?.confidence || 'high'
 		};
 
 		console.log('📅 Date periods metadata:', datePeriodsMetadata);

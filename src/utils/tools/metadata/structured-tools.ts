@@ -770,13 +770,35 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 		data.forEach(row => {
 			const period = row.period || 'Unknown';
 			const indicator = row.dx || 'Unknown';
+			const orgUnit = row.org_unit || 'Unknown';
 
 			if (!periodOrder.includes(period)) {
 				periodOrder.push(period);
 			}
 
-			// Build series key - include category option if present for disaggregation
+			// ✅ SMART SERIES KEY GENERATION
+			// Automatically creates matrix series based on available dimensions:
+			// - Single indicator + multiple org units: series = org unit name
+			// - Multiple indicators + single org unit: series = indicator name
+			// - Multiple indicators + multiple org units: series = `Indicator - Org Unit`
+			// ✅ All combinations are automatically handled
 			let seriesKey = indicator;
+			
+			// Check if we have multiple org units in the dataset
+			const hasMultipleOrgUnits = Array.from(new Set(data.map(r => r.org_unit))).length > 1;
+			
+			// Always include org unit in series name when multiple are present
+			if (hasMultipleOrgUnits && orgUnit !== 'Unknown') {
+				const hasMultipleIndicators = Array.from(new Set(data.map(r => r.dx))).length > 1;
+				
+				if (hasMultipleIndicators) {
+					// FULL MATRIX MODE: Both multiple indicators and multiple org units
+					seriesKey = `${indicator} - ${orgUnit}`;
+				} else {
+					// SINGLE INDICATOR MULTIPLE ORG UNITS: Show only org unit names as series
+					seriesKey = orgUnit;
+				}
+			}
 
 			if (hasCategoryOptions) {
 				// Extract category option values from co_* columns
@@ -791,7 +813,7 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 				// If we found category options, append them to create unique series
 				if (categoryOptionValues.length > 0) {
 					const categoryLabel = categoryOptionValues.join(' - ');
-					seriesKey = `${indicator} (${categoryLabel})`;
+					seriesKey = `${seriesKey} (${categoryLabel})`;
 					console.log(`📊 Creating disaggregated series: ${seriesKey}`);
 				}
 			}
@@ -801,8 +823,10 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 				seriesMap[seriesKey] = {};
 			}
 
-			// Aggregate values by period for this series
-			seriesMap[seriesKey][period] = (seriesMap[seriesKey][period] || 0) + (row.value || 0);
+		// ✅ NEVER SUM DIFFERENT INDICATORS TOGETHER
+		// ✅ Each indicator gets its own independent series
+		// ✅ No value merging, no summing of different types (counts + percentages)
+		seriesMap[seriesKey][period] = row.value || 0;
 		});
 
 		// Sort periods chronologically by their DHIS2 period IDs

@@ -47,7 +47,30 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     useEffect(() => {
         if (chartData) {
             setFullChartData(chartData);
-            setChartType(chartData.chartType || 'bar');
+            
+            // ✅ AUTO CHART TYPE SELECTION
+            // Automatic multi-series detection:
+            // - 1 series: default bar chart
+            // - 2+ series: grouped multi-series bar chart
+            if (chartData.echarts_option?.series?.length > 1) {
+                console.log(`📊 Auto-detected ${chartData.echarts_option.series.length} series - using grouped multi-series chart`);
+                setChartType('bar'); // Grouped bars is default for multiple series
+                
+                // Enable legend for multi-series charts if not already present
+                if (!chartData.echarts_option.legend) {
+                    chartData.echarts_option.legend = {
+                        show: true,
+                        top: 'top',
+                        type: 'scroll',
+                        textStyle: {
+                            fontSize: 12
+                        }
+                    };
+                }
+            } else {
+                setChartType(chartData.chartType || 'bar');
+            }
+            
             if (chartData.echarts_option) {
                 setEchartsOption(chartData.echarts_option);
                 // Extract filter options from chart data

@@ -1794,7 +1794,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 				console.log('✅ Loaded system org unit levels:', orgUnitLevels.length);
 
 				const levelOptions = orgUnitLevels.map(level => ({
-					id: level.id,
+					id: level.level,
 					name: `${level.name} (Level ${level.level})`,
 					type: 'organisationUnitLevel',
 					level: level.level
@@ -1822,7 +1822,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 				}
 
 				const chosenLevel = selectedLevelResult[0];
-				console.log('✅ User selected level:', chosenLevel.name, 'Level', chosenLevel.level);
+				console.log('✅ User selected level:', chosenLevel.name, 'Level', chosenLevel.id);
 
 				// ✅ STEP 3: FETCH ALL ORG UNITS AT SELECTED LEVEL UNDER SELECTED COUNTRY
 				console.log(`✅ STEP 3: Fetching all ${chosenLevel.name} under ${selectedCountry.name}`);
@@ -1832,8 +1832,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 						resource: 'organisationUnits.json',
 						params: {
 							filter: [
-								`level:eq:${chosenLevel.level}`,
-								`path:like:${selectedCountry.path}`
+								`level:eq:${chosenLevel.id}`,
+								`path:like:${selectedCountry.id}`
 							],
 							fields: 'id,name,path',
 							paging: false
@@ -2574,9 +2574,16 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 		}
 
 		// ✅ FIRST CHECK: Use columns from intent apiHints if available
-		let selectedCategories: Array<{ name: string, id: string }> = [];
+		let selectedCategories: Array<{name: string, id: string}> = [];
 		let unmatchedColumns: string[] = [];
-
+		
+		// ✅ BLACKLIST: System DHIS2 dimensions that are NOT category disaggregations
+		const SYSTEM_DIMENSION_BLACKLIST = new Set([
+			'dx', 'ou', 'pe', 'co', 'ao',
+			'value', 'eventdate', 'lastupdated', 'created', 'deleted',
+			'programstage', 'program', 'trackedentityinstance'
+		]);
+		
 		if (state.intent?.apiHints?.columns && state.intent.apiHints.columns.length > 0) {
 			console.log('🔢 Using categories from intent apiHints.columns:', state.intent.apiHints.columns);
 
@@ -2600,6 +2607,12 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			// Match each column against actual category OPTION names first (not category names)
 			for (const columnName of state.intent.apiHints.columns) {
 				const normalizedColumnName = columnName.trim().toLowerCase();
+
+				// ✅ SKIP ALL BLACKLISTED SYSTEM DIMENSIONS COMPLETELY
+				if (SYSTEM_DIMENSION_BLACKLIST.has(normalizedColumnName)) {
+					console.log(`✅ FILTERED system dimension: "${columnName}" - skipped automatically`);
+					continue;
+				}
 
 				// First try exact match on category option names
 				const matchedCategory = optionNameToCategory.get(normalizedColumnName);

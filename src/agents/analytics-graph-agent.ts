@@ -3,10 +3,21 @@ import { ChatModels } from '../utils/chat-model-factory';
 import { HumanMessage } from '@langchain/core/messages';
 
 // Import analytics tools
-import { buildAnalyticsChart, getDataElements, queryAnalytics, searchDhis2CategoryOptionCombos } from '../utils/tools/metadata';
+import {
+	buildAnalyticsChart,
+	getDataElements,
+	queryAnalytics,
+	searchDhis2CategoryOptionCombos
+} from '../utils/tools/metadata';
 
 // Import LLM-based keyword extraction tools
-import { extractOrgUnitKeywordsLLM, filterCategoriesForDisaggregationLLM, extractDatePeriodLLM, extractIndicatorKeywordsLLM, extractAnalyticsIntent } from '../utils/tools/metadata';
+import {
+	extractOrgUnitKeywordsLLM,
+	filterCategoriesForDisaggregationLLM,
+	extractDatePeriodLLM,
+	extractIndicatorKeywordsLLM,
+	extractAnalyticsIntent
+} from '../utils/tools/metadata';
 
 // Import 2-level search function
 import { searchDhis2Metadata } from '../utils/tools/metadata/helpers';
@@ -21,91 +32,91 @@ import { indexedDBStorage } from '../utils/indexeddb-storage';
 import { conversationContext } from '../utils/conversation-context';
 
 function saveAnalyticsDataDirectly(analyticsResult: any): void {
-    try {
-        // Get current session ID to associate analytics with session
-        const currentSession = conversationContext.getCurrentSession();
-        const sessionId = currentSession.sessionId || 'unknown_session';
+	try {
+		// Get current session ID to associate analytics with session
+		const currentSession = conversationContext.getCurrentSession();
+		const sessionId = currentSession.sessionId || 'unknown_session';
 
-        // Create a compressed version with essential data only
-        const analyticsData = {
-            id: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            timestamp: Date.now(),
-            query: analyticsResult.query || '',
-            summary: analyticsResult.message || '',
-            sessionId: sessionId, // Associate with current session
-            chartData: analyticsResult.chartData || null,
-            dataSummary: analyticsResult.dataSummary || null,
-            metadata: {
-                indicators: analyticsResult.metadata?.suggestions?.map((s: any) => s.name) || [],
-                periods: analyticsResult.datePeriodsMetadata?.periods || [],
-                orgUnits: analyticsResult.orgUnitsMetadata?.suggestions?.map((s: any) => s.name) || []
-            },
-            // Store minimal data needed for follow-up analysis
-            rawData: {
-                chartValues: analyticsResult.dataSummary ? {
-                    totalRecords: analyticsResult.dataSummary.totalRecords,
-                    totalValue: analyticsResult.dataSummary.totalValue,
-                    averageValue: analyticsResult.dataSummary.averageValue,
-                    minValue: analyticsResult.dataSummary.minValue,
-                    maxValue: analyticsResult.dataSummary.maxValue,
-                    periodData: analyticsResult.chartData?.echarts_option?.xAxis?.data || [],
-                    valueData: analyticsResult.chartData?.echarts_option?.series?.[0]?.data || []
-                } : null
-            }
-        };
+		// Create a compressed version with essential data only
+		const analyticsData = {
+			id: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+			timestamp: Date.now(),
+			query: analyticsResult.query || '',
+			summary: analyticsResult.message || '',
+			sessionId: sessionId, // Associate with current session
+			chartData: analyticsResult.chartData || null,
+			dataSummary: analyticsResult.dataSummary || null,
+			metadata: {
+				indicators: analyticsResult.metadata?.suggestions?.map((s: any) => s.name) || [],
+				periods: analyticsResult.datePeriodsMetadata?.periods || [],
+				orgUnits: analyticsResult.orgUnitsMetadata?.suggestions?.map((s: any) => s.name) || []
+			},
+			// Store minimal data needed for follow-up analysis
+			rawData: {
+				chartValues: analyticsResult.dataSummary ? {
+					totalRecords: analyticsResult.dataSummary.totalRecords,
+					totalValue: analyticsResult.dataSummary.totalValue,
+					averageValue: analyticsResult.dataSummary.averageValue,
+					minValue: analyticsResult.dataSummary.minValue,
+					maxValue: analyticsResult.dataSummary.maxValue,
+					periodData: analyticsResult.chartData?.echarts_option?.xAxis?.data || [],
+					valueData: analyticsResult.chartData?.echarts_option?.series?.[0]?.data || []
+				} : null
+			}
+		};
 
-        indexedDBStorage.saveAnalytics(analyticsData);
-        console.log('💾 Analytics data saved directly to IndexedDB for session:', sessionId, analyticsData);
-    } catch (error) {
-        console.warn('Failed to save analytics data directly:', error);
-    }
+		indexedDBStorage.saveAnalytics(analyticsData);
+		console.log('💾 Analytics data saved directly to IndexedDB for session:', sessionId, analyticsData);
+	} catch (error) {
+		console.warn('Failed to save analytics data directly:', error);
+	}
 }
 
 async function getAnalyticsDataDirectly(): Promise<any | null> {
-    try {
-        // Get current session ID to filter analytics by session
-        const currentSession = conversationContext.getCurrentSession();
-        const sessionId = currentSession.sessionId;
+	try {
+		// Get current session ID to filter analytics by session
+		const currentSession = conversationContext.getCurrentSession();
+		const sessionId = currentSession.sessionId;
 
-        if (!sessionId) {
-            console.log('⚠️ No active session found, skipping analytics data retrieval');
-            return null;
-        }
+		if (!sessionId) {
+			console.log('⚠️ No active session found, skipping analytics data retrieval');
+			return null;
+		}
 
-        // Load analytics data for the current session only
-        const data = await indexedDBStorage.loadLatestAnalyticsForSession(sessionId);
-        if (data) {
-            // Check if data is recent (within last hour) and belongs to current session
-            const isRecent = Date.now() - data.timestamp < 60 * 60 * 1000;
-            if (isRecent) {
-                console.log('📖 Analytics data retrieved from IndexedDB for current session:', sessionId);
-                return data;
-            } else {
-                console.log('⏰ Analytics data is too old, ignoring');
-                // Note: Old data will be cleaned up by the storage quota management
-            }
-        } else {
-            console.log('📭 No analytics data found for current session:', sessionId);
-        }
-    } catch (error) {
-        console.warn('Failed to retrieve analytics data directly:', error);
-    }
-    return null;
+		// Load analytics data for the current session only
+		const data = await indexedDBStorage.loadLatestAnalyticsForSession(sessionId);
+		if (data) {
+			// Check if data is recent (within last hour) and belongs to current session
+			const isRecent = Date.now() - data.timestamp < 60 * 60 * 1000;
+			if (isRecent) {
+				console.log('📖 Analytics data retrieved from IndexedDB for current session:', sessionId);
+				return data;
+			} else {
+				console.log('⏰ Analytics data is too old, ignoring');
+				// Note: Old data will be cleaned up by the storage quota management
+			}
+		} else {
+			console.log('📭 No analytics data found for current session:', sessionId);
+		}
+	} catch (error) {
+		console.warn('Failed to retrieve analytics data directly:', error);
+	}
+	return null;
 }
 
 // Recovery context interface for analytics agent
 export interface AnalyticsRecoveryContext {
-    failedStep: string;
-    errorDetails: any;
-    recoveryOptions: RecoveryOption[];
-    userGuidance: string;
+	failedStep: string;
+	errorDetails: any;
+	recoveryOptions: RecoveryOption[];
+	userGuidance: string;
 }
 
 export interface RecoveryOption {
-    id: string;
-    label: string;
-    description: string;
-    action: () => Promise<Partial<typeof GraphAnnotation.State>>;
+	id: string;
+	label: string;
+	description: string;
+	action: () => Promise<Partial<typeof GraphAnnotation.State>>;
 }
 
 // Define the state using Annotation API (as per LangGraph official docs)
@@ -252,12 +263,14 @@ const GraphAnnotation = Annotation.Root({
 
 	cocMapping: Annotation<any>({
 		reducer: (left, right) => right,
-		default: () => {},
+		default: () => {
+		},
 	}),
 
 	optionsToCocs: Annotation<any>({
 		reducer: (left, right) => right,
-		default: () => {},
+		default: () => {
+		},
 	}),
 
 	// ✅ NEW INTENT EXTRACTION STATE (PHASE 2)
@@ -282,8 +295,8 @@ const GraphAnnotation = Annotation.Root({
 		co: any[],
 		filters: any[]
 	}>({
-		reducer: (left, right) => ({ ...left, ...right }),
-		default: () => ({ dx: [], ou: [], pe: [], co: [], filters: [] })
+		reducer: (left, right) => ({...left, ...right}),
+		default: () => ({dx: [], ou: [], pe: [], co: [], filters: []})
 	}),
 
 	// Intent conditions processing state
@@ -333,7 +346,7 @@ const GraphAnnotation = Annotation.Root({
 			y2?: string;
 		};
 	}>({
-		reducer: (left, right) => ({ ...left, ...right }),
+		reducer: (left, right) => ({...left, ...right}),
 		default: () => ({
 			showLegend: true,
 			showGrid: true,
@@ -347,33 +360,33 @@ const GraphAnnotation = Annotation.Root({
 // LLM-based intent classification with conversation context awareness
 // Progress tracking helper with improved step management
 function updateProgress(step: number, stepName: string, message: string, isIndeterminate = false): Partial<typeof GraphAnnotation.State> {
-    return {
-        workflowProgress: {
-            currentStep: step,
-            totalSteps: 8,
-            stepName,
-            message,
-            isIndeterminate
-        }
-    };
+	return {
+		workflowProgress: {
+			currentStep: step,
+			totalSteps: 8,
+			stepName,
+			message,
+			isIndeterminate
+		}
+	};
 }
 
 // Helper to advance progress and send UI updates
 function advanceProgress(state: typeof GraphAnnotation.State, step: number, stepName: string, message: string, isIndeterminate = false): void {
-    // Update the workflow progress state
-    const progressUpdate = updateProgress(step, stepName, message, isIndeterminate);
+	// Update the workflow progress state
+	const progressUpdate = updateProgress(step, stepName, message, isIndeterminate);
 
-    // Send progress message to orchestrator for UI display
-    state.orchestrator?.addProgressMessage(message, {
-        progress: step / 8 * 100, // Convert to percentage
-        currentStep: step,
-        totalSteps: 8,
-        stepName,
-        isIndeterminate,
-        workflowId: state.workflowId
-    });
+	// Send progress message to orchestrator for UI display
+	state.orchestrator?.addProgressMessage(message, {
+		progress: step / 8 * 100, // Convert to percentage
+		currentStep: step,
+		totalSteps: 8,
+		stepName,
+		isIndeterminate,
+		workflowId: state.workflowId
+	});
 
-    console.log(`📊 Progress: Step ${step}/8 - ${stepName}: ${message}`);
+	console.log(`📊 Progress: Step ${step}/8 - ${stepName}: ${message}`);
 }
 
 async function classifyIntent(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
@@ -589,33 +602,36 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 		const collision: string[] = [];
 		const autoSelection: any[] = [];
 		const processedIds = new Set<string>();
+		const selectedKeywords: string[] = [];
+		const unselectedKeywords: string[] = [];
 
 		// Process each extracted keyword INDIVIDUALLY
 		for (const keyword of indicatorKeywords) {
 			// Clean keyword: remove quotes, trim whitespace
 			const cleanedKeyword = keyword.trim().replace(/^['"]|['"]$/g, '');
-			
+
 			console.log(`🔍 Processing keyword: "${cleanedKeyword}"`);
-			
+
 			// Run separate search FOR THIS KEYWORD ONLY
 			const indicatorResults = await searchDhis2Metadata('indicators', cleanedKeyword, 1000);
 			const dataElementResults = await searchDhis2Metadata('dataElements', cleanedKeyword, 1000);
-			
+
 			console.log(`✅ Results: ${indicatorResults.length} indicators, ${dataElementResults.length} dataElements`);
 
 			// Find EXACT MATCH ONLY (no partial matches)
-			const indicatorMatch = indicatorResults.find(i => 
-				i.id.trim() === cleanedKeyword.trim() || 
+			const indicatorMatch = indicatorResults.find(i =>
+				i.id.trim() === cleanedKeyword.trim() ||
 				i.name.trim().toLowerCase() === cleanedKeyword.trim().toLowerCase()
 			);
-			
-			const dataElementMatch = dataElementResults.find(i => 
-				i.id.trim() === cleanedKeyword.trim() || 
+
+			const dataElementMatch = dataElementResults.find(i =>
+				i.id.trim() === cleanedKeyword.trim() ||
 				i.name.trim().toLowerCase() === cleanedKeyword.trim().toLowerCase()
 			);
 
 			if (indicatorMatch && dataElementMatch) {
 				// ✅ COLLISION: exists in both types
+				unselectedKeywords.push(keyword)
 				if (!processedIds.has(indicatorMatch.id)) {
 					selection.push({
 						name: indicatorMatch.name,
@@ -634,9 +650,9 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 				}
 				collision.push(cleanedKeyword);
 				console.log(`⚠️ Collision detected for: "${cleanedKeyword}" - added 2 items to selection`);
-			}
-			else if (indicatorMatch && !dataElementMatch) {
+			} else if (indicatorMatch && !dataElementMatch) {
 				// ✅ AUTO SELECT: only exists as indicator
+				selectedKeywords.push(keyword);
 				if (!processedIds.has(indicatorMatch.id)) {
 					autoSelection.push({
 						name: indicatorMatch.name,
@@ -646,9 +662,9 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 					processedIds.add(indicatorMatch.id);
 					console.log(`✅ Auto-selected indicator: "${indicatorMatch.name}"`);
 				}
-			}
-			else if (dataElementMatch && !indicatorMatch) {
+			} else if (dataElementMatch && !indicatorMatch) {
 				// ✅ AUTO SELECT: only exists as dataElement
+				selectedKeywords.push(keyword);
 				if (!processedIds.has(dataElementMatch.id)) {
 					autoSelection.push({
 						name: dataElementMatch.name,
@@ -658,11 +674,10 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 					processedIds.add(dataElementMatch.id);
 					console.log(`✅ Auto-selected dataElement: "${dataElementMatch.name}"`);
 				}
-			}
-			else {
+			} else {
 				// ✅ NO EXACT MATCH: add all search results to selection
 				console.log(`⚠️ No exact match for "${cleanedKeyword}" - adding all ${indicatorResults.length + dataElementResults.length} results to selection`);
-				
+				unselectedKeywords.push(keyword);
 				for (const item of indicatorResults) {
 					if (!processedIds.has(item.id)) {
 						selection.push({
@@ -673,7 +688,7 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 						processedIds.add(item.id);
 					}
 				}
-				
+
 				for (const item of dataElementResults) {
 					if (!processedIds.has(item.id)) {
 						selection.push({
@@ -689,7 +704,7 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 
 		// Create metadata object in expected format
 		const metadata = {
-			status: selection.length > 0 ? 'multiple_matches' : 
+			status: selection.length > 0 ? 'multiple_matches' :
 				autoSelection.length >= 1 ? 'auto_selected' : 'no_match',
 			suggestions: [...autoSelection, ...selection],
 			query: state.query,
@@ -740,33 +755,53 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 
 				// ✅ ONLY SHOW SELECTION UI IF THERE ARE ITEMS TO SELECT
 				let userSelectedItems: any[] = [];
-				
+
 				if (selection.length > 0) {
-					// ✅ Build dialog with proper requested items list (HTML <br> for proper line breaks)
-					let dialogDescription = "You requested the following items:<br><br>";
-					
-					// List ALL extracted keywords first
-					indicatorKeywords.forEach(keyword => {
-						dialogDescription += `• ${keyword.trim().replace(/^['"]|['"]$/g, '')}<br>`;
+					// ✅ Filter out auto-selected items from selection UI
+					const itemsToShow = selection.filter(item => {
+						// Only show items that are NOT for already auto-selected keywords
+						const itemName = item.name.trim().toLowerCase();
+						return !selectedKeywords.some(selectedKeyword =>
+							selectedKeyword.trim().toLowerCase() === itemName
+						);
 					});
-					
-					// Add collision warnings if any exist
-					if (collision.length > 0) {
-						dialogDescription += "<br>Additional information:<br>";
-						collision.forEach(name => {
-							dialogDescription += `⚠️ ${name} appears both as a Data Element and an Indicator<br>`;
+
+					// ✅ Build dialog with proper requested items list (HTML <br> for proper line breaks)
+					let dialogDescription = "You requested the following items:<br/><br/>";
+
+					// ✅ First list auto-selected items
+					if (autoSelection.length > 0) {
+						dialogDescription += "✅ Automatically selected:<br/>";
+						autoSelection.forEach(item => {
+							dialogDescription += `• ${item.name}<br/>`;
+						});
+						dialogDescription += "<br/>";
+					}
+
+					// ✅ Then list items requiring user selection
+					if (unselectedKeywords.length > 0) {
+						dialogDescription += "⚠️ Please select which versions you would like to use:<br/>";
+						unselectedKeywords.forEach(keyword => {
+							dialogDescription += `• ${keyword.trim().replace(/^['"]|['"]$/g, '')}<br/>`;
 						});
 					}
-					
-					dialogDescription += "<br>Please select which versions you would like to use.";
 
-					console.log(`⏸️ Showing selection UI with ${selection.length} items`);
-					
+					// Add collision warnings if any exist
+					if (collision.length > 0) {
+						dialogDescription += "<br/>Additional information:<br/>";
+						collision.forEach(name => {
+							dialogDescription += `⚠️ ${name} appears both as a Data Element and an Indicator<br/>`;
+						});
+					}
+
+					let userSelectedItems: any[] = [];
+
+					// Only show selection UI if there are actual items to select
 					const selectedResult = await state.orchestrator.requestSelection({
 						workflowId: state.workflowId,
 						title: "Indicators / Data Elements selection",
 						description: dialogDescription,
-						items: selection,
+						items: itemsToShow,
 						allowMultiple: true,
 						confirmButtonText: "Continue Analysis"
 					});
@@ -797,21 +832,21 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 
 				// ✅ BUILD MAPPING BETWEEN LLM INTENT NAMES AND ACTUAL SELECTED INDICATORS
 				const intentIndicatorMapping: Record<string, any> = {};
-				
+
 				// For each indicator name in LLM intent
 				for (const llmIndicatorName of intent.dimensions.dx) {
 					// Find matching indicator from final selection
 					const matchedIndicator = finalItems.find(indicator => {
 						const indicatorName = indicator.name.trim().toLowerCase();
 						const llmName = llmIndicatorName.trim().toLowerCase();
-						
+
 						// Exact match first
 						if (indicatorName === llmName) return true;
 						// LLM name is substring of actual name
 						if (indicatorName.includes(llmName)) return true;
 						// Actual name is substring of LLM name
 						if (llmName.includes(indicatorName)) return true;
-						
+
 						return false;
 					});
 
@@ -839,7 +874,7 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 					intent,
 					intentIndicatorMapping,
 					metadata: updatedMetadata,
-					dimensions: intent.dimensions || { dx: [], ou: [], pe: [], co: [], filters: [] },
+					dimensions: intent.dimensions || {dx: [], ou: [], pe: [], co: [], filters: []},
 					conditions: intent.conditions || [],
 					ranking: intent.ranking || null,
 					visualization: intent.visualization || null,
@@ -865,7 +900,7 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 				return {
 					intent,
 					metadata: updatedMetadata,
-					dimensions: intent.dimensions || { dx: [], ou: [], pe: [], co: [], filters: [] },
+					dimensions: intent.dimensions || {dx: [], ou: [], pe: [], co: [], filters: []},
 					conditions: intent.conditions || [],
 					ranking: intent.ranking || null,
 					visualization: intent.visualization || null,
@@ -873,16 +908,16 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 				};
 			}
 		} else {
-		// Single match or auto-selected - proceed to query
-		return {
-			intent,
-			metadata,
-			dimensions: intent.dimensions || { dx: [], ou: [], pe: [], co: [], filters: [] },
-			conditions: intent.conditions || [],
-			ranking: intent.ranking || null,
-			visualization: intent.visualization || null,
-			step: 'search_date_periods'
-		};
+			// Single match or auto-selected - proceed to query
+			return {
+				intent,
+				metadata,
+				dimensions: intent.dimensions || {dx: [], ou: [], pe: [], co: [], filters: []},
+				conditions: intent.conditions || [],
+				ranking: intent.ranking || null,
+				visualization: intent.visualization || null,
+				step: 'search_date_periods'
+			};
 		}
 
 	} catch (error) {
@@ -1353,7 +1388,7 @@ async function summarizeAnalyticsData(state: typeof GraphAnnotation.State): Prom
 		}
 
 		// Use the existing dataSummary with correct statistics from chart processing
-		const dataSummary = { ...state.dataSummary };
+		const dataSummary = {...state.dataSummary};
 
 		// Generate humanized summary using LLM
 		const summaryPrompt = `
@@ -1645,20 +1680,20 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 		// Check new orgUnitConfig structure first (correct format)
 		if (state.intent?.orgUnitConfig) {
 			console.log('✅ Found orgUnitConfig in extracted intent:', state.intent.orgUnitConfig);
-			
+
 			// Read all fields from new intent structure
-			const { specificNames, level, grouping } = state.intent.orgUnitConfig;
-			
+			const {specificNames, level, grouping} = state.intent.orgUnitConfig;
+
 			if (specificNames && Array.isArray(specificNames) && specificNames.length > 0) {
 				orgUnitKeywords = specificNames;
 				console.log('✅ Mapped specificNames from orgUnitConfig:', orgUnitKeywords);
 			}
-			
+
 			if (level) {
 				selectedLevel = level;
 				console.log('✅ Found level selection in intent:', selectedLevel);
 			}
-			
+
 			if (grouping) {
 				selectedGroup = grouping;
 				console.log('✅ Found grouping selection in intent:', selectedGroup);
@@ -1673,8 +1708,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 		// ✅ FIRST: Handle explicit level/grouping requests BEFORE falling back to user default
 		if (selectedLevel || selectedGroup) {
-			console.log('✅ Found level/grouping request in intent:', { selectedLevel, selectedGroup });
-			
+			console.log('✅ Found level/grouping request in intent:', {selectedLevel, selectedGroup});
+
 			// ✅ Handle grouping aliases like "by_country" → maps to level = "country"
 			if (selectedGroup && !selectedLevel) {
 				// Extract level name from grouping value (remove "by_" prefix)
@@ -1685,11 +1720,11 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 			}
 
 			try {
-				const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+				const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
 
 				// ✅ STEP 1: FIRST ASK USER TO SELECT COUNTRY (ORG UNIT LEVEL 2)
 				console.log('✅ STEP 1: Fetching all countries (Level 2 organisation units)');
-				
+
 				const countriesResponse = await (Dhis2Api as any).query({
 					organisationUnits: {
 						resource: 'organisationUnits.json',
@@ -1744,7 +1779,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 				// ✅ STEP 2: NOW ASK USER TO SELECT ACTUAL ORG UNIT LEVEL
 				console.log('✅ STEP 2: Fetching system org unit levels');
-				
+
 				const levelsResponse = await (Dhis2Api as any).query({
 					organisationUnitLevels: {
 						resource: 'organisationUnitLevels.json',
@@ -1754,7 +1789,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 						}
 					}
 				});
-				
+
 				const orgUnitLevels = levelsResponse?.data?.organisationUnitLevels?.organisationUnitLevels || [];
 				console.log('✅ Loaded system org unit levels:', orgUnitLevels.length);
 
@@ -1874,7 +1909,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 			try {
 				// ✅ Fetch current authenticated user and their organisation units
-				const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+				const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
 				const meResponse = await (Dhis2Api as any).query({
 					me: {
 						resource: 'me.json',
@@ -1955,10 +1990,10 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 		// ✅ ORG UNIT CLASSIFICATION: SPECIFIC vs LEVEL
 		// Fetch system org unit levels for matching
-		let orgUnitLevels: Array<{level: number, name: string, id: string}> = [];
-		
+		let orgUnitLevels: Array<{ level: number, name: string, id: string }> = [];
+
 		try {
-			const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+			const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
 			const levelsResponse = await (Dhis2Api as any).query({
 				organisationUnitLevels: {
 					resource: 'organisationUnitLevels.json',
@@ -1968,7 +2003,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 					}
 				}
 			});
-			
+
 			orgUnitLevels = levelsResponse?.data?.organisationUnitLevels?.organisationUnitLevels || [];
 			console.log('✅ Loaded actual org unit levels from system:', orgUnitLevels.length);
 		} catch (levelError) {
@@ -1990,9 +2025,9 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 		for (const keyword of orgUnitKeywords) {
 			const normalizedKeyword = keyword.trim().toLowerCase();
-			
+
 			// Check direct matches first
-			let levelMatch = orgUnitLevels.find(level => 
+			let levelMatch = orgUnitLevels.find(level =>
 				level.name.trim().toLowerCase() === normalizedKeyword ||
 				`level ${level.level}` === normalizedKeyword
 			);
@@ -2002,7 +2037,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 				for (const [levelName, aliases] of Object.entries(levelAliases)) {
 					if (aliases.includes(normalizedKeyword)) {
 						// Find matching system level for this alias
-						levelMatch = orgUnitLevels.find(level => 
+						levelMatch = orgUnitLevels.find(level =>
 							level.name.trim().toLowerCase() === levelName
 						);
 						if (levelMatch) {
@@ -2057,7 +2092,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 					// Fetch all children of this parent at the requested level
 					try {
-						const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+						const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
 						const levelChildrenResponse = await (Dhis2Api as any).query({
 							organisationUnits: {
 								resource: 'organisationUnits.json',
@@ -2135,9 +2170,9 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 
 				if (selectedLevel && selectedLevel.length > 0) {
 					console.log('✅ User selected level:', selectedLevel[0]);
-					
+
 					// Fetch ALL org units at this selected level
-					const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+					const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
 					const levelOrgUnitsResponse = await (Dhis2Api as any).query({
 						organisationUnits: {
 							resource: 'organisationUnits.json',
@@ -2317,15 +2352,32 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 				// ✅ Otherwise show selection UI with modern signature
 				console.log(`⏸️ Showing selection UI: ${autoSelectedItems.length} auto-selected, need ${orgUnitKeywords.length} total`);
 
-				// Request selection through orchestrator with proper title and context
-					const selectedItems = await state.orchestrator.requestSelection({
-						workflowId: state.workflowId,
-						title: "Select Location",
-						description: "Which organisation unit would you like to analyze?",
-						items: remainingSuggestions,
-						allowMultiple: true,
-						confirmButtonText: "Continue Analysis"
+				// ✅ Build dialog description showing auto-selected items
+				let dialogDescription = "";
+
+				// First list auto-selected items
+				if (autoSelectedItems.length > 0) {
+					dialogDescription += "✅ Automatically selected:<br>";
+					autoSelectedItems.forEach(item => {
+						dialogDescription += `• ${item.name}<br>`;
 					});
+					dialogDescription += "<br>";
+				}
+
+				// Then list items requiring user selection
+				if (remainingSuggestions.length > 0) {
+					dialogDescription += "⚠️ Please select which locations you would like to use:";
+				}
+
+				// Request selection through orchestrator with proper title and context
+				const selectedItems = await state.orchestrator.requestSelection({
+					workflowId: state.workflowId,
+					title: "Select Location",
+					description: dialogDescription,
+					items: remainingSuggestions,
+					allowMultiple: true,
+					confirmButtonText: "Continue Analysis"
+				});
 				console.log('▶️ Received org unit selection from orchestrator:', selectedItems);
 
 				if (selectedItems && selectedItems.length > 0) {
@@ -2398,10 +2450,10 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 	try {
 		// ✅ FIRST GUARD CHECK: Absolute validation - ALL items MUST be data elements
 		const hasOnlyDataElements = state.metadata?.suggestions?.every((s: any) => s.type === 'dataElement');
-		
+
 		if (!hasOnlyDataElements) {
 			console.log('⚠️ GUARD CLAUSE: Selection contains indicators - DISABLING all disaggregation processing');
-			
+
 			return {
 				disaggregationsMetadata: {
 					status: 'disabled_indicators_present',
@@ -2421,29 +2473,29 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 		// Initialize cocMapping for the entire function scope
 		let cocMapping: Record<string, string[]> = state.cocMapping || {};
 
-			// Fetch actual organisation unit levels from DHIS2 system
-	let orgUnitLevels: Array<{level: number, name: string, id: string}> = [];
-	
-	try {
-		const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
-		const levelsResponse = await (Dhis2Api as any).query({
-			organisationUnitLevels: {
-				resource: 'organisationUnitLevels.json',
-				params: {
-					fields: 'id,name,level',
-					paging: false
-				}
-			}
-		});
-		
-		orgUnitLevels = levelsResponse?.data?.organisationUnitLevels?.organisationUnitLevels || [];
-		console.log('✅ Loaded actual org unit levels from system:', orgUnitLevels.length);
-	} catch (levelError) {
-		console.warn('⚠️ Failed to load organisation unit levels:', levelError.message);
-	}
+		// Fetch actual organisation unit levels from DHIS2 system
+		let orgUnitLevels: Array<{ level: number, name: string, id: string }> = [];
 
-	// Extract available categories directly from dataElements categoryCombo (no extra API calls needed)
-		let availableCategories: Array<{name: string, id: string}> = [];
+		try {
+			const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
+			const levelsResponse = await (Dhis2Api as any).query({
+				organisationUnitLevels: {
+					resource: 'organisationUnitLevels.json',
+					params: {
+						fields: 'id,name,level',
+						paging: false
+					}
+				}
+			});
+
+			orgUnitLevels = levelsResponse?.data?.organisationUnitLevels?.organisationUnitLevels || [];
+			console.log('✅ Loaded actual org unit levels from system:', orgUnitLevels.length);
+		} catch (levelError) {
+			console.warn('⚠️ Failed to load organisation unit levels:', levelError.message);
+		}
+
+		// Extract available categories directly from dataElements categoryCombo (no extra API calls needed)
+		let availableCategories: Array<{ name: string, id: string }> = [];
 
 		// Check if we have dataElements in metadata
 		if (state.metadata?.suggestions?.some((s: any) => s.type === 'dataElement')) {
@@ -2454,12 +2506,12 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			// Fetch dataElements with category structure (this contains full categoryCombo)
 			try {
 				const toolResult = await getDataElements.invoke({
-					filters: { id: `in:[${dataElementIds.join(',')}]` }
+					filters: {id: `in:[${dataElementIds.join(',')}]`}
 				});
 				const dataElementsWithCategories = JSON.parse(toolResult as string);
 
 				// Format: {"dataElements": [{"categoryCombo": {"categories": [{"name":"","id":"","categoryOptions":[...]}]}}]}
-				const categoryMap = new Map<string, {name: string, categoryOptions: any[]}>();
+				const categoryMap = new Map<string, { name: string, categoryOptions: any[] }>();
 
 				dataElementsWithCategories.dataElements?.forEach((de: any) => {
 					de.categoryCombo?.categories?.forEach((cat: any) => {
@@ -2474,7 +2526,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				});
 
 				// Convert to simple format for LLM filtering
-				availableCategories = Array.from(categoryMap.entries()).map(([id, {name}]) => ({ id, name }));
+				availableCategories = Array.from(categoryMap.entries()).map(([id, {name}]) => ({id, name}));
 				console.log('🔢 Available categories from dataElements:', availableCategories);
 
 				// Store full category details for later dimension generation
@@ -2487,7 +2539,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				if (categoryComboIds.length > 0) {
 					try {
 						// Use direct API call instead of search tool for categoryCombo filtering
-						const { Dhis2Api } = await import('../utils/app-runtime/dhis2-api');
+						const {Dhis2Api} = await import('../utils/app-runtime/dhis2-api');
 
 						const cocResponse = await (Dhis2Api as any).query({
 							categoryOptionCombos: {
@@ -2522,19 +2574,19 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 		}
 
 		// ✅ FIRST CHECK: Use columns from intent apiHints if available
-		let selectedCategories: Array<{name: string, id: string}> = [];
+		let selectedCategories: Array<{ name: string, id: string }> = [];
 		let unmatchedColumns: string[] = [];
-		
+
 		if (state.intent?.apiHints?.columns && state.intent.apiHints.columns.length > 0) {
 			console.log('🔢 Using categories from intent apiHints.columns:', state.intent.apiHints.columns);
-			
+
 			// Build map of all available category options → parent category
-			const optionNameToCategory = new Map<string, {name: string, id: string}>();
-			
+			const optionNameToCategory = new Map<string, { name: string, id: string }>();
+
 			// Extract all category options from the full category details
 			const fullCategoryDetails = (state as any).fullCategoryDetails || new Map();
 			for (const [categoryId, categoryInfo] of fullCategoryDetails.entries()) {
-				const { name: categoryName, categoryOptions } = categoryInfo as any;
+				const {name: categoryName, categoryOptions} = categoryInfo as any;
 				categoryOptions.forEach((opt: any) => {
 					optionNameToCategory.set(opt.name.trim().toLowerCase(), {
 						name: categoryName,
@@ -2542,16 +2594,16 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 					});
 				});
 			}
-			
+
 			console.log(`🔢 Loaded ${optionNameToCategory.size} category options for matching`);
-			
+
 			// Match each column against actual category OPTION names first (not category names)
 			for (const columnName of state.intent.apiHints.columns) {
 				const normalizedColumnName = columnName.trim().toLowerCase();
-				
+
 				// First try exact match on category option names
 				const matchedCategory = optionNameToCategory.get(normalizedColumnName);
-				
+
 				if (matchedCategory) {
 					// Avoid duplicate categories
 					if (!selectedCategories.find(c => c.id === matchedCategory.id)) {
@@ -2560,10 +2612,10 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 					console.log(`✅ Matched column "${columnName}" → option found in category: ${matchedCategory.name}`);
 				} else {
 					// Fallback: try matching against category name directly
-					const categoryMatch = availableCategories.find(cat => 
+					const categoryMatch = availableCategories.find(cat =>
 						cat.name.trim().toLowerCase() === normalizedColumnName
 					);
-					
+
 					if (categoryMatch) {
 						if (!selectedCategories.find(c => c.id === categoryMatch.id)) {
 							selectedCategories.push(categoryMatch);
@@ -2575,11 +2627,11 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 					}
 				}
 			}
-			
+
 			// If we have unmatched columns, show selection UI for these only
 			if (unmatchedColumns.length > 0 && state.orchestrator) {
 				console.log(`🔢 Showing selection UI for ${unmatchedColumns.length} unmatched columns`);
-				
+
 				try {
 					const selectedItems = await state.orchestrator.requestSelection({
 						workflowId: state.workflowId,
@@ -2589,7 +2641,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 						allowMultiple: true,
 						confirmButtonText: "Continue Analysis"
 					});
-					
+
 					if (selectedItems && selectedItems.length > 0) {
 						selectedItems.forEach((item: any) => {
 							if (!selectedCategories.find(c => c.id === item.id)) {
@@ -2602,7 +2654,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 					console.warn('🔢 Column selection failed, proceeding with automatically matched categories only');
 				}
 			}
-		} 
+		}
 		// ✅ FALLBACK: Use LLM extraction if no columns found in intent
 		else {
 			console.log('🔢 No columns in intent, falling back to LLM extraction');
@@ -2616,7 +2668,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 
 			selectedCategories = llmResponse.selectedCategories || [];
 		}
-		
+
 		console.log('🔢 Final selected categories:', selectedCategories, state);
 
 		const hasAvailableCategories = availableCategories.length > 0;
@@ -2648,7 +2700,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			const fullCategoryInfo = (state as any).fullCategoryDetails?.get(selectedCategory.id);
 			if (!fullCategoryInfo) continue;
 
-			const { categoryOptions: allOptions } = fullCategoryInfo;
+			const {categoryOptions: allOptions} = fullCategoryInfo;
 
 			// Get valid options (those that appear in COCs)
 			const validOptions = allOptions.filter((opt: any) => {
@@ -2678,7 +2730,7 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 			const fullCategoryInfo = fullCategoryDetails.get(selectedCategory.id);
 			if (!fullCategoryInfo) continue;
 
-			const { name: categoryName, categoryOptions: allOptions } = fullCategoryInfo;
+			const {name: categoryName, categoryOptions: allOptions} = fullCategoryInfo;
 
 			// Cross-reference with cocMapping to only include options that appear in COCs
 			const validOptions = allOptions.filter((opt: any) => {
@@ -2808,14 +2860,14 @@ async function searchDisaggregations(state: typeof GraphAnnotation.State): Promi
 				console.log(`⏸️ Showing selection UI: ${autoSelectedItems.length} auto-selected, need ${selectedCategories.length} total`);
 
 				// Request selection through orchestrator with proper title and context
-					const selectedItems = await state.orchestrator.requestSelection({
-						workflowId: state.workflowId,
-						title: "Select Category",
-						description: "Which data category would you like to disaggregate by?",
-						items: remainingSuggestions,
-						allowMultiple: true,
-						confirmButtonText: "Continue Analysis"
-					});
+				const selectedItems = await state.orchestrator.requestSelection({
+					workflowId: state.workflowId,
+					title: "Select Category",
+					description: "Which data category would you like to disaggregate by?",
+					items: remainingSuggestions,
+					allowMultiple: true,
+					confirmButtonText: "Continue Analysis"
+				});
 				console.log('▶️ Received disaggregation selection from orchestrator:', selectedItems);
 
 				if (selectedItems && selectedItems.length > 0) {
@@ -2904,7 +2956,7 @@ async function searchDatePeriods(state: typeof GraphAnnotation.State): Promise<P
 		// This tool provides proper period validation, relative date parsing, DHIS2 period format support
 		// and comprehensive date range handling that is not available in the unified extraction
 		console.log('✅ Using comprehensive extractDatePeriodLLM for date period extraction');
-		
+
 		const llmResult = await extractDatePeriodLLM.invoke({
 			query: state.query,
 			context: 'health analytics - extract time periods for data analysis'
@@ -3048,199 +3100,199 @@ function extractOrgUnitKeywords(query: string): string[] {
 
 // Query parsing recovery - when intent classification or query parsing fails
 async function handle_query_parsing_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
-    console.log('🔄 Handling query parsing recovery');
+	console.log('🔄 Handling query parsing recovery');
 
-    const recoveryOptions: RecoveryOption[] = [
-        {
-            id: 'rephrase_query',
-            label: 'Rephrase your query',
-            description: 'Try asking the question in a different way with clearer terms',
-            action: async () => ({
-                uiAction: 'show_query_examples',
-                recoveryAction: 'rephrase_query'
-            })
-        },
-        {
-            id: 'provide_examples',
-            label: 'See example queries',
-            description: 'View examples of analytics queries that work well',
-            action: async () => ({
-                uiAction: 'show_query_examples',
-                recoveryAction: 'provide_examples'
-            })
-        },
-        {
-            id: 'simplify_query',
-            label: 'Simplify the query',
-            description: 'Break down complex queries into simpler parts',
-            action: async () => ({
-                uiAction: 'show_simplified_examples',
-                recoveryAction: 'simplify_query'
-            })
-        }
-    ];
+	const recoveryOptions: RecoveryOption[] = [
+		{
+			id: 'rephrase_query',
+			label: 'Rephrase your query',
+			description: 'Try asking the question in a different way with clearer terms',
+			action: async () => ({
+				uiAction: 'show_query_examples',
+				recoveryAction: 'rephrase_query'
+			})
+		},
+		{
+			id: 'provide_examples',
+			label: 'See example queries',
+			description: 'View examples of analytics queries that work well',
+			action: async () => ({
+				uiAction: 'show_query_examples',
+				recoveryAction: 'provide_examples'
+			})
+		},
+		{
+			id: 'simplify_query',
+			label: 'Simplify the query',
+			description: 'Break down complex queries into simpler parts',
+			action: async () => ({
+				uiAction: 'show_simplified_examples',
+				recoveryAction: 'simplify_query'
+			})
+		}
+	];
 
-    return {
-        recoveryContext: {
-            failedStep: 'query_parsing',
-            errorDetails: {
-                reason: 'Could not understand the analytics query structure',
-                originalQuery: state.query,
-                suggestion: 'Try using specific indicator names, time periods, or geographic locations'
-            },
-            recoveryOptions,
-            userGuidance: 'Query parsing failed. Try rephrasing with more specific terms:'
-        },
-        uiAction: 'show_recovery_options',
-        recoveryAction: 'query_parsing_recovery'
-    };
+	return {
+		recoveryContext: {
+			failedStep: 'query_parsing',
+			errorDetails: {
+				reason: 'Could not understand the analytics query structure',
+				originalQuery: state.query,
+				suggestion: 'Try using specific indicator names, time periods, or geographic locations'
+			},
+			recoveryOptions,
+			userGuidance: 'Query parsing failed. Try rephrasing with more specific terms:'
+		},
+		uiAction: 'show_recovery_options',
+		recoveryAction: 'query_parsing_recovery'
+	};
 }
 
 // Data access recovery - when DHIS2 API calls fail or no data is returned
 async function handle_data_access_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
-    console.log('🔄 Handling data access recovery');
+	console.log('🔄 Handling data access recovery');
 
-    const recoveryOptions: RecoveryOption[] = [
-        {
-            id: 'check_permissions',
-            label: 'Check data permissions',
-            description: 'Verify you have access to the requested data in DHIS2',
-            action: async () => ({
-                uiAction: 'show_permission_help',
-                recoveryAction: 'check_permissions'
-            })
-        },
-        {
-            id: 'try_different_period',
-            label: 'Try different time period',
-            description: 'Use a different time period that may have data available',
-            action: async () => ({
-                uiAction: 'suggest_alternative_periods',
-                recoveryAction: 'try_different_period'
-            })
-        },
-        {
-            id: 'broaden_search',
-            label: 'Broaden your search',
-            description: 'Use broader terms or remove specific filters to find more data',
-            action: async () => ({
-                uiAction: 'show_broader_queries',
-                recoveryAction: 'broaden_search'
-            })
-        }
-    ];
+	const recoveryOptions: RecoveryOption[] = [
+		{
+			id: 'check_permissions',
+			label: 'Check data permissions',
+			description: 'Verify you have access to the requested data in DHIS2',
+			action: async () => ({
+				uiAction: 'show_permission_help',
+				recoveryAction: 'check_permissions'
+			})
+		},
+		{
+			id: 'try_different_period',
+			label: 'Try different time period',
+			description: 'Use a different time period that may have data available',
+			action: async () => ({
+				uiAction: 'suggest_alternative_periods',
+				recoveryAction: 'try_different_period'
+			})
+		},
+		{
+			id: 'broaden_search',
+			label: 'Broaden your search',
+			description: 'Use broader terms or remove specific filters to find more data',
+			action: async () => ({
+				uiAction: 'show_broader_queries',
+				recoveryAction: 'broaden_search'
+			})
+		}
+	];
 
-    return {
-        recoveryContext: {
-            failedStep: 'data_access',
-            errorDetails: {
-                reason: 'Could not access or retrieve analytics data from DHIS2',
-                possibleCauses: ['Permission issues', 'No data for selected criteria', 'API connectivity problems']
-            },
-            recoveryOptions,
-            userGuidance: 'Data access failed. Choose how to resolve the issue:'
-        },
-        uiAction: 'show_recovery_options',
-        recoveryAction: 'data_access_recovery'
-    };
+	return {
+		recoveryContext: {
+			failedStep: 'data_access',
+			errorDetails: {
+				reason: 'Could not access or retrieve analytics data from DHIS2',
+				possibleCauses: ['Permission issues', 'No data for selected criteria', 'API connectivity problems']
+			},
+			recoveryOptions,
+			userGuidance: 'Data access failed. Choose how to resolve the issue:'
+		},
+		uiAction: 'show_recovery_options',
+		recoveryAction: 'data_access_recovery'
+	};
 }
 
 // Chart generation recovery - when chart building fails
 async function handle_chart_generation_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
-    console.log('🔄 Handling chart generation recovery');
+	console.log('🔄 Handling chart generation recovery');
 
-    const recoveryOptions: RecoveryOption[] = [
-        {
-            id: 'show_table_instead',
-            label: 'Show data as table',
-            description: 'Display the analytics data in table format instead of chart',
-            action: async () => ({
-                uiAction: 'switch_to_table_view',
-                recoveryAction: 'show_table_instead'
-            })
-        },
-        {
-            id: 'try_different_chart',
-            label: 'Try different chart type',
-            description: 'Use a different visualization type (line, pie, etc.)',
-            action: async () => ({
-                uiAction: 'suggest_chart_alternatives',
-                recoveryAction: 'try_different_chart'
-            })
-        },
-        {
-            id: 'export_raw_data',
-            label: 'Export raw data',
-            description: 'Download the data for external analysis and visualization',
-            action: async () => ({
-                uiAction: 'show_export_options',
-                recoveryAction: 'export_raw_data'
-            })
-        }
-    ];
+	const recoveryOptions: RecoveryOption[] = [
+		{
+			id: 'show_table_instead',
+			label: 'Show data as table',
+			description: 'Display the analytics data in table format instead of chart',
+			action: async () => ({
+				uiAction: 'switch_to_table_view',
+				recoveryAction: 'show_table_instead'
+			})
+		},
+		{
+			id: 'try_different_chart',
+			label: 'Try different chart type',
+			description: 'Use a different visualization type (line, pie, etc.)',
+			action: async () => ({
+				uiAction: 'suggest_chart_alternatives',
+				recoveryAction: 'try_different_chart'
+			})
+		},
+		{
+			id: 'export_raw_data',
+			label: 'Export raw data',
+			description: 'Download the data for external analysis and visualization',
+			action: async () => ({
+				uiAction: 'show_export_options',
+				recoveryAction: 'export_raw_data'
+			})
+		}
+	];
 
-    return {
-        recoveryContext: {
-            failedStep: 'chart_generation',
-            errorDetails: {
-                reason: 'Chart generation failed but data was successfully retrieved',
-                dataAvailable: !!state.data?.data,
-                chartTypeAttempted: 'bar'
-            },
-            recoveryOptions,
-            userGuidance: 'Chart generation failed but data is available. Choose how to view your data:'
-        },
-        uiAction: 'show_recovery_options',
-        recoveryAction: 'chart_generation_recovery'
-    };
+	return {
+		recoveryContext: {
+			failedStep: 'chart_generation',
+			errorDetails: {
+				reason: 'Chart generation failed but data was successfully retrieved',
+				dataAvailable: !!state.data?.data,
+				chartTypeAttempted: 'bar'
+			},
+			recoveryOptions,
+			userGuidance: 'Chart generation failed but data is available. Choose how to view your data:'
+		},
+		uiAction: 'show_recovery_options',
+		recoveryAction: 'chart_generation_recovery'
+	};
 }
 
 // Timeout recovery - when queries take too long or are interrupted
 async function handle_timeout_recovery(state: typeof GraphAnnotation.State): Promise<Partial<typeof GraphAnnotation.State>> {
-    console.log('🔄 Handling timeout recovery');
+	console.log('🔄 Handling timeout recovery');
 
-    const recoveryOptions: RecoveryOption[] = [
-        {
-            id: 'retry_with_less_data',
-            label: 'Retry with less data',
-            description: 'Reduce the scope of your query to speed up processing',
-            action: async () => ({
-                uiAction: 'show_scope_reduction_options',
-                recoveryAction: 'retry_with_less_data'
-            })
-        },
-        {
-            id: 'continue_in_background',
-            label: 'Continue in background',
-            description: 'Process the query in the background and notify when complete',
-            action: async () => ({
-                uiAction: 'start_background_processing',
-                recoveryAction: 'continue_in_background'
-            })
-        },
-        {
-            id: 'save_partial_results',
-            label: 'Save partial results',
-            description: 'Save any results that were obtained before timeout',
-            action: async () => ({
-                uiAction: 'show_partial_results',
-                recoveryAction: 'save_partial_results'
-            })
-        }
-    ];
+	const recoveryOptions: RecoveryOption[] = [
+		{
+			id: 'retry_with_less_data',
+			label: 'Retry with less data',
+			description: 'Reduce the scope of your query to speed up processing',
+			action: async () => ({
+				uiAction: 'show_scope_reduction_options',
+				recoveryAction: 'retry_with_less_data'
+			})
+		},
+		{
+			id: 'continue_in_background',
+			label: 'Continue in background',
+			description: 'Process the query in the background and notify when complete',
+			action: async () => ({
+				uiAction: 'start_background_processing',
+				recoveryAction: 'continue_in_background'
+			})
+		},
+		{
+			id: 'save_partial_results',
+			label: 'Save partial results',
+			description: 'Save any results that were obtained before timeout',
+			action: async () => ({
+				uiAction: 'show_partial_results',
+				recoveryAction: 'save_partial_results'
+			})
+		}
+	];
 
-    return {
-        recoveryContext: {
-            failedStep: 'timeout',
-            errorDetails: {
-                reason: 'Query processing timed out or took too long',
-                suggestion: 'Try narrowing your search criteria or reducing data volume'
-            },
-            recoveryOptions,
-            userGuidance: 'Query timed out. Choose how to proceed with your analytics request:'
-        },
-        uiAction: 'show_recovery_options'
-    };
+	return {
+		recoveryContext: {
+			failedStep: 'timeout',
+			errorDetails: {
+				reason: 'Query processing timed out or took too long',
+				suggestion: 'Try narrowing your search criteria or reducing data volume'
+			},
+			recoveryOptions,
+			userGuidance: 'Query timed out. Choose how to proceed with your analytics request:'
+		},
+		uiAction: 'show_recovery_options'
+	};
 }
 
 // ✅ NEW APPLY CONDITIONS NODE (PHASE 5)
@@ -3249,12 +3301,12 @@ async function applyConditions(state: typeof GraphAnnotation.State): Promise<Par
 
 	if (!state.data?.data || !state.data.data.rows) {
 		console.log('⚠️ No analytics data available for filtering');
-		return { step: 'apply_ranking' };
+		return {step: 'apply_ranking'};
 	}
 
 	if (!state.conditions || state.conditions.length === 0) {
 		console.log('✅ No conditions defined, skipping filtering');
-		return { step: 'apply_ranking' };
+		return {step: 'apply_ranking'};
 	}
 
 	try {
@@ -3268,7 +3320,7 @@ async function applyConditions(state: typeof GraphAnnotation.State): Promise<Par
 		for (const condition of state.conditions) {
 			console.log(`🔍 Processing condition:`, condition);
 
-			const { field, operator, value, type } = condition;
+			const {field, operator, value, type} = condition;
 
 			switch (operator) {
 				case '>':
@@ -3290,12 +3342,12 @@ async function applyConditions(state: typeof GraphAnnotation.State): Promise<Par
 					filteredRows = filteredRows.filter(row => row[field]?.toString() !== value.toString());
 					break;
 				case 'contains':
-					filteredRows = filteredRows.filter(row => 
+					filteredRows = filteredRows.filter(row =>
 						row[field]?.toString().toLowerCase().includes(value.toLowerCase())
 					);
 					break;
 				case 'not_contains':
-					filteredRows = filteredRows.filter(row => 
+					filteredRows = filteredRows.filter(row =>
 						!row[field]?.toString().toLowerCase().includes(value.toLowerCase())
 					);
 					break;
@@ -3325,14 +3377,14 @@ async function applyConditions(state: typeof GraphAnnotation.State): Promise<Par
 			filteredRowCount: filteredRows.length
 		};
 
-		return { 
+		return {
 			data: updatedData,
-			step: 'apply_ranking' 
+			step: 'apply_ranking'
 		};
 
 	} catch (error) {
 		console.warn('⚠️ Conditions processing failed:', error.message);
-		return { step: 'apply_ranking' };
+		return {step: 'apply_ranking'};
 	}
 }
 
@@ -3342,28 +3394,28 @@ async function applyRanking(state: typeof GraphAnnotation.State): Promise<Partia
 
 	if (!state.ranking) {
 		console.log('✅ No ranking defined, skipping sorting');
-		return { step: 'configure_visualization' };
+		return {step: 'configure_visualization'};
 	}
 
 	if (!state.data?.data || !state.data.data.rows) {
 		console.log('⚠️ No analytics data available for ranking');
-		return { step: 'configure_visualization' };
+		return {step: 'configure_visualization'};
 	}
 
 	try {
 		console.log('🏆 Processing ranking:', state.ranking);
 
-		const { field, order = 'desc', limit, offset = 0, type = 'top' } = state.ranking;
+		const {field, order = 'desc', limit, offset = 0, type = 'top'} = state.ranking;
 		let rows = [...(state.data.data.rows || [])];
 
 		// ✅ SORTING
 		if (field && order) {
 			console.log(`🏆 Sorting by ${field} ${order}`);
-			
+
 			rows.sort((a, b) => {
 				const valA = parseFloat(a[field]) || 0;
 				const valB = parseFloat(b[field]) || 0;
-				
+
 				if (order === 'desc') {
 					return valB - valA;
 				} else {
@@ -3405,14 +3457,14 @@ async function applyRanking(state: typeof GraphAnnotation.State): Promise<Partia
 
 		console.log('✅ Ranking applied successfully');
 
-		return { 
+		return {
 			data: updatedData,
-			step: 'configure_visualization' 
+			step: 'configure_visualization'
 		};
 
 	} catch (error) {
 		console.warn('⚠️ Ranking processing failed:', error.message);
-		return { step: 'configure_visualization' };
+		return {step: 'configure_visualization'};
 	}
 }
 
@@ -3489,7 +3541,7 @@ async function configureVisualization(state: typeof GraphAnnotation.State): Prom
 			// ✅ FIRST: Use intentIndicatorMapping to match series assignments
 			// Find which LLM indicator name maps to this actual selected indicator
 			let matchedLlmName: string | null = null;
-			
+
 			for (const [llmName, mappedIndicator] of Object.entries(state.intentIndicatorMapping)) {
 				if ((mappedIndicator as any).id === indicator.id) {
 					matchedLlmName = llmName;
@@ -3684,26 +3736,26 @@ workflow.addConditionalEdges('classify_intent', (state) => {
 	return END;
 });
 
-		// Direct sequential edges for the analytics pipeline
-		// @ts-ignore
-		workflow.addEdge('extract_intent', 'search_date_periods');
-		// @ts-ignore
-		workflow.addEdge('search_date_periods', 'search_org_units');
-		// @ts-ignore
-		workflow.addConditionalEdges('search_org_units', (state) => {
-			// ✅ STRICT DISAGGREGATION CHECK: ALL items MUST be data elements
-			const hasOnlyDataElements = state.metadata?.suggestions?.every((s: any) => s.type === 'dataElement');
-			
-			if (hasOnlyDataElements) {
-				console.log('✅ All selected items are data elements - proceeding to disaggregation search');
-				return 'search_disaggregations';
-			} else {
-				console.log('⚠️ Selection contains indicators - SKIPPING disaggregation search completely');
-				return 'query_data';
-			}
-		});
-		// @ts-ignore
-		workflow.addEdge('search_disaggregations', 'query_data');
+// Direct sequential edges for the analytics pipeline
+// @ts-ignore
+workflow.addEdge('extract_intent', 'search_date_periods');
+// @ts-ignore
+workflow.addEdge('search_date_periods', 'search_org_units');
+// @ts-ignore
+workflow.addConditionalEdges('search_org_units', (state) => {
+	// ✅ STRICT DISAGGREGATION CHECK: ALL items MUST be data elements
+	const hasOnlyDataElements = state.metadata?.suggestions?.every((s: any) => s.type === 'dataElement');
+
+	if (hasOnlyDataElements) {
+		console.log('✅ All selected items are data elements - proceeding to disaggregation search');
+		return 'search_disaggregations';
+	} else {
+		console.log('⚠️ Selection contains indicators - SKIPPING disaggregation search completely');
+		return 'query_data';
+	}
+});
+// @ts-ignore
+workflow.addEdge('search_disaggregations', 'query_data');
 // @ts-ignore
 workflow.addEdge('query_data', 'configure_visualization');
 // @ts-ignore
@@ -3747,7 +3799,7 @@ export function createAnalyticsGraphAgent(orchestrator: any) {
 				orchestrator: orchestrator,
 				workflowId: `analytics_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 			};
-console.log('Initial state', initialState);
+			console.log('Initial state', initialState);
 			// Execute the StateGraph workflow
 			const result = await stateGraphAgent.invoke(initialState);
 

@@ -254,13 +254,15 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                     <span>🎯</span>
                     {title}
                 </h3>
-                <p style={{
-                    margin: 'var(--space-2) 0 0 0',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: 'var(--font-size-sm)'
-                }}>
-                    {description || `Found <strong>${selectionOptions.length}</strong> items for analysis of: <em>"${originalQuery}"</em>`}
-                </p>
+	            <div style={{
+		            margin: 'var(--space-2) 0 0 0',
+		            color: 'var(--color-text-secondary)',
+		            fontSize: 'var(--font-size-sm)'
+	            }}>
+		            <div dangerouslySetInnerHTML={{
+			            __html: description || `Found <strong>${selectionOptions.length}</strong> items for analysis of: <em>"${originalQuery}"</em>`
+		            }}></div>
+	            </div>
             </div>
 
             {/* Search and Filters */}

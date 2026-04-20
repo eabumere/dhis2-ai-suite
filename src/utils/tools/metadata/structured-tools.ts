@@ -43,7 +43,7 @@ interface AnalyticsChartData {
 	id: string;
 	title: string;
 	timestamp: number;
-	chartType: 'line' | 'bar' | 'pie';
+	chartType: 'line' | 'bar' | 'pie' | 'area' | 'scatter' | 'radar' | 'funnel' | 'gauge' | 'treemap' | 'heatmap' | 'boxplot' | 'candlestick' | 'pictorialBar' | 'themeRiver' | 'sunburst';
 	echartsConfig: any;
 	filteredData: any[];
 	dimensions: {
@@ -65,6 +65,15 @@ interface AnalyticsChartData {
 		periods: any[];
 		items: Record<string, any>;
 	};
+	seriesConfig?: Array<{
+		indicatorId: string;
+		indicatorName: string;
+		chartType: 'line' | 'bar' | 'area' | 'scatter';
+		yAxisIndex: number;
+		color?: string;
+		showLabel?: boolean;
+		smooth?: boolean;
+	}>;
 }
 
 /**
@@ -74,7 +83,16 @@ export const buildAnalyticsChart = tool(
 	async (input: {
 		userQuery: string;
 		analyticsData: any;
-		chartType: 'line' | 'bar' | 'pie';
+		chartType: 'line' | 'bar' | 'pie' | 'area' | 'scatter' | 'radar' | 'funnel' | 'gauge' | 'treemap' | 'heatmap' | 'boxplot' | 'candlestick' | 'pictorialBar' | 'themeRiver' | 'sunburst';
+		seriesConfig?: Array<{
+			indicatorId: string;
+			indicatorName: string;
+			chartType: 'line' | 'bar' | 'area' | 'scatter';
+			yAxisIndex: number;
+			color?: string;
+			showLabel?: boolean;
+			smooth?: boolean;
+		}>;
 		indicators?: string[];
 		periods?: string[];
 		orgUnits?: string[];
@@ -88,6 +106,7 @@ export const buildAnalyticsChart = tool(
 				userQuery,
 				analyticsData,
 				chartType,
+				seriesConfig = [],
 				indicators = [],
 				periods = [],
 				orgUnits = [],
@@ -101,6 +120,7 @@ export const buildAnalyticsChart = tool(
 			const chartData = await processAnalyticsForChart({
 				analyticsData,
 				chartType,
+				seriesConfig,
 				indicators,
 				periods,
 				orgUnits,
@@ -150,10 +170,19 @@ export const buildAnalyticsChart = tool(
 	{
 		name: "build_analytics_chart",
 		description: "Create interactive ECharts visualizations from DHIS2 analytics data with filtering capabilities",
-		schema: z.object({
+			schema: z.object({
 			userQuery: z.string().describe("The original user analytics query"),
 			analyticsData: z.any().describe("DHIS2 analytics API response"),
-			chartType: z.enum(['line', 'bar', 'pie']).describe("Type of chart to create"),
+			chartType: z.enum(['line', 'bar', 'pie', 'area', 'scatter', 'radar', 'funnel', 'gauge', 'treemap', 'heatmap', 'boxplot', 'candlestick', 'pictorialBar', 'themeRiver', 'sunburst']).describe("Type of chart to create"),
+			seriesConfig: z.array(z.object({
+				indicatorId: z.string().describe("Indicator ID for this series"),
+				indicatorName: z.string().describe("Indicator display name"),
+				chartType: z.enum(['line', 'bar', 'area', 'scatter']).describe("Chart type for this individual series"),
+				yAxisIndex: z.number().describe("Y axis index (0 or 1)"),
+				color: z.string().optional().describe("Optional custom color"),
+				showLabel: z.boolean().optional().describe("Whether to show value labels on this series"),
+				smooth: z.boolean().optional().describe("Whether to use smooth lines for line charts"),
+			})).optional().describe("Per-series visualization configuration"),
 			indicators: z.array(z.string()).optional().describe("Selected indicators to display"),
 			periods: z.array(z.string()).optional().describe("Selected time periods"),
 			orgUnits: z.array(z.string()).optional().describe("Selected organization units"),
@@ -170,6 +199,152 @@ export const buildAnalyticsChart = tool(
  * Extract Date Period References using LLM
  * Uses AI understanding to identify date/period references and convert them to DHIS2 format
  */
+export const extractAnalyticsIntent = tool(
+	async (input: { query: string, context?: string }) => {
+		try {
+			console.log('🔍 Analytics intent extraction called for:', input.query);
+
+			const llm = ChatModels.createExtractionModel({
+				maxTokens: 950,
+				temperature: 0.0, // very deterministic for structured extraction
+			});
+
+			const prompt = `
+You are an expert DHIS2 analytics query parser. Convert any natural language analytics request into a structured intent.
+
+The output will be used to build calls to DHIS2 /api/analytics.
+- Return indicator names or codes exactly as they appear in the query (e.g. HTS_TST, TX_NEW, "viral suppression", "reporting completeness").
+- For organisation units, return level names (district, facility, country, region) or descriptive terms ("by district", "facilities").
+- Do NOT invent UIDs. Use readable names/codes only. Translation to UIDs happens later in code.
+- Use standard DHIS2 relative periods where possible (THIS_MONTH, LAST_QUARTER, LAST_12_MONTHS, LAST_4_QUARTERS, THIS_YEAR, etc.).
+- "High/low", "declined", "below target", "yield", "% of target" cannot be done natively in one API call → capture them clearly in conditions or derivedMetrics for post-processing.
+
+Return **ONLY** valid JSON with this exact structure.
+
+✅ **STRICT RULE**: For \`visualization.suggestedType\`, ONLY return values from this EXACT list:
+'line' | 'bar' | 'pie' | 'area' | 'scatter' | 'radar' | 'funnel' | 'gauge' | 'treemap' | 'heatmap' | 'boxplot' | 'candlestick' | 'pictorialBar' | 'themeRiver' | 'sunburst'
+
+✅ NO variations, NO abbreviations, NO other values allowed. Use EXACT string as listed.
+
+{
+  "intent": "performance_filter" | "top_bottom_ranked" | "comparison" | "trend" | "visualization" | "summary_relationship" | "latest" | "decline_analysis" | "completeness" | "other",
+  
+  "dimensions": {
+    "dx": ["HTS_TST", "HTS_POS", "TX_NEW", ...],           // indicator names/codes as strings
+    "pe": ["LAST_QUARTER", "THIS_YEAR", "2024Q1", ...],    // relative or fixed periods
+    "ou": []                                               // leave empty if using orgUnitConfig below; otherwise specific names
+  },
+  
+  "filters": {
+    "dx": [], 
+    "pe": [],
+    "ou": []
+  },
+  
+  "orgUnitConfig": {
+    "level": "district" | "facility" | "country" | "region" | null,
+    "grouping": "by_district" | "by_facility" | "by_country" | null,
+    "specificNames": []                                    // e.g. ["Central Hospital", "Lagos State"]
+  },
+  
+  "periodConfig": {
+    "primary": ["LAST_QUARTER", "LAST_12_MONTHS", ...],
+    "comparison": {
+      "type": "vs_previous" | "vs_same_period_last_n_years" | "over_last_n_periods" | "decline_detection" | null,
+      "periods": ["LAST_2_QUARTERS", "THIS_QUARTER", ...]
+    } | null
+  },
+  
+  "conditions": [   // high/low, below target, decline, completeness <90%, yield low, etc.
+    {
+      "on": "TX_CURR" | "HTS_POS / HTS_TST" | "reporting completeness",
+      "operator": "high" | "low" | "above" | "below" | "declined" | "drop" | "gt" | "lt" | "ge" | "le" | "equals",
+      "threshold": "85%" | "90" | "target" | null,
+      "description": "TX_CURR below 85% of target"
+    }
+  ],
+  
+  "ranking": {
+    "enabled": true | false,
+    "type": "top" | "bottom" | "largest_decline" | "best_performing",
+    "count": 10,
+    "sortBy": "viral suppression" | "HTS_TST" | null,
+    "direction": "desc" | "asc"
+  } | null,
+  
+   "visualization": {
+     "suggestedType": "line" | "bar" | "pie" | "area" | "scatter" | "radar" | "funnel" | "gauge" | "treemap" | "heatmap" | "boxplot" | "candlestick" | "pictorialBar" | "themeRiver" | "sunburst" | null,
+     "config": {
+       "xAxis": "orgUnit" | "period",
+       "series": {
+         "bars": ["HTS_TST", "HTS_POS"],
+         "line": ["HIV Case Finding Rate"]
+       }
+     } | null
+   } | null,
+  
+  "derivedMetrics": ["yield", "percent_of_target", "case_finding_rate", "decline_percent", "completeness"] | [],
+  
+  "apiHints": {
+    "measureCriteria": "GE:85;LT:100" | null,      // example only - translate conditions later
+    "order": "DESC" | null,
+    "limit": 10 | null,
+    "tableLayout": true | false,
+    "columns": ["dx", "ou"] | null,
+    "rows": ["pe"] | null,
+    "aggregationType": "SUM" | "AVERAGE" | null
+  },
+  
+  "confidence": "high" | "medium" | "low",
+  "interpretation": "Brief explanation including any ambiguities (e.g. 'yield will require client-side calculation of HTS_POS / HTS_TST', 'decline needs two period queries')"
+}
+`;
+
+			const llmResponse = await llm.invoke([
+				{ role: "system", content: prompt },
+				{ role: "user", content: `Query: ${input.query}\nContext: ${input.context || "General DHIS2 health analytics query"}` }
+			]);
+
+			let result: any;
+			try {
+				const content = (llmResponse.content as string).trim();
+				result = JSON.parse(content);
+			} catch (parseError) {
+				console.warn('⚠️ Intent extraction JSON parse failed, using fallback');
+				result = { 
+					error: "JSON parse failed", 
+					raw: llmResponse.content,
+					dimensions: { dx: [], pe: [], ou: [] },
+					orgUnitConfig: { level: null, grouping: null, specificNames: [] }
+				};
+			}
+
+			// Optional light validation / cleaning
+			if (!result.dimensions) result.dimensions = { dx: [], pe: [], ou: [] };
+			if (!result.orgUnitConfig) result.orgUnitConfig = { level: null, grouping: null, specificNames: [] };
+
+			return JSON.stringify(result);
+
+		} catch (error) {
+			console.error('❌ Error in analytics intent extraction:', error);
+			return JSON.stringify({
+				error: `Analytics intent extraction failed: ${error.message}`,
+				dimensions: { dx: [], pe: [], ou: [] },
+				orgUnitConfig: { level: null, grouping: null, specificNames: [] }
+			});
+		}
+	},
+	{
+		name: "extract_analytics_intent",
+		description: "Generic natural language parser for DHIS2 analytics. Returns human-readable indicator names/codes and org unit levels (not UIDs). Output is designed for easy translation to /api/analytics parameters (dx, pe, ou, measureCriteria, order, tableLayout, etc.). Handles conditions, ranking, comparisons, charts, and derived metrics via post-processing.",
+		schema: z.object({
+			query: z.string().describe("The user's query text to analyze for analytics intent"),
+			context: z.string().optional().describe("Optional context about the analytics query type")
+		})
+	}
+);
+
+
 export const extractDatePeriodLLM = tool(
 	async (input: { query: string, context?: string }) => {
 		try {
@@ -326,7 +501,16 @@ const MAX_CHARTS = 10; // Keep last 10 charts
  */
 async function processAnalyticsForChart(params: {
 	analyticsData: any;
-	chartType: 'line' | 'bar' | 'pie';
+	chartType: 'line' | 'bar' | 'pie' | 'area' | 'scatter' | 'radar' | 'funnel' | 'gauge' | 'treemap' | 'heatmap' | 'boxplot' | 'candlestick' | 'pictorialBar' | 'themeRiver' | 'sunburst';
+	seriesConfig?: Array<{
+		indicatorId: string;
+		indicatorName: string;
+		chartType: 'line' | 'bar' | 'area' | 'scatter';
+		yAxisIndex: number;
+		color?: string;
+		showLabel?: boolean;
+		smooth?: boolean;
+	}>;
 	indicators: string[];
 	periods: string[];
 	orgUnits: string[];
@@ -335,7 +519,7 @@ async function processAnalyticsForChart(params: {
 	title: string;
 	hasCoDimension?: boolean;
 }): Promise<AnalyticsChartData> {
-	const {analyticsData, indicators, periods, orgUnits, disaggregations, title} = params;
+	const {analyticsData, indicators, periods, orgUnits, disaggregations, title, seriesConfig} = params;
 
 	// Extract data from nested DHIS2 response structure
 	const analytics = analyticsData?.data?.analytics;
@@ -541,7 +725,8 @@ async function processAnalyticsForChart(params: {
 			orgUnits: resolveOrgUnitNames,     // Human-readable org unit names
 			periods: Array.from(allPeriods),   // Period IDs for internal use
 			items: metaDataItems               // Full metadata mapping for display names
-		}
+		},
+		seriesConfig
 	};
 }
 
@@ -549,7 +734,7 @@ async function processAnalyticsForChart(params: {
  * Build ECharts option object from processed chart data
  */
 export function buildEChartsOption(chartData: AnalyticsChartData): any {
-	const {filteredData, chartType, dimensions, title} = chartData;
+	const {filteredData, chartType, dimensions, title, seriesConfig = []} = chartData;
 
 	if (filteredData.length === 0) {
 		return {title: {text: 'No Data Available'}};
@@ -558,7 +743,10 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
 	// Group data by dimensions for charting - use display names for periods
 	const dataByDimension = groupChartData(filteredData, chartType, chartData.metaData);
 
-	const baseOption = {
+	// Determine if we have per-series configuration
+	const hasSeriesConfig = seriesConfig && seriesConfig.length > 0;
+
+	const baseOption: any = {
 		title: {
 			text: title,
 			left: 'center',
@@ -597,46 +785,226 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
 		series: []
 	};
 
-	// Build series data
-	if (chartType === 'pie' && dimensions.indicators.length === 1) {
-		// Single pie chart for one indicator
-		baseOption.series = [{
-			name: dimensions.indicators[0],
-			type: 'pie',
-			radius: ['40%', '70%'],
-			center: ['50%', '60%'],
-			data: dataByDimension.pieData,
-			emphasis: {
-				itemStyle: {
-					shadowBlur: 10,
-					shadowOffsetX: 0,
-					shadowColor: 'rgba(0, 0, 0, 0.5)'
+	// Build series data for ALL supported ECharts chart types
+	switch (chartType) {
+		case 'pie':
+			if (dimensions.indicators.length === 1) {
+				baseOption.series = [{
+					name: dimensions.indicators[0],
+					type: 'pie',
+					radius: ['40%', '70%'],
+					center: ['50%', '60%'],
+					data: dataByDimension.pieData,
+					emphasis: {
+						itemStyle: {
+							shadowBlur: 10,
+							shadowOffsetX: 0,
+							shadowColor: 'rgba(0, 0, 0, 0.5)'
+						}
+					},
+					label: {
+						show: true,
+						formatter: '{b}: {d}%'
+					}
+				}];
+				baseOption.legend.data = dataByDimension.labels;
+			}
+			break;
+
+		case 'bar':
+		case 'line':
+		case 'area':
+			baseOption.xAxis.data = dataByDimension.categories;
+			
+			// ✅ IMPLEMENT SERIES CONFIGURATION LOGIC THAT WAS INTENDED
+			if (hasSeriesConfig) {
+				console.log('✅ Using personalized series configuration:', seriesConfig.length, 'series');
+				
+				baseOption.series = dataByDimension.series.map((series, index) => {
+					// ✅ PROPER MATCHING LOGIC: First try exact matches, then fall back to index
+					let config: any = seriesConfig.find((c: any) => 
+						c?.indicatorId === series.indicatorId || 
+						(c?.indicatorName && c.indicatorName.trim().toLowerCase() === series.name.trim().toLowerCase())
+					);
+					
+					// Only fall back to index if no exact match found
+					if (!config && seriesConfig[index]) {
+						config = seriesConfig[index];
+					}
+					
+					// Final fallback to empty object
+					config = config || {};
+					
+					// Use configured chart type or fall back to default
+					const seriesType = config.chartType || chartType;
+					
+					return {
+						name: config.indicatorName || series.name,
+						type: seriesType,
+						data: series.data,
+						yAxisIndex: config.yAxisIndex || 0,
+						color: config.color,
+						smooth: config.smooth !== undefined ? config.smooth : true,
+						showSymbol: true,
+						symbol: 'circle',
+						symbolSize: 6,
+						label: {
+							show: config.showLabel === true
+						},
+						lineStyle: {
+							width: 2
+						},
+						areaStyle: seriesType === 'area' ? {} : undefined,
+						itemStyle: {
+							borderRadius: seriesType === 'bar' ? [2, 2, 0, 0] : undefined
+						}
+					};
+				});
+				
+				// Add second Y axis when dual axis configuration is detected
+				const hasDualAxis = seriesConfig.some(c => c.yAxisIndex === 1);
+				if (hasDualAxis) {
+					baseOption.yAxis = [
+						{ ...baseOption.yAxis },
+						{ 
+							type: 'value',
+							name: seriesConfig.find(c => c.yAxisIndex === 1)?.indicatorName || 'Secondary Value',
+							nameLocation: 'middle',
+							nameGap: 40
+						}
+					];
 				}
-			},
-			label: {
-				show: true,
-				formatter: '{b}: {d}%'
+				
+			} else {
+				// Fallback to default generic series generation
+				baseOption.series = dataByDimension.series.map(series => ({
+					name: series.name,
+					type: chartType,
+					data: series.data,
+					smooth: true,
+					symbol: 'circle',
+					symbolSize: 6,
+					lineStyle: {
+						width: 2
+					},
+					areaStyle: chartType === 'area' ? {} : undefined,
+					itemStyle: {
+						borderRadius: chartType === 'bar' ? [2, 2, 0, 0] : undefined
+					}
+				}));
 			}
-		}];
-		baseOption.legend.data = dataByDimension.labels;
-	} else if (chartType === 'bar' || chartType === 'line') {
-		// Multi-series chart
-		baseOption.xAxis.data = dataByDimension.categories;
-		baseOption.series = dataByDimension.series.map(series => ({
-			name: series.name,
-			type: chartType,
-			data: series.data,
-			smooth: chartType === 'line',
-			symbol: 'circle',
-			symbolSize: 6,
-			lineStyle: {
-				width: 2
-			},
-			itemStyle: {
-				borderRadius: chartType === 'bar' ? [2, 2, 0, 0] : undefined
-			}
-		}));
-		baseOption.legend.data = dataByDimension.series.map(s => s.name);
+			
+			baseOption.legend.data = dataByDimension.series.map(s => s.name);
+			break;
+
+		case 'scatter':
+			baseOption.xAxis.type = 'value';
+			baseOption.yAxis.type = 'value';
+			baseOption.series = dataByDimension.series.map(series => ({
+				name: series.name,
+				type: 'scatter',
+				data: series.data.map((val: number, idx: number) => [idx, val]),
+				symbolSize: 10
+			}));
+			baseOption.legend.data = dataByDimension.series.map(s => s.name);
+			break;
+
+		case 'radar':
+			delete baseOption.xAxis;
+			delete baseOption.yAxis;
+			baseOption.radar = {
+				indicator: dataByDimension.categories.map((cat: string) => ({ name: cat }))
+			};
+			baseOption.series = [{
+				type: 'radar',
+				data: dataByDimension.series.map(series => ({
+					name: series.name,
+					value: series.data
+				}))
+			}];
+			baseOption.legend.data = dataByDimension.series.map(s => s.name);
+			break;
+
+		case 'funnel':
+			delete baseOption.xAxis;
+			delete baseOption.yAxis;
+			baseOption.series = [{
+				type: 'funnel',
+				data: dataByDimension.series[0]?.data?.map((val: number, idx: number) => ({
+					name: dataByDimension.categories[idx],
+					value: val
+				})) || []
+			}];
+			baseOption.legend.data = dataByDimension.categories;
+			break;
+
+		case 'gauge':
+			delete baseOption.xAxis;
+			delete baseOption.yAxis;
+			const maxValue = Math.max(...dataByDimension.series.flatMap(s => s.data));
+			baseOption.series = [{
+				type: 'gauge',
+				progress: { show: true },
+				max: maxValue * 1.2,
+				data: [{
+					value: dataByDimension.series[0]?.data?.[dataByDimension.series[0].data.length - 1] || 0,
+					name: dataByDimension.series[0]?.name || 'Value'
+				}]
+			}];
+			break;
+
+		case 'treemap':
+			delete baseOption.xAxis;
+			delete baseOption.yAxis;
+			baseOption.series = [{
+				type: 'treemap',
+				data: dataByDimension.series.flatMap((series, seriesIdx) => 
+					series.data.map((val: number, dataIdx: number) => ({
+						name: `${series.name} - ${dataByDimension.categories[dataIdx]}`,
+						value: val
+					}))
+				)
+			}];
+			break;
+
+		case 'heatmap':
+			baseOption.xAxis.data = dataByDimension.categories;
+			baseOption.yAxis.data = dataByDimension.series.map(s => s.name);
+			const heatmapData: any[] = [];
+			dataByDimension.series.forEach((series: any, y: number) => {
+				series.data.forEach((val: number, x: number) => {
+					heatmapData.push([x, y, val]);
+				});
+			});
+			baseOption.series = [{
+				type: 'heatmap',
+				data: heatmapData
+			}];
+			baseOption.visualMap = {
+				min: 0,
+				max: Math.max(...heatmapData.map(d => d[2])),
+				calculable: true
+			};
+			break;
+
+		case 'boxplot':
+		case 'candlestick':
+		case 'pictorialBar':
+		case 'themeRiver':
+		case 'sunburst':
+		default:
+			// Fallback to bar chart for any other chart type
+			console.log(`Chart type ${chartType} not fully implemented, falling back to bar chart`);
+			baseOption.xAxis.data = dataByDimension.categories;
+			baseOption.series = dataByDimension.series.map(series => ({
+				name: series.name,
+				type: 'bar',
+				data: series.data,
+				itemStyle: {
+					borderRadius: [2, 2, 0, 0]
+				}
+			}));
+			baseOption.legend.data = dataByDimension.series.map(s => s.name);
 	}
 
 	// Color scheme

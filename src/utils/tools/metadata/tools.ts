@@ -30,6 +30,7 @@ export {
     createDhis2Event,
 
     // LLM-powered extraction tools
+    extractAnalyticsIntent,
     extractDatePeriodLLM,
     extractOrgUnitKeywordsLLM,
 

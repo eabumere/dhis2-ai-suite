@@ -794,8 +794,6 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 						});
 					}
 
-					let userSelectedItems: any[] = [];
-
 					// Only show selection UI if there are actual items to select
 					const selectedResult = await state.orchestrator.requestSelection({
 						workflowId: state.workflowId,
@@ -816,6 +814,7 @@ async function extractIntent(state: typeof GraphAnnotation.State): Promise<Parti
 
 				// ✅ MERGE FINAL SELECTION
 				const finalItems = [...autoSelection, ...userSelectedItems];
+				console.log('Final Results:', finalItems);
 
 				if (finalItems.length === 0) {
 					return {

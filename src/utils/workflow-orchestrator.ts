@@ -933,6 +933,35 @@ class WorkflowOrchestrator {
         return progressMessage;
     }
 
+    // Add completion message to conversation (hides spinner and shows completion)
+    addCompletionMessage(content: string, data?: any) {
+        // Use the current thread ID for completion messages
+        const threadId = this.getCurrentThreadId();
+
+        // Remove any existing progress messages for this thread
+        const updatedConversation = this.currentUIState.conversation.filter(
+            msg => !(msg.type === 'progress' && msg.role === 'assistant' && msg.threadId === threadId)
+        );
+
+        const completionMessage: ConversationMessage = {
+            id: `completion_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            role: 'assistant',
+            content,
+            data,
+            type: 'success',
+            threadId
+        };
+
+        this.updateUIState({
+            conversation: [...updatedConversation, completionMessage],
+            showProcessing: false, // Hide processing spinner
+            processingMessage: '' // Clear processing message
+        });
+
+        return completionMessage;
+    }
+
     // ✅ ACTIVITY EVENT HANDLER - called from metadata tools
     public emitActivity(event: any) {
         if (event.percentage) {

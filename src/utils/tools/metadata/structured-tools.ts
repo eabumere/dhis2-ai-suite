@@ -362,8 +362,8 @@ export const extractDatePeriodLLM = tool(
 			const currentDay = now.getDate();
 			const currentDateString = `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${currentDay.toString().padStart(2, '0')}`;
 
-			// Determine current fiscal year (assuming April-March fiscal year)
-			const currentFiscalYear = currentMonth >= 4 ? currentYear : currentYear - 1;
+			// Determine current fiscal year (October-September fiscal year)
+			const currentFiscalYear = currentMonth >= 10 ? currentYear : currentYear - 1;
 
 			const prompt = `
 Analyze this DHIS2 analytics query and extract date/period references, converting them to DHIS2 period format.
@@ -373,22 +373,43 @@ CURRENT DATE CONTEXT:
 - Current year: ${currentYear}
 - Current month: ${currentMonth}
 - Current quarter: Q${currentQuarter}
-- Current fiscal year (April-March): ${currentFiscalYear}April
+- Current fiscal year (October-September): ${currentFiscalYear}Oct
 
 DHIS2 PERIOD FORMATS:
 - Years: yyyy (2024, 2025, 2026)
-- Financial Year April: yyyyApril (2024April = Apr 2024 - Mar 2025)
 - Quarters: yyyyQn (2024Q1, 2024Q2)
+- Months: yyyyMM ONLY (examples: 202401 for Jan 2024, 202512 for Dec 2025, 202601 for Jan 2026)
+  DO NOT use formats like yyyyMMM, yyyy-M, M-yyyy, or yyyyMmm
+  ALWAYS use exactly 4 digits for year + 2 digits for month with no separators
 - Relative: THIS_QUARTER, THIS_YEAR, LAST_YEAR, LAST_5_YEARS, THIS_FINANCIAL_YEAR, LAST_5_FINANCIAL_YEARS
 
 QUERY TO PARSE: "${input.query}"
 
 RESOLUTION RULES:
-1. For "last N years" → generate N years ending with current year ${currentYear}
-   Example: "last 3 years" → ["${currentYear-2}", "${currentYear-1}", "${currentYear}"]
+1. For "last N years" → generate N years ending with year ${currentYear - 1}
+   Example: "last 3 years" → ["${currentYear-3}", "${currentYear-2}", "${currentYear - 1}"]
 
-2. For "last N fiscal years" → generate N fiscal years ending with current fiscal year ${currentFiscalYear}April
-   Example: "last 3 fiscal years" → ["${currentFiscalYear-2}April", "${currentFiscalYear-1}April", "${currentFiscalYear}April"]
+2. For "last N fiscal years":
+
+	i. Fiscal year Y runs from Oct (Y-1) to Sep (Y)
+
+	ii. Generate EXACTLY N fiscal years:
+        From (currentFiscalYear - N) to currentFiscalYear exclusive
+
+	iii. If returning fiscal year labels:
+        Return [Y1, Y2, ..., Yn]
+
+	iv. If returning period start months (Oct):
+        Return Oct of (Y-1) for each fiscal year
+
+	Example:
+		If currentFiscalYear = 2025 and N = 5:
+
+		Fiscal years:
+		[2020, 2021, 2022, 2023, 2024]
+
+		Start periods:
+		["2020Oct", "2021Oct", "2022Oct", "2023Oct", "2024Oct"]
 
 3. For "this quarter to same quarter last N years" → include THIS_QUARTER + N previous years with same quarter number Q${currentQuarter}
    Example: N=3 → ["THIS_QUARTER", "${currentYear-1}Q${currentQuarter}", "${currentYear-2}Q${currentQuarter}", "${currentYear-3}Q${currentQuarter}"]
@@ -396,6 +417,28 @@ RESOLUTION RULES:
 4. For explicit year like "2025" → ["2025"]
 
 5. Use relative periods (THIS_QUARTER, LAST_5_YEARS) when the query asks for "current" or "this" without needing historical expansion
+
+6. For "last N months" → generate N months in yyyyMM format ending with the previous month
+   
+   FORMAT: Exactly 6 digits: YYYYMM (no letters, no separators, no 'M' prefix)
+   - January 2024 = 202401
+   - December 2025 = 202512
+   - June 2026 = 202606
+   
+   Current: Year=${currentYear}, Month=${currentMonth}
+   
+   CRITICAL RULES:
+   - NEVER include current month
+   - NEVER add letters like 'M' before the month number
+   - NEVER use separators like dash or slash
+   - Output format MUST be like: 202512 (not 2025M12, not 2025-12, not M12-2025)
+   - Handle year boundaries correctly
+   
+   EXAMPLES:
+   - If today is March 2026, "last 3 months" → ["202512", "202601", "202602"]
+     (NOT: 2025M12, NOT: 2025-12, NOT: 2025December)
+   - If today is January 2026, "last 3 months" → ["202510", "202511", "202512"]
+   - If today is April 2026, "last 5 months" → ["202511", "202512", "202601", "202602", "202603"]
 
 CRITICAL:
 - Calculate ACTUAL years based on CURRENT DATE above
@@ -445,7 +488,7 @@ Return ONLY JSON:
 				if (p === 'yyyy' || p === 'YYYY') {
 					return `${currentYear}`;
 				}
-				if (p.includes('yyyyApril')) {
+				if (p.includes('yyyyOct')) {
 					return p.replace('yyyy', `${currentFiscalYear}`);
 				}
 				if (p.match(/^\d{4}$/) && parseInt(p) > currentYear + 5) {
@@ -1225,35 +1268,13 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 		data.forEach(row => {
 			const period = row.period || 'Unknown';
 			const indicator = row.dx || 'Unknown';
-			const orgUnit = row.org_unit || 'Unknown';
 
 			if (!periodOrder.includes(period)) {
 				periodOrder.push(period);
 			}
 
-			// ✅ SMART SERIES KEY GENERATION
-			// Automatically creates matrix series based on available dimensions:
-			// - Single indicator + multiple org units: series = org unit name
-			// - Multiple indicators + single org unit: series = indicator name
-			// - Multiple indicators + multiple org units: series = `Indicator - Org Unit`
-			// ✅ All combinations are automatically handled
+			// Build series key - include category option if present for disaggregation
 			let seriesKey = indicator;
-			
-			// Check if we have multiple org units in the dataset
-			const hasMultipleOrgUnits = Array.from(new Set(data.map(r => r.org_unit))).length > 1;
-			
-			// Always include org unit in series name when multiple are present
-			if (hasMultipleOrgUnits && orgUnit !== 'Unknown') {
-				const hasMultipleIndicators = Array.from(new Set(data.map(r => r.dx))).length > 1;
-				
-				if (hasMultipleIndicators) {
-					// FULL MATRIX MODE: Both multiple indicators and multiple org units
-					seriesKey = `${indicator} - ${orgUnit}`;
-				} else {
-					// SINGLE INDICATOR MULTIPLE ORG UNITS: Show only org unit names as series
-					seriesKey = orgUnit;
-				}
-			}
 
 			if (hasCategoryOptions) {
 				// Extract category option values from co_* columns
@@ -1268,7 +1289,7 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 				// If we found category options, append them to create unique series
 				if (categoryOptionValues.length > 0) {
 					const categoryLabel = categoryOptionValues.join(' - ');
-					seriesKey = `${seriesKey} (${categoryLabel})`;
+					seriesKey = `${indicator} (${categoryLabel})`;
 					console.log(`📊 Creating disaggregated series: ${seriesKey}`);
 				}
 			}
@@ -1278,10 +1299,8 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 				seriesMap[seriesKey] = {};
 			}
 
-		// ✅ NEVER SUM DIFFERENT INDICATORS TOGETHER
-		// ✅ Each indicator gets its own independent series
-		// ✅ No value merging, no summing of different types (counts + percentages)
-		seriesMap[seriesKey][period] = row.value || 0;
+			// Aggregate values by period for this series
+			seriesMap[seriesKey][period] = (seriesMap[seriesKey][period] || 0) + (row.value || 0);
 		});
 
 		// Sort periods chronologically by their DHIS2 period IDs

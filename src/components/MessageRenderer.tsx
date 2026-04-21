@@ -816,7 +816,7 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
                                 borderTop: '3px solid #2196f3',
                                 borderRight: '3px solid #1976d2',
                                 borderRadius: '50%',
-                                animation: 'spin 1.5s linear infinite'
+                                animation: 'spin 1.5s linear infinite1'
                             }} />
 
                             {/* Inner ring - pulsing effect */}
@@ -826,7 +826,7 @@ const ProgressMessage: FC<ProgressMessageProps> = ({ message }) => {
                                 height: '16px',
                                 border: '2px solid #e3f2fd',
                                 borderRadius: '50%',
-                                animation: 'pulse-ring 1.5s ease-out infinite'
+                                animation: 'pulse-ring 1.5s ease-out infinite1'
                             }} />
 
                             {/* Center dot */}

@@ -350,106 +350,114 @@ export const extractDatePeriodLLM = tool(
 		try {
 			console.log('📅 LLM date period extraction called for:', input.query);
 
-			// Initialize Azure OpenAI LLM with retry logic for rate limiting
 			const llm = ChatModels.createExtractionModelWithRetry({
-				maxTokens: 150,   // Longer output for period analysis
+				maxTokens: 200,
 			});
 
-			// Create comprehensive prompt for date/period extraction
+			// Get current date information - ALL variables defined here
+			const now = new Date();
+			const currentYear = now.getFullYear();
+			const currentMonth = now.getMonth() + 1;
+			const currentQuarter = Math.floor((currentMonth - 1) / 3) + 1;
+			const currentDay = now.getDate();
+			const currentDateString = `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${currentDay.toString().padStart(2, '0')}`;
+
+			// Determine current fiscal year (assuming April-March fiscal year)
+			const currentFiscalYear = currentMonth >= 4 ? currentYear : currentYear - 1;
+
 			const prompt = `
 Analyze this DHIS2 analytics query and extract date/period references, converting them to DHIS2 period format.
 
+CURRENT DATE CONTEXT:
+- Today's date: ${currentDateString}
+- Current year: ${currentYear}
+- Current month: ${currentMonth}
+- Current quarter: Q${currentQuarter}
+- Current fiscal year (April-March): ${currentFiscalYear}April
+
 DHIS2 PERIOD FORMATS:
-- Days: yyyyMMdd (20040315 = March 15, 2004)
-- Weeks: yyyyWn (2004W10 = Week 10, 2004)
-- Months: yyyyMM (200403 = March 2004)
-- Quarters: yyyyQn (2004Q1 = Jan-Mar 2004)
-- Six-month: yyyySn (2004S1 = Jan-Jun 2004)
-- Six-month April: yyyyAprilSn (2004AprilS1 = Apr-Sep 2004)
-- Years: yyyy (2004 = full year 2004)
-- Financial Year April: yyyyApril (2004April = Apr 2004 - Mar 2005)
-- Financial Year July: yyyyJuly (2004July = Jul 2004 - Jun 2005)
-- Financial Year Oct: yyyyOct (2004Oct = Oct 2004 - Sep 2005)
+- Years: yyyy (2024, 2025, 2026)
+- Financial Year April: yyyyApril (2024April = Apr 2024 - Mar 2025)
+- Quarters: yyyyQn (2024Q1, 2024Q2)
+- Relative: THIS_QUARTER, THIS_YEAR, LAST_YEAR, LAST_5_YEARS, THIS_FINANCIAL_YEAR, LAST_5_FINANCIAL_YEARS
 
-RELATIVE PERIODS (relative to current date):
-- THIS_WEEK, LAST_WEEK, LAST_4_WEEKS, LAST_12_WEEKS, LAST_52_WEEKS
-- THIS_MONTH, LAST_MONTH, THIS_BIMONTH, LAST_BIMONTH
-- THIS_QUARTER, LAST_QUARTER, THIS_SIX_MONTH, LAST_SIX_MONTH
-- MONTHS_THIS_YEAR, QUARTERS_THIS_YEAR, THIS_YEAR, MONTHS_LAST_YEAR
-- QUARTERS_LAST_YEAR, LAST_YEAR, LAST_5_YEARS, LAST_12_MONTHS
-- LAST_3_MONTHS, LAST_6_BIMONTHS, LAST_4_QUARTERS, LAST_2_SIXMONTHS
-- THIS_FINANCIAL_YEAR, LAST_FINANCIAL_YEAR, LAST_5_FINANCIAL_YEARS
+QUERY TO PARSE: "${input.query}"
 
-QUERY: "${input.query}"
-CONTEXT: ${input.context || 'Health analytics query - extract time periods for data analysis'}
+RESOLUTION RULES:
+1. For "last N years" → generate N years ending with current year ${currentYear}
+   Example: "last 3 years" → ["${currentYear-2}", "${currentYear-1}", "${currentYear}"]
 
-EXAMPLES:
-"Show data for March 2024" → ["202403"]
-"HIV cases in 2023" → ["2023"]
-"Last month results" → ["LAST_MONTH"]
-"This week and last week" → ["THIS_WEEK", "LAST_WEEK"]
-"Quarterly trends for 2023" → ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
-"Financial year 2024April" → ["2024April"]
-"March 15, 2024 to April 15, 2024" → ["20240315", "20240415"]
+2. For "last N fiscal years" → generate N fiscal years ending with current fiscal year ${currentFiscalYear}April
+   Example: "last 3 fiscal years" → ["${currentFiscalYear-2}April", "${currentFiscalYear-1}April", "${currentFiscalYear}April"]
 
-IMPORTANT RULES:
-- Convert explicit dates to exact DHIS2 format (remove hyphens, use compact form)
-- Use RELATIVE periods for phrases like "last month", "this year"
-- For date ranges, list individual periods chronologically
-- For year references (like "2023"), use full year format
-- For month names, combine with year: "March 2024" → "202403"
-- If multiple interpretations possible, prefer most specific format
-- Return empty array [] if no date/period references found
+3. For "this quarter to same quarter last N years" → include THIS_QUARTER + N previous years with same quarter number Q${currentQuarter}
+   Example: N=3 → ["THIS_QUARTER", "${currentYear-1}Q${currentQuarter}", "${currentYear-2}Q${currentQuarter}", "${currentYear-3}Q${currentQuarter}"]
 
-Return ONLY a JSON object with:
+4. For explicit year like "2025" → ["2025"]
+
+5. Use relative periods (THIS_QUARTER, LAST_5_YEARS) when the query asks for "current" or "this" without needing historical expansion
+
+CRITICAL:
+- Calculate ACTUAL years based on CURRENT DATE above
+- NEVER use placeholders like "yyyy", "N", or "Qn"
+- ALWAYS output concrete period strings
+- Include ALL years in the range (starting year through ending year)
+
+Return ONLY JSON:
 {
-  "periods": ["period1", "period2", ...],
-  "matchedPhrases": ["March 2024", "2023"],
-  "periodTypes": ["month", "year"],
+  "periods": ["period1", "period2"],
+  "matchedPhrases": ["text matched"],
+  "periodTypes": ["year", "financial_year", "quarter"],
   "confidence": "high|medium|low",
-  "interpretation": "brief explanation of how periods were derived"
+  "interpretation": "explanation using current date ${currentYear}"
 }
 `;
 
-			// Make LLM call
 			const llmResponse = await llm.invoke([
 				{role: "system", content: prompt},
-				{role: "user", content: `Extract date periods: ${input.query}`}
+				{role: "user", content: `Parse periods from: ${input.query}`}
 			]);
 
-			console.log('📅 LLM response:', llmResponse.content);
-
-			// Parse LLM response
-			const content = (llmResponse.content as string).trim();
 			let periodResult: any;
-
 			try {
+				const content = llmResponse.content as string;
 				periodResult = JSON.parse(content);
-				// Validate expected structure
-				if (!periodResult.periods || !Array.isArray(periodResult.periods)) {
-					throw new Error('Invalid response structure');
-				}
 			} catch (parseError) {
-				console.warn('⚠️ LLM returned invalid JSON, attempting extraction');
-				// Attempt basic extraction
-				const periodMatch = content.match(/periods["\s:]+(\[[^\]]*\])/);
-				if (periodMatch) {
-					try {
-						periodResult = {periods: JSON.parse(periodMatch[1])};
-					} catch (e) {
-						periodResult = {periods: []};
-					}
-				} else {
-					periodResult = {periods: []};
-				}
+				console.warn('⚠️ LLM returned invalid JSON, using manual resolution');
+				periodResult = {
+					periods: resolvePeriodsManually(input.query, currentYear, currentQuarter, currentFiscalYear),
+					matchedPhrases: [input.query],
+					periodTypes: [],
+					confidence: 'medium',
+					interpretation: 'Manual fallback resolution'
+				};
 			}
 
-			// Clean and validate periods
-			const cleanPeriods = (periodResult.periods || [])
-				.filter((period: any) => typeof period === 'string' && period.length > 0)
-				.map((period: string) => period.trim())
-				.filter((period: string, index: number, arr: string[]) => arr.indexOf(period) === index) // Remove duplicates
-				.slice(0, 10); // Limit to 10 periods
+			let cleanPeriods = (periodResult.periods || [])
+				.filter((p: any) => typeof p === 'string' && p.length > 0)
+				.filter((p: string, i: number, arr: string[]) => arr.indexOf(p) === i);
+
+			// Validate and fix any remaining placeholders
+			cleanPeriods = cleanPeriods.map(p => {
+				if (p.includes('Qn') || p.includes('Q?')) {
+					return p.replace(/Q[n?]/i, `Q${currentQuarter}`);
+				}
+				if (p === 'yyyy' || p === 'YYYY') {
+					return `${currentYear}`;
+				}
+				if (p.includes('yyyyApril')) {
+					return p.replace('yyyy', `${currentFiscalYear}`);
+				}
+				if (p.match(/^\d{4}$/) && parseInt(p) > currentYear + 5) {
+					// Sanity check - don't return years too far in future
+					return `${currentYear}`;
+				}
+				return p;
+			});
+
+			// Remove duplicates again after fixes
+			cleanPeriods = [...new Set(cleanPeriods)];
+			cleanPeriods = cleanPeriods.slice(0, 10); // Limit to 10 periods
 
 			console.log('📅 Extracted periods:', cleanPeriods);
 
@@ -457,36 +465,115 @@ Return ONLY a JSON object with:
 				periods: cleanPeriods,
 				matchedPhrases: periodResult.matchedPhrases || [],
 				periodTypes: periodResult.periodTypes || [],
-				method: 'llm_extraction',
-				llmModel: (llm as any).modelName,
+				method: cleanPeriods.length > 0 ? 'llm_with_date_context' : 'no_periods_found',
+				currentDate: currentDateString,
+				currentYear: currentYear,
+				currentFiscalYear: currentFiscalYear,
 				query: input.query,
-				context: input.context,
-				confidence: periodResult.confidence || (cleanPeriods.length > 0 ? 'high' : 'low'),
-				interpretation: periodResult.interpretation || 'Period extraction result'
+				confidence: cleanPeriods.length > 0 ? periodResult.confidence || 'high' : 'low',
+				interpretation: periodResult.interpretation || `Resolved using current year ${currentYear}`
 			});
 
 		} catch (error) {
-			console.error('❌ Error in LLM date period extraction:', error);
-
-			// Graceful failure fallback
+			console.error('❌ Error in date period extraction:', error);
 			return JSON.stringify({
 				periods: [],
-				error: `Date period extraction failed: ${error.message}`,
-				method: 'failed_llm_extraction',
+				error: `Extraction failed: ${error.message}`,
+				method: 'failed',
 				query: input.query,
-				fallback_available: true
+				timestamp: new Date().toISOString()
 			});
 		}
 	},
 	{
 		name: "extract_date_period_llm",
-		description: "Extract date/period references from natural language queries and convert them to DHIS2 period format. Handles fixed periods (yyyyMMdd, yyyyWn, etc.) and relative periods (THIS_WEEK, LAST_MONTH, etc.) for analytics data queries.",
+		description: "Extract date/period references from natural language queries and convert them to DHIS2 period format using current date context",
 		schema: z.object({
 			query: z.string().describe("The user's query text to analyze for date/period references"),
-			context: z.string().optional().describe("Optional context about the analytics query type")
+			context: z.string().optional().describe("Optional context about the analytics query type (e.g., 'HIV indicators', 'monthly report')")
 		})
 	}
 );
+
+// Generic manual resolver that works for any N
+function resolvePeriodsManually(query: string, currentYear: number, currentQuarter: number, currentFiscalYear: number): string[] {
+	const lowerQuery = query.toLowerCase();
+
+	// Generic pattern for "last N years" (not followed by "fiscal")
+	const lastNYearsMatch = lowerQuery.match(/last\s+(\d+)\s*years?\b(?!\s*fiscal)/);
+	if (lastNYearsMatch) {
+		const n = parseInt(lastNYearsMatch[1]);
+		const periods: string[] = [];
+		for (let i = n - 1; i >= 0; i--) {
+			periods.push(`${currentYear - i}`);
+		}
+		return periods;
+	}
+
+	// Generic pattern for "last N fiscal years"
+	const lastNFiscalMatch = lowerQuery.match(/last\s+(\d+)\s*fiscal\s*years?/);
+	if (lastNFiscalMatch) {
+		const n = parseInt(lastNFiscalMatch[1]);
+		const periods: string[] = [];
+		for (let i = n - 1; i >= 0; i--) {
+			periods.push(`${currentFiscalYear - i}April`);
+		}
+		return periods;
+	}
+
+	// Generic pattern for "same quarter last N years"
+	const sameQuarterMatch = lowerQuery.match(/same quarter.*last\s+(\d+)\s*years?/);
+	if (sameQuarterMatch) {
+		const n = parseInt(sameQuarterMatch[1]);
+		const periods: string[] = ['THIS_QUARTER'];
+		for (let i = 1; i <= n; i++) {
+			periods.push(`${currentYear - i}Q${currentQuarter}`);
+		}
+		return periods;
+	}
+
+	// Pattern for "last N quarters"
+	const lastNQuartersMatch = lowerQuery.match(/last\s+(\d+)\s*quarters?/);
+	if (lastNQuartersMatch) {
+		const n = parseInt(lastNQuartersMatch[1]);
+		const periods: string[] = [];
+		let year = currentYear;
+		let quarter = currentQuarter;
+		for (let i = 0; i < n; i++) {
+			periods.push(`${year}Q${quarter}`);
+			quarter--;
+			if (quarter < 1) {
+				quarter = 4;
+				year--;
+			}
+		}
+		return periods;
+	}
+
+	// Pattern for "this quarter" only
+	if (lowerQuery.includes('this quarter') && !lowerQuery.includes('same quarter')) {
+		return ['THIS_QUARTER'];
+	}
+
+	// Pattern for "this year" or "current year"
+	if (lowerQuery.includes('this year') || lowerQuery.includes('current year')) {
+		return ['THIS_YEAR'];
+	}
+
+	// Pattern for "last year"
+	if (lowerQuery.includes('last year')) {
+		return ['LAST_YEAR'];
+	}
+
+	// Explicit year mentioned (2024, 2025, etc.)
+	const yearMatch = query.match(/\b(20\d{2})\b/);
+	if (yearMatch) {
+		return [yearMatch[1]];
+	}
+
+	// No patterns matched
+	return [];
+}
 
 
 // =============================================================================

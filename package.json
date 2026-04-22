@@ -18,6 +18,8 @@
     "@langchain/core": "^0.3.78",
     "@langchain/langgraph": "^0.4.9",
     "@langchain/openai": "^0.6.16",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-table-devtools": "^8.21.3",
     "@types/echarts": "^4.9.22",
     "antd": "^6.1.4",
     "echarts": "^5.5.0",

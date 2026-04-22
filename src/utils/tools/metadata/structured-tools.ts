@@ -126,6 +126,7 @@ export const buildAnalyticsChart = tool(
 				orgUnits,
 				disaggregations,
 				filterOptions: input.filterOptions,
+				optionsToCocs: input.optionsToCocs,
 				title: title || `Analytics Chart: ${userQuery}`,
 				hasCoDimension: addedCoDimension,
 			});
@@ -648,8 +649,9 @@ async function processAnalyticsForChart(params: {
 	filterOptions?: any[];
 	title: string;
 	hasCoDimension?: boolean;
+	optionsToCocs?: Record<string, string[]>;
 }): Promise<AnalyticsChartData> {
-	const {analyticsData, indicators, periods, orgUnits, disaggregations, title, seriesConfig} = params;
+	const {analyticsData, indicators, periods, orgUnits, disaggregations, title, seriesConfig, optionsToCocs} = params;
 
 	// Extract data from nested DHIS2 response structure
 	const analytics = analyticsData?.data?.analytics;
@@ -702,7 +704,6 @@ async function processAnalyticsForChart(params: {
 		return rowObj;
 	});
 
-	// Apply disaggregation filtering if specific breakdowns are requested
 
 	// Extract metadata for fallback lookups and display names
 	const metaDataItems = analytics?.metaData?.items || {};
@@ -836,6 +837,70 @@ async function processAnalyticsForChart(params: {
 		});
 	}
 
+	// ✅ COC EXPANSION: Expand category option combo IDs into individual category columns
+	// This is the critical fix: Convert raw COC ID -> separate columns for each category
+	// This makes groupChartData automatically create separate series for every combination
+
+	if (params.optionsToCocs && Object.keys(params.optionsToCocs).length > 0 && disaggregationGroups.length > 0) {
+		console.log(`📊 Expanding COC IDs into separate category columns for ${filteredRows.length} rows`);
+
+		// Build reverse mapping: COC ID → option IDs
+		const cocToOptions = new Map<string, string[]>();
+		Object.entries(params.optionsToCocs).forEach(([optionId, cocIds]) => {
+			(cocIds as string[]).forEach(cocId => {
+				if (!cocToOptions.has(cocId)) cocToOptions.set(cocId, []);
+				cocToOptions.get(cocId)!.push(optionId);
+			});
+		});
+
+		// Get all unique categories and build category index mapping
+		const allCategoryIds = new Set<string>();
+		const optionToCategory = new Map<string, string>();
+		const categoryIndex = new Map<string, number>();
+
+		disaggregationGroups.forEach(group => {
+			allCategoryIds.add(group.categoryId);
+			group.options.forEach(option => {
+				// Option belongs to this category, store category for this option
+				optionToCategory.set(option.id, group.categoryId);
+			});
+		});
+
+		Array.from(allCategoryIds).forEach((catId, index) => {
+			categoryIndex.set(catId, index);
+		});
+
+		// Process each row and inject co_0, co_1, co_2 columns for each category
+		filteredRows = filteredRows.map(row => {
+			// Find any COC column (co, co_0, etc.)
+			const cocColumn = Object.keys(row).find(key => key.startsWith('co'));
+			if (!cocColumn) return row;
+
+			const cocId = row[cocColumn];
+			if (!cocId || !cocToOptions.has(cocId)) return row;
+
+			const optionIds = cocToOptions.get(cocId)!;
+			const newRow = { ...row };
+
+			// For each category, inject column with the selected option
+			optionIds.forEach(optionId => {
+				const categoryId = optionToCategory.get(optionId);
+				if (!categoryId) return;
+
+				const idx = categoryIndex.get(categoryId);
+				if (idx !== undefined) {
+					// Find option name for display
+					const group = disaggregationGroups.find(g => g.categoryId === categoryId);
+					const option = group?.options.find(o => o.id === optionId);
+					newRow[`co_${idx}`] = option?.name || optionId;
+				}
+			});
+
+			return newRow;
+		});
+
+		console.log(`✅ COC expansion complete: injected ${allCategoryIds.size} category columns`);
+	}
 	return {
 		id: generateAnalyticsMemoryId(),
 		title,
@@ -871,7 +936,7 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
 	}
 
 	// Group data by dimensions for charting - use display names for periods
-	const dataByDimension = groupChartData(filteredData, chartType, chartData.metaData);
+			const dataByDimension = groupChartData(filteredData, chartType, chartData.metaData, chartData.dimensions.disaggregations);
 
 	// Determine if we have per-series configuration
 	const hasSeriesConfig = seriesConfig && seriesConfig.length > 0;
@@ -978,6 +1043,9 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
 						showSymbol: true,
 						symbol: 'circle',
 						symbolSize: 6,
+						// Disaggregations show as separate grouped bars by default (no stacking)
+					// Stacking is only applied when explicitly requested
+					stack: undefined,
 						label: {
 							show: config.showLabel === true
 						},
@@ -1007,21 +1075,24 @@ export function buildEChartsOption(chartData: AnalyticsChartData): any {
 				
 			} else {
 				// Fallback to default generic series generation
-				baseOption.series = dataByDimension.series.map(series => ({
-					name: series.name,
-					type: chartType,
-					data: series.data,
-					smooth: true,
-					symbol: 'circle',
-					symbolSize: 6,
-					lineStyle: {
-						width: 2
-					},
-					areaStyle: chartType === 'area' ? {} : undefined,
-					itemStyle: {
-						borderRadius: chartType === 'bar' ? [2, 2, 0, 0] : undefined
-					}
-				}));
+			baseOption.series = dataByDimension.series.map((series, seriesIndex) => ({
+				name: series.name,
+				type: chartType,
+				data: series.data,
+				smooth: true,
+				symbol: 'circle',
+				symbolSize: 6,
+				// ✅ CRITICAL FIX: Assign different stack groups PER CATEGORY
+				// Each disaggregation category gets its own stack group so they appear side-by-side
+				stack: series.categoryStackGroup || (dataByDimension.hasDisaggregations ? 'total' : undefined),
+				lineStyle: {
+					width: 2
+				},
+				areaStyle: chartType === 'area' ? {} : undefined,
+				itemStyle: {
+					borderRadius: chartType === 'bar' ? [2, 2, 0, 0] : undefined
+				}
+			}));
 			}
 			
 			baseOption.legend.data = dataByDimension.series.map(s => s.name);
@@ -1239,7 +1310,7 @@ function sortPeriodsChronologically(a: string, b: string): number {
 /**
  * Group chart data by appropriate dimensions
  */
-function groupChartData(data: any[], chartType: string, metadata?: any): any {
+function groupChartData(data: any[], chartType: string, metadata?: any, disaggregationGroups?: any[]): any {
 	if (chartType === 'pie') {
 		// For pie charts, group by periods/quarters
 		const periodGroups: Record<string, number> = {};
@@ -1257,14 +1328,94 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 		};
 	} else {
 		// For line/bar charts, organize by indicators over periods with disaggregation support
+		const categoryValues: Map<string, Set<string>> = new Map();
 		const periodOrder: string[] = [];
 		const seriesMap: Record<string, Record<string, number>> = {};
 
 		// Detect if data has category option columns (disaggregation)
 		const hasCategoryOptions = data.length > 0 && Object.keys(data[0]).some(key => key.startsWith('co'));
 
-		console.log(`📊 Chart grouping - Has disaggregations: ${hasCategoryOptions}`);
+		console.log(`📊 Chart grouping - Has disaggregations: ${hasCategoryOptions}, Category groups: ${disaggregationGroups?.length || 0}`);
 
+		// First pass: collect all unique values PER CATEGORY (not per combination)
+		data.forEach(row => {
+			const period = row.period || 'Unknown';
+			if (!periodOrder.includes(period)) {
+				periodOrder.push(period);
+			}
+
+			// Collect unique values for each separate category
+			for (const [key, value] of Object.entries(row)) {
+				if (key.startsWith('co_') && value) {
+					if (!categoryValues.has(key)) {
+						categoryValues.set(key, new Set());
+					}
+					categoryValues.get(key)!.add(String(value));
+				}
+			}
+		});
+
+		// ✅ NEW: MULTIPLE DISAGGREGATIONS HANDLING
+		// Each category becomes a SEPARATE GROUP on the X-AXIS
+		// Instead of creating series for every combination, we create groups per category
+
+		if (hasCategoryOptions && categoryValues.size > 0) {
+			console.log(`📊 Found ${categoryValues.size} separate disaggregation categories`);
+
+			// Create an X-axis that shows ALL DISAGGREGATION VALUES, NOT JUST PERIODS
+			// This creates separate bar groups for each category: [Male, Female, 0-4, 5-14, etc.]
+			const xAxisCategories: string[] = [];
+			const categoryGroupMapping = new Map<string, string>();
+
+			// Add each category's values as separate groups on the x-axis
+			let groupIndex = 0;
+			categoryValues.forEach((values, categoryKey) => {
+				const groupName = disaggregationGroups?.[groupIndex]?.categoryName || `Category ${groupIndex+1}`;
+
+				values.forEach(value => {
+					xAxisCategories.push(value);
+					// Assign stack group per category so bars within same group stack
+					categoryGroupMapping.set(value, `category_${groupIndex}`);
+				});
+
+				groupIndex++;
+			});
+
+			console.log(`📊 Generated X-axis categories:`, xAxisCategories);
+
+			// Now aggregate data per disaggregation value (sum across all periods for grouped view)
+			const valueByCategory: Record<string, number> = {};
+
+			data.forEach(row => {
+				for (const [key, value] of Object.entries(row)) {
+					if (key.startsWith('co_') && value) {
+						const catValue = String(value);
+						valueByCategory[catValue] = (valueByCategory[catValue] || 0) + (row.value || 0);
+					}
+				}
+			});
+
+			// Create single series with all category values grouped properly
+			const series = [{
+				name: 'Values',
+				data: xAxisCategories.map(cat => valueByCategory[cat] || 0),
+				categoryStackGroup: undefined
+			}];
+
+			// ✅ When multiple disaggregations exist:
+			//  - X-axis shows each disaggregation value separately
+			//  - Bars are grouped by their original category
+			//  - Each group appears as a separate section on the axis
+			return {
+				series,
+				categories: xAxisCategories,
+				categoryGroupMapping,
+				hasDisaggregations: true,
+				disaggregationCount: categoryValues.size
+			};
+		}
+
+		// Fallback: Standard period-based chart when no disaggregations
 		data.forEach(row => {
 			const period = row.period || 'Unknown';
 			const indicator = row.dx || 'Unknown';
@@ -1273,33 +1424,10 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 				periodOrder.push(period);
 			}
 
-			// Build series key - include category option if present for disaggregation
-			let seriesKey = indicator;
-
-			if (hasCategoryOptions) {
-				// Extract category option values from co_* columns
-				const categoryOptionValues: string[] = [];
-
-				for (const [key, value] of Object.entries(row)) {
-					if (key.startsWith('co_') && value) {
-						categoryOptionValues.push(String(value));
-					}
-				}
-
-				// If we found category options, append them to create unique series
-				if (categoryOptionValues.length > 0) {
-					const categoryLabel = categoryOptionValues.join(' - ');
-					seriesKey = `${indicator} (${categoryLabel})`;
-					console.log(`📊 Creating disaggregated series: ${seriesKey}`);
-				}
-			}
-
-			// Initialize series if needed
+			const seriesKey = indicator;
 			if (!seriesMap[seriesKey]) {
 				seriesMap[seriesKey] = {};
 			}
-
-			// Aggregate values by period for this series
 			seriesMap[seriesKey][period] = (seriesMap[seriesKey][period] || 0) + (row.value || 0);
 		});
 
@@ -1350,13 +1478,49 @@ function groupChartData(data: any[], chartType: string, metadata?: any): any {
 		});
 
 		console.log(`📊 Generated ${Object.keys(displaySeriesMap).length} series with ${displayNames.length} periods (using display names)`);
+		
+		const totalSeriesCount = Object.keys(displaySeriesMap).length;
+		const isHighCombinationCount = totalSeriesCount > 6;
+		
+		if (isHighCombinationCount) {
+			console.log(`⚠️ High combination count detected (${totalSeriesCount} series) - AUTOMATIC PIVOT TABLE FALLBACK`);
+		}
+
+		// ✅ CRITICAL FIX: Assign stack groups PER DISAGGREGATION CATEGORY
+		// This ensures different category types appear as separate grouped bars instead of all stacked together
+		const categoryGroupMapping = new Map<string, string>();
+		if (hasCategoryOptions && disaggregationGroups?.length > 0) {
+			disaggregationGroups.forEach((group: any, groupIndex: number) => {
+				group.options.forEach((option: any) => {
+					// Map each category option name to its group stack identifier
+					categoryGroupMapping.set(option.name.trim().toLowerCase(), `stack_group_${groupIndex}`);
+				});
+			});
+		}
 
 		return {
 			categories: displayNames,  // Use display names for x-axis labels
-			series: Object.entries(displaySeriesMap).map(([seriesName, periodData]) => ({
-				name: seriesName,
-				data: displayNames.map(displayName => periodData[displayName] || 0)
-			}))
+			hasDisaggregations: hasCategoryOptions && totalSeriesCount > 1,
+			totalCombinations: totalSeriesCount,
+			recommendPivotTable: isHighCombinationCount,
+			series: Object.entries(displaySeriesMap).map(([seriesName, periodData]) => {
+				// Determine which stack group this series belongs to
+				let categoryStackGroup: string | undefined;
+
+				// Find which category option this series contains
+				for (const [optionName, stackGroup] of categoryGroupMapping.entries()) {
+					if (seriesName.toLowerCase().includes(optionName)) {
+						categoryStackGroup = stackGroup;
+						break;
+					}
+				}
+
+				return {
+					name: seriesName,
+					categoryStackGroup,
+					data: displayNames.map(displayName => periodData[displayName] || 0)
+				};
+			})
 		};
 	}
 }
@@ -3418,7 +3582,6 @@ export const queryAnalytics = tool(
 			// Handle disaggregation dimensions - use COC IDs directly in co dimension
 			let cocDimension = '';
 
-			console.log('Input', input)
 			if (input.disaggregations && input.disaggregations.length > 0) {
 				// Disaggregations are now Category Option Combo (COC) IDs directly
 				// No parsing needed - just use them as-is in the co dimension

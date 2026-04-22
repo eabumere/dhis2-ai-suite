@@ -1752,13 +1752,18 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 					path: country.path
 				}));
 
+				// ✅ Allow multiple selection when grouping by country
+				const allowMultiCountrySelection = selectedGroup === 'by_country';
+
 				const selectedCountryResult = await state.orchestrator.requestSelection({
 					workflowId: state.workflowId,
-					title: "Select Country",
-					description: `Please select which country you would like to view ${selectedLevel} data for:`,
+					title: allowMultiCountrySelection ? "Select Countries" : "Select Country",
+					description: allowMultiCountrySelection 
+						? `Please select which countries you would like to view ${selectedLevel} data for:`
+						: `Please select which country you would like to view ${selectedLevel} data for:`,
 					items: countryOptions,
-					allowMultiple: false,
-					confirmButtonText: "Select Country"
+					allowMultiple: allowMultiCountrySelection,
+					confirmButtonText: allowMultiCountrySelection ? "Select Countries" : "Select Country"
 				});
 
 				if (!selectedCountryResult || selectedCountryResult.length === 0) {
@@ -1773,8 +1778,49 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 					};
 				}
 
-				const selectedCountry = selectedCountryResult[0];
-				console.log('✅ User selected country:', selectedCountry.name);
+				const selectedCountries = selectedCountryResult;
+				console.log(`✅ User selected ${selectedCountries.length} countries`);
+
+				// ✅ SKIP level selection entirely when grouping by country
+				if (selectedGroup === 'by_country') {
+					console.log('✅ Grouping by country - skipping level selection, using selected countries directly');
+					
+					// Use selected countries directly as final org units
+					const levelOrgUnits = selectedCountries;
+					console.log(`✅ Using ${levelOrgUnits.length} countries for analytics`);
+
+					// ✅ AUTO PROCEED WITH ALL SELECTED COUNTRIES
+					const suggestions = levelOrgUnits.map(ou => ({
+						name: ou.name,
+						id: ou.id,
+						type: 'organisationUnit',
+						isLevelSelection: true,
+						sourceLevel: { name: 'Country', level: 2 },
+						parentCountry: ou.name
+					}));
+
+					const orgUnitsMetadata = {
+						status: 'level_selected',
+						suggestions,
+						query: state.query,
+						selectedCountries,
+						selectedLevel: { name: 'Country', level: 2 },
+						totalOrgUnitsAtLevel: levelOrgUnits.length,
+						autoSelected: false,
+						reason: `Using ${levelOrgUnits.length} selected countries directly for by_country grouping`
+					};
+
+					advanceProgress(state, 4, 'Processing Selection', `Using ${levelOrgUnits.length} selected countries`, false);
+
+					return {
+						orgUnitsMetadata,
+						step: 'query_data'
+					};
+				}
+
+				// ✅ ONLY RUN THIS CODE WHEN NOT GROUPING BY COUNTRY
+				const selectedCountry = selectedCountries[0];
+				console.log('✅ User selected single country:', selectedCountry.name);
 
 				// ✅ STEP 2: NOW ASK USER TO SELECT ACTUAL ORG UNIT LEVEL
 				console.log('✅ STEP 2: Fetching system org unit levels');
@@ -3658,6 +3704,14 @@ async function configureVisualization(state: typeof GraphAnnotation.State): Prom
 		};
 
 		console.log('✅ Visualization configuration complete');
+
+		// ✅ AUTO-ENABLE STACKED MODE WHEN DISAGGREGATIONS ARE PRESENT
+		// When disaggregation categories are detected, automatically set stacked: true
+		// This creates stacked bars for disaggregated data instead of separate bars
+		if (state.data?.disaggregations && state.data.disaggregations.length > 0) {
+			visualizationConfig.stacked = true;
+			console.log('✅ Auto-enabled stacked mode for disaggregated data');
+		}
 
 		return {
 			seriesConfig,

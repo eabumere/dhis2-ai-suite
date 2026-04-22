@@ -42,6 +42,10 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     const [filterOptions, setFilterOptions] = useState<any>({});
     const [filtersExpanded, setFiltersExpanded] = useState(false);
     const [chartType, setChartType] = useState<string>('bar');
+    // ✅ AUTOMATIC PIVOT TABLE FALLBACK
+    // When disaggregation combinations exceed threshold, automatically switch to table view
+    const shouldUsePivotTable = chartData?.recommendPivotTable === true;
+    const [activeView, setActiveView] = useState<'chart' | 'table'>(shouldUsePivotTable ? 'table' : 'chart');
     const echartsRef = useRef<any>(null);
 
     useEffect(() => {
@@ -218,6 +222,10 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             });
 
             if (validCOCIds.size > 0) {
+                // ✅ Disaggregations are NOT filtered out - they are KEPT as separate series
+                // ✅ Only rows matching selected disaggregations are included
+                // ✅ Each disaggregation remains as a separate series when chart is rebuilt
+                // ✅ They are NOT summed together - groupChartData will split them into separate series
                 filteredRows = filteredRows.filter(row => {
                     // Find COC ID column - could be 'co', 'co_0', etc.
                     const cocColumn = Object.keys(row).find(key => key.startsWith('co'));
@@ -226,13 +234,14 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 });
 
                 console.log(`📊 Filtered by disaggregations (${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
+                console.log(`📊 ✅ Remaining disaggregations will be displayed as SEPARATE series (not summed)`);
             } else {
                 console.log(`📊 No valid COCs found for disaggregation filters - keeping all rows`);
             }
         } else if (filters.disaggregations && filters.disaggregations.length > 0) {
             console.log(`📊 Disaggregations filter applied but no optionsToCocs available`);
         } else {
-            console.log(`📊 No disaggregations filter applied`);
+            console.log(`📊 No disaggregations filter applied - SHOWING ALL disaggregations as separate series`);
         }
         // Return the original data but with filtered rows
         return {
@@ -1078,6 +1087,64 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 flexWrap: 'wrap',
                 boxShadow: 'var(--shadow-sm)'
             }}>
+                {/* View Toggle */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-3)',
+                    flexShrink: 0
+                }}>
+                    <span style={{
+                        fontSize: 'var(--font-size-sm)',
+                        fontWeight: 'var(--font-weight-semibold)',
+                        color: 'var(--color-primary-700)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)'
+                    }}>
+                        <span>📊</span>
+                        View
+                    </span>
+                    <div style={{
+                        position: 'relative',
+                        display: 'flex',
+                        gap: 'var(--space-1)'
+                    }}>
+                        {[
+                            { type: 'chart', icon: '📊', label: 'Chart' },
+                            { type: 'table', icon: '📋', label: 'Table' }
+                        ].map(({ type, icon, label }) => (
+                            <button
+                                key={type}
+                                onClick={() => setActiveView(type as 'chart' | 'table')}
+                                disabled={isFiltering}
+                                style={{
+                                    padding: 'var(--space-2) var(--space-3)',
+                                    backgroundColor: activeView === type ? 'var(--color-primary)' : 'var(--color-bg-primary)',
+                                    color: activeView === type ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                    border: `1px solid ${activeView === type ? 'var(--color-primary)' : 'var(--color-border-light)'}`,
+                                    borderRadius: 'var(--radius-md)',
+                                    cursor: 'pointer',
+                                    fontSize: 'var(--font-size-sm)',
+                                    fontWeight: 'var(--font-weight-medium)',
+                                    transition: 'var(--transition-fast)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 'var(--space-2)',
+                                    minWidth: '70px',
+                                    justifyContent: 'center',
+                                    boxShadow: activeView === type ? 'var(--shadow-sm)' : 'none'
+                                }}
+                                className="hover-lift"
+                                title={`Switch to ${label} view`}
+                            >
+                                <span>{icon}</span>
+                                <span>{label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 {/* Chart Type Selector */}
                 <div style={{
                     display: 'flex',
@@ -1244,20 +1311,83 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 display: 'flex',
                 flexDirection: 'column'
             }}>
-                <ReactECharts
-                    ref={echartsRef}
-                    option={echartsOption}
-                    style={{
-                        height: '100%',
-                        width: '100%',
-                        minHeight: '300px',
+                {activeView === 'chart' ? (
+                    <ReactECharts
+                        ref={echartsRef}
+                        option={echartsOption}
+                        style={{
+                            height: '100%',
+                            width: '100%',
+                            minHeight: '300px',
+                            flex: 1
+                        }}
+                        opts={{
+                            renderer: 'canvas',
+                            devicePixelRatio: window.devicePixelRatio || 1
+                        }}
+                    />
+                ) : (
+                    // Pivot Table View
+                    <div style={{
+                        overflowX: 'auto',
+                        maxHeight: '450px',
+                        overflowY: 'auto',
                         flex: 1
-                    }}
-                    opts={{
-                        renderer: 'canvas',
-                        devicePixelRatio: window.devicePixelRatio || 1
-                    }}
-                />
+                    }}>
+                        <table style={{
+                            width: '100%',
+                            borderCollapse: 'collapse',
+                            fontSize: 'var(--font-size-sm)'
+                        }}>
+                            <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
+                                <tr style={{ backgroundColor: 'var(--color-gray-50)' }}>
+                                    <th style={{
+                                        padding: 'var(--space-3) var(--space-4)',
+                                        textAlign: 'left',
+                                        fontWeight: 'var(--font-weight-semibold)',
+                                        borderBottom: '2px solid var(--color-border-light)'
+                                    }}>
+                                        Period
+                                    </th>
+                                    {echartsOption.series?.map((series: any) => (
+                                        <th key={series.name} style={{
+                                            padding: 'var(--space-3) var(--space-4)',
+                                            textAlign: 'right',
+                                            fontWeight: 'var(--font-weight-semibold)',
+                                            borderBottom: '2px solid var(--color-border-light)'
+                                        }}>
+                                            {series.name}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {echartsOption.xAxis?.data?.map((period: string, rowIdx: number) => (
+                                    <tr key={period} style={{
+                                        backgroundColor: rowIdx % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-gray-50)'
+                                    }}>
+                                        <td style={{
+                                            padding: 'var(--space-2) var(--space-4)',
+                                            borderBottom: '1px solid var(--color-border-light)',
+                                            fontWeight: 'var(--font-weight-medium)'
+                                        }}>
+                                            {period}
+                                        </td>
+                                        {echartsOption.series?.map((series: any) => (
+                                            <td key={`${period}-${series.name}`} style={{
+                                                padding: 'var(--space-2) var(--space-4)',
+                                                textAlign: 'right',
+                                                borderBottom: '1px solid var(--color-border-light)'
+                                            }}>
+                                                {series.data?.[rowIdx]?.toLocaleString() || 0}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
 
             {/* Chart Info */}

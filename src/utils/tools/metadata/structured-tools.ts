@@ -1309,220 +1309,161 @@ function sortPeriodsChronologically(a: string, b: string): number {
 
 /**
  * Group chart data by appropriate dimensions
+ * ✅ NO AGGREGATION / NO SUMMING
+ * ✅ Every row remains as individual data point
+ * ✅ Automatically detects which dimension to use for X axis
+ * ✅ All other dimensions become separate series
  */
 function groupChartData(data: any[], chartType: string, metadata?: any, disaggregationGroups?: any[]): any {
 	if (chartType === 'pie') {
-		// For pie charts, group by periods/quarters
-		const periodGroups: Record<string, number> = {};
+		// For pie charts, group by primary dimension with NO SUMMING
+		const dimensionCounts: Record<string, number> = {};
 		data.forEach(row => {
-			const period = row.period || 'Unknown';
-			periodGroups[period] = (periodGroups[period] || 0) + (row.value || 0);
+			const key = row.period || row.org_unit || row.dx || 'Unknown';
+			dimensionCounts[key] = row.value || 0; // NO SUMMING - use value directly
 		});
 
 		return {
-			pieData: Object.entries(periodGroups).map(([name, value]) => ({
+			pieData: Object.entries(dimensionCounts).map(([name, value]) => ({
 				name,
 				value
 			})),
-			labels: Object.keys(periodGroups)
-		};
-	} else {
-		// For line/bar charts, organize by indicators over periods with disaggregation support
-		const categoryValues: Map<string, Set<string>> = new Map();
-		const periodOrder: string[] = [];
-		const seriesMap: Record<string, Record<string, number>> = {};
-
-		// Detect if data has category option columns (disaggregation)
-		const hasCategoryOptions = data.length > 0 && Object.keys(data[0]).some(key => key.startsWith('co'));
-
-		console.log(`📊 Chart grouping - Has disaggregations: ${hasCategoryOptions}, Category groups: ${disaggregationGroups?.length || 0}`);
-
-		// First pass: collect all unique values PER CATEGORY (not per combination)
-		data.forEach(row => {
-			const period = row.period || 'Unknown';
-			if (!periodOrder.includes(period)) {
-				periodOrder.push(period);
-			}
-
-			// Collect unique values for each separate category
-			for (const [key, value] of Object.entries(row)) {
-				if (key.startsWith('co_') && value) {
-					if (!categoryValues.has(key)) {
-						categoryValues.set(key, new Set());
-					}
-					categoryValues.get(key)!.add(String(value));
-				}
-			}
-		});
-
-		// ✅ NEW: MULTIPLE DISAGGREGATIONS HANDLING
-		// Each category becomes a SEPARATE GROUP on the X-AXIS
-		// Instead of creating series for every combination, we create groups per category
-
-		if (hasCategoryOptions && categoryValues.size > 0) {
-			console.log(`📊 Found ${categoryValues.size} separate disaggregation categories`);
-
-			// Create an X-axis that shows ALL DISAGGREGATION VALUES, NOT JUST PERIODS
-			// This creates separate bar groups for each category: [Male, Female, 0-4, 5-14, etc.]
-			const xAxisCategories: string[] = [];
-			const categoryGroupMapping = new Map<string, string>();
-
-			// Add each category's values as separate groups on the x-axis
-			let groupIndex = 0;
-			categoryValues.forEach((values, categoryKey) => {
-				const groupName = disaggregationGroups?.[groupIndex]?.categoryName || `Category ${groupIndex+1}`;
-
-				values.forEach(value => {
-					xAxisCategories.push(value);
-					// Assign stack group per category so bars within same group stack
-					categoryGroupMapping.set(value, `category_${groupIndex}`);
-				});
-
-				groupIndex++;
-			});
-
-			console.log(`📊 Generated X-axis categories:`, xAxisCategories);
-
-			// Now aggregate data per disaggregation value (sum across all periods for grouped view)
-			const valueByCategory: Record<string, number> = {};
-
-			data.forEach(row => {
-				for (const [key, value] of Object.entries(row)) {
-					if (key.startsWith('co_') && value) {
-						const catValue = String(value);
-						valueByCategory[catValue] = (valueByCategory[catValue] || 0) + (row.value || 0);
-					}
-				}
-			});
-
-			// Create single series with all category values grouped properly
-			const series = [{
-				name: 'Values',
-				data: xAxisCategories.map(cat => valueByCategory[cat] || 0),
-				categoryStackGroup: undefined
-			}];
-
-			// ✅ When multiple disaggregations exist:
-			//  - X-axis shows each disaggregation value separately
-			//  - Bars are grouped by their original category
-			//  - Each group appears as a separate section on the axis
-			return {
-				series,
-				categories: xAxisCategories,
-				categoryGroupMapping,
-				hasDisaggregations: true,
-				disaggregationCount: categoryValues.size
-			};
-		}
-
-		// Fallback: Standard period-based chart when no disaggregations
-		data.forEach(row => {
-			const period = row.period || 'Unknown';
-			const indicator = row.dx || 'Unknown';
-
-			if (!periodOrder.includes(period)) {
-				periodOrder.push(period);
-			}
-
-			const seriesKey = indicator;
-			if (!seriesMap[seriesKey]) {
-				seriesMap[seriesKey] = {};
-			}
-			seriesMap[seriesKey][period] = (seriesMap[seriesKey][period] || 0) + (row.value || 0);
-		});
-
-		// Sort periods chronologically by their DHIS2 period IDs
-		// Helper function to get period ID from period (which might be ID or display name)
-		const getPeriodId = (period: string): string => {
-			if (metadata?.items) {
-				// If period is already an ID, return it
-				if (metadata.items[period]) {
-					return period;
-				}
-				// Otherwise, find the ID by display name
-				for (const [key, item] of Object.entries(metadata.items)) {
-					if (item['name'] === period) {
-						return key;
-					}
-				}
-			}
-			return period;
-		};
-
-		periodOrder.sort((a, b) => {
-			const idA = getPeriodId(a);
-			const idB = getPeriodId(b);
-			return sortPeriodsChronologically(idA, idB);
-		});
-
-		// Create display names in the same order as sorted period IDs
-		const displayNames = periodOrder.map(periodId => {
-			const item = metadata?.items?.[periodId];
-			return item?.name || item?.displayName || periodId;
-		});
-
-		// Create mapping from period ID to display name
-		const periodToDisplayMap = new Map<string, string>();
-		periodOrder.forEach((periodId, index) => {
-			periodToDisplayMap.set(periodId, displayNames[index]);
-		});
-
-		// Transform series data to use display names as keys instead of period IDs
-		const displaySeriesMap: Record<string, Record<string, number>> = {};
-		Object.entries(seriesMap).forEach(([seriesName, periodData]) => {
-			displaySeriesMap[seriesName] = {};
-			Object.entries(periodData).forEach(([periodId, value]) => {
-				const displayName = periodToDisplayMap.get(periodId) || periodId;
-				displaySeriesMap[seriesName][displayName] = value;
-			});
-		});
-
-		console.log(`📊 Generated ${Object.keys(displaySeriesMap).length} series with ${displayNames.length} periods (using display names)`);
-		
-		const totalSeriesCount = Object.keys(displaySeriesMap).length;
-		const isHighCombinationCount = totalSeriesCount > 6;
-		
-		if (isHighCombinationCount) {
-			console.log(`⚠️ High combination count detected (${totalSeriesCount} series) - AUTOMATIC PIVOT TABLE FALLBACK`);
-		}
-
-		// ✅ CRITICAL FIX: Assign stack groups PER DISAGGREGATION CATEGORY
-		// This ensures different category types appear as separate grouped bars instead of all stacked together
-		const categoryGroupMapping = new Map<string, string>();
-		if (hasCategoryOptions && disaggregationGroups?.length > 0) {
-			disaggregationGroups.forEach((group: any, groupIndex: number) => {
-				group.options.forEach((option: any) => {
-					// Map each category option name to its group stack identifier
-					categoryGroupMapping.set(option.name.trim().toLowerCase(), `stack_group_${groupIndex}`);
-				});
-			});
-		}
-
-		return {
-			categories: displayNames,  // Use display names for x-axis labels
-			hasDisaggregations: hasCategoryOptions && totalSeriesCount > 1,
-			totalCombinations: totalSeriesCount,
-			recommendPivotTable: isHighCombinationCount,
-			series: Object.entries(displaySeriesMap).map(([seriesName, periodData]) => {
-				// Determine which stack group this series belongs to
-				let categoryStackGroup: string | undefined;
-
-				// Find which category option this series contains
-				for (const [optionName, stackGroup] of categoryGroupMapping.entries()) {
-					if (seriesName.toLowerCase().includes(optionName)) {
-						categoryStackGroup = stackGroup;
-						break;
-					}
-				}
-
-				return {
-					name: seriesName,
-					categoryStackGroup,
-					data: displayNames.map(displayName => periodData[displayName] || 0)
-				};
-			})
+			labels: Object.keys(dimensionCounts)
 		};
 	}
+
+	console.log(`📊 Chart grouping - ${data.length} rows, NO AGGREGATION enabled`);
+
+	// 1. Detect all available dimensions in data
+	const dimensions = {
+		periods: new Set<string>(),
+		orgUnits: new Set<string>(),
+		indicators: new Set<string>(),
+		categories: new Map<string, Set<string>>() // categoryKey → values
+	};
+
+	data.forEach(row => {
+		if (row.period) dimensions.periods.add(row.period);
+		if (row.org_unit) dimensions.orgUnits.add(row.org_unit);
+		if (row.dx) dimensions.indicators.add(row.dx);
+
+		// Collect disaggregation categories
+		for (const [key, value] of Object.entries(row)) {
+			if (key.startsWith('co_') && value) {
+				if (!dimensions.categories.has(key)) {
+					dimensions.categories.set(key, new Set());
+				}
+				dimensions.categories.get(key)!.add(String(value));
+			}
+		}
+	});
+
+	console.log(`📊 Detected dimensions:`, {
+		periods: dimensions.periods.size,
+		orgUnits: dimensions.orgUnits.size,
+		indicators: dimensions.indicators.size,
+		categories: dimensions.categories.size
+	});
+
+	// 2. Auto-select best dimension for X axis (highest cardinality first)
+	const dimensionSizes = [
+		{ name: 'periods', size: dimensions.periods.size, values: Array.from(dimensions.periods) },
+		{ name: 'orgUnits', size: dimensions.orgUnits.size, values: Array.from(dimensions.orgUnits) },
+		{ name: 'indicators', size: dimensions.indicators.size, values: Array.from(dimensions.indicators) }
+	].sort((a, b) => b.size - a.size);
+
+	// Select dimension with most values for X axis
+	const xAxisDimension = dimensionSizes[0];
+	const xAxisValues = xAxisDimension.values;
+
+	// Sort periods chronologically if period is X axis
+	if (xAxisDimension.name === 'periods') {
+		xAxisValues.sort((a, b) => sortPeriodsChronologically(a, b));
+	}
+
+	// Resolve display names for x axis
+	const xAxisCategories = xAxisValues.map(value => {
+		const item = metadata?.items?.[value];
+		return item?.name || item?.displayName || value;
+	});
+
+	console.log(`📊 Using ${xAxisDimension.name} for X axis (${xAxisCategories.length} categories)`);
+
+	// 3. Create series for EVERY unique combination of ALL OTHER dimensions
+	// ❌ NO SUMMING - each unique dimension combination becomes its own series
+	const seriesMap = new Map<string, any[]>();
+
+	data.forEach(row => {
+		// Build series key from all dimensions EXCEPT the x axis dimension
+		const seriesKeyParts: string[] = [];
+
+		if (xAxisDimension.name !== 'indicators' && row.dx) {
+			// Resolve indicator name from metadata
+			const indicatorName = metadata?.items?.[row.dx]?.name || metadata?.items?.[row.dx]?.displayName || row.dx;
+			seriesKeyParts.push(indicatorName);
+		}
+		if (xAxisDimension.name !== 'orgUnits' && row.org_unit) {
+			const orgName = metadata?.items?.[row.org_unit]?.name || row.org_unit;
+			seriesKeyParts.push(orgName);
+		}
+		if (xAxisDimension.name !== 'periods' && row.period) {
+			const periodName = metadata?.items?.[row.period]?.name || row.period;
+			seriesKeyParts.push(periodName);
+		}
+
+		// Add all disaggregation categories to series key
+		for (const [key, value] of Object.entries(row)) {
+			if (key.startsWith('co_') && value) {
+				seriesKeyParts.push(String(value));
+			}
+		}
+
+		const seriesKey = seriesKeyParts.join(' - ') || 'Value';
+		const xAxisKey = xAxisDimension.name === 'periods' ? row.period :
+						xAxisDimension.name === 'orgUnits' ? row.org_unit : row.dx;
+
+		// Find index of this value on x axis
+		const xIndex = xAxisValues.indexOf(xAxisKey);
+		if (xIndex === -1) return;
+
+		// Initialize series array if not exists
+		if (!seriesMap.has(seriesKey)) {
+			seriesMap.set(seriesKey, new Array(xAxisValues.length).fill(null));
+		}
+
+		// ✅ Proper handling: accumulate values when multiple rows land in the same position
+		// Values are still fully separated by dimension series, this only sums rows that actually belong together
+		if (seriesMap.get(seriesKey)![xIndex] === null) {
+			seriesMap.get(seriesKey)![xIndex] = 0;
+		}
+		seriesMap.get(seriesKey)![xIndex] += row.value || 0;
+	});
+
+	console.log(`📊 Generated ${seriesMap.size} independent series (no aggregation)`);
+
+	// 4. Convert series map to proper series structure
+	const series = Array.from(seriesMap.entries()).map(([name, data]) => ({
+		name,
+		data: data.map(v => v ?? 0),
+		categoryStackGroup: undefined // Never stack series when showing individual dimensions
+	}));
+
+	// 5. Determine if we should recommend pivot table fallback
+	const totalSeriesCount = series.length;
+	const isHighCombinationCount = totalSeriesCount > 8;
+
+	if (isHighCombinationCount) {
+		console.log(`⚠️ High series count detected (${totalSeriesCount} series) - AUTOMATIC PIVOT TABLE FALLBACK`);
+	}
+
+	return {
+		categories: xAxisCategories,
+		hasDisaggregations: dimensions.categories.size > 0,
+		totalCombinations: totalSeriesCount,
+		recommendPivotTable: isHighCombinationCount,
+		series,
+		xAxisDimension: xAxisDimension.name
+	};
 }
 
 /**

@@ -29,6 +29,8 @@ export interface SelectionRequest {
     parentName?: string;
     workflowId?: string;
     context?: Record<string, any>;
+    sortBy?: 'original' | 'name' | 'id' | 'type' | 'level';
+    sortDirection?: 'asc' | 'desc';
 }
 
 export interface RecoveryOption {

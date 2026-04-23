@@ -697,6 +697,8 @@ const MyApp: FC = () => {
 									allowCreateNew={uiState.selectionRequest?.allowCreateNew}
 									createNewLabel={uiState.selectionRequest?.createNewLabel}
 									confirmButtonText={uiState.selectionRequest?.confirmButtonText}
+									sortBy={uiState.selectionRequest?.sortBy}
+									sortDirection={uiState.selectionRequest?.sortDirection}
 									onCreateNew={() => handleSelectionComplete([{ id: '__create_new__', name: 'Create New', type: 'action' } as MetadataOption])}
 								/>
 							) : (
@@ -916,6 +918,8 @@ const MyApp: FC = () => {
 									allowCreateNew={uiState.selectionRequest?.allowCreateNew}
 									createNewLabel={uiState.selectionRequest?.createNewLabel}
 									confirmButtonText={uiState.selectionRequest?.confirmButtonText}
+									sortBy={uiState.selectionRequest?.sortBy}
+									sortDirection={uiState.selectionRequest?.sortDirection}
 									onCreateNew={() => handleSelectionComplete([{ id: '__create_new__', name: 'Create New', type: 'action' } as MetadataOption])}
 								/>
 							</div>

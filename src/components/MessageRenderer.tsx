@@ -1413,6 +1413,8 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                         // This would be handled by the orchestrator
                                     }}
                                     allowMultiple={message.data.allowMultiple !== false}
+                                    sortBy={message.data.sortBy}
+                                    sortDirection={message.data.sortDirection}
                                 />
                             </div>
                         )}
@@ -1601,6 +1603,8 @@ const MessageRenderer: FC<MessageRendererProps> = ({ message }) => {
                                         workflowOrchestrator.handleDatasetSelection(selected);
                                     }}
                                     allowMultiple={false}
+                                    sortBy={message.data.sortBy}
+                                    sortDirection={message.data.sortDirection}
                                 />
                             </div>
                         )}

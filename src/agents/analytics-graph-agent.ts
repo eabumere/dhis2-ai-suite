@@ -1730,7 +1730,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 						params: {
 							filter: `level:eq:2`,
 							fields: 'id,name,path',
-							paging: false
+							paging: false,
+							order: 'name:asc'
 						}
 					}
 				});
@@ -1830,7 +1831,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 						resource: 'organisationUnitLevels.json',
 						params: {
 							fields: 'id,name,level',
-							paging: false
+							paging: false,
+							order: 'level:asc'
 						}
 					}
 				});
@@ -1851,7 +1853,7 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 					description: `Please select which level corresponds to "${selectedLevel}" in ${selectedCountry.name}:`,
 					items: levelOptions,
 					allowMultiple: false,
-					confirmButtonText: "Select Level"
+					confirmButtonText: "Select Level",
 				});
 
 				if (!selectedLevelResult || selectedLevelResult.length === 0) {

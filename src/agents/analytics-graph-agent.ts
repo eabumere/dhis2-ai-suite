@@ -1854,6 +1854,8 @@ async function searchOrgUnits(state: typeof GraphAnnotation.State): Promise<Part
 					items: levelOptions,
 					allowMultiple: false,
 					confirmButtonText: "Select Level",
+					sortBy: 'level',
+					sortDirection: 'asc'
 				});
 
 				if (!selectedLevelResult || selectedLevelResult.length === 0) {

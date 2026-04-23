@@ -722,9 +722,9 @@ async function processAnalyticsForChart(params: {
 
 	const resolveOrgUnitNames = Array.from(allOrgUnits).map(value => {
 		// If DHIS2 provided readable names in rows, use them directly
-		if (typeof value === 'string' && value.length > 2 && !/^[a-zA-Z0-9_-]+$/.test(value)) {
+		/*if (typeof value === 'string' && value.length > 2 && !/^[a-zA-Z0-9_-]+$/.test(value)) {
 			return value; // Already readable (contains spaces/symbols = human-readable name)
-		}
+		}*/
 		// Otherwise try metadata lookup (legacy compatibility)
 		return metaDataItems[value]?.name || metaDataItems[value]?.displayName || value;
 	});
@@ -740,18 +740,35 @@ async function processAnalyticsForChart(params: {
 
 	// Create a mapping of org unit IDs to names
 	const orgUnitNameMap = new Map<string, string>();
-	Array.from(allOrgUnits).forEach((id, index) => {
-		orgUnitNameMap.set(id, resolveOrgUnitNames[index] || id);
+	Array.from(allOrgUnits).forEach((orgName) => {
+		// Find the entry in metaDataItems where the name matches the orgName
+		const entry = Object.entries(metaDataItems).find(([key, value]) => (value as any).name === orgName);
+
+		if (entry) {
+			const [actualId, value] = entry;
+			orgUnitNameMap.set(actualId, (value as any).name);
+		} else {
+			// Fallback if not found
+			orgUnitNameMap.set(orgName, orgName);
+		}
 	});
 
-	// Add organization units filter group
+	console.log('Org Units', orgUnitNameMap);
+
+// Add organization units filter group
 	filterGroups.push({
 		name: 'Organization Units',
 		type: 'orgUnits',
-		options: Array.from(allOrgUnits).map(id => ({
-			name: orgUnitNameMap.get(id) || id,
-			id: id
-		})),
+		options: Array.from(allOrgUnits).map(orgName => {
+			// Find the actual ID for this org name
+			const entry = Object.entries(metaDataItems).find(([key, value]) => (value as any).name === orgName);
+			const actualId = entry ? entry[0] : orgName;
+
+			return {
+				name: orgName,
+				id: actualId  // Use the actual metadata ID, not the name
+			};
+		}),
 		selected: []
 	});
 
@@ -911,7 +928,10 @@ async function processAnalyticsForChart(params: {
 		dimensions: {
 			indicators: Array.from(allIndicators), // Always use what's actually in the data
 			periods: Array.from(allPeriods),       // Always use what's actually in the data
-			orgUnits: orgUnits.length > 0 ? orgUnits : Array.from(allOrgUnits),
+			// ✅ FIX: Map org unit IDs to proper display names using available metadata
+			orgUnits: orgUnits.length > 0 
+				? orgUnits.map(id => metaDataItems[id]?.name || metaDataItems[id]?.displayName || id)
+				: Array.from(allOrgUnits).map(id => metaDataItems[id]?.name || metaDataItems[id]?.displayName || id),
 			disaggregations: disaggregationGroups  // Now contains proper structure with option IDs
 		},
 		filterGroups,

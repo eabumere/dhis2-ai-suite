@@ -79,22 +79,60 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 setEchartsOption(chartData.echarts_option);
                 // Extract filter options from chart data
                 extractFilterOptions(chartData);
+                
+                // ✅ ALL FILTERS SELECTED BY DEFAULT
+                // Initialize filters with ALL items selected on initial load
+                const initialFilters: ChartFilter = {};
+                
+                if (chartData.dimensions?.indicators?.length > 0) {
+                    initialFilters.indicators = [...chartData.dimensions.indicators];
+                }
+                if (chartData.dimensions?.periods?.length > 0) {
+                    initialFilters.periods = [...chartData.dimensions.periods];
+                }
+                if (chartData.dimensions?.orgUnits?.length > 0) {
+                    initialFilters.orgUnits = [...chartData.dimensions.orgUnits];
+                }
+                
+                // Initialize disaggregations if available
+                if (chartData.dimensions?.disaggregations?.length > 0) {
+                    initialFilters.disaggregations = chartData.dimensions.disaggregations.flatMap(
+                        (group: any) => group.options.map((opt: any) => opt.id)
+                    );
+                }
+                
+                setFilters(initialFilters);
             }
         }
     }, [chartData]);
 
     const extractFilterOptions = (data: any) => {
         const options: any = {};
+        const filteredData = data.filteredData || [];
+        
+        // ✅ ONLY SHOW FILTER ITEMS THAT ACTUALLY HAVE DATA
+        // First scan all data rows to find which dimension values are actually present
+        
+        // Collect all actual values present in data
+        const actualIndicators = new Set<string>();
+        const actualPeriods = new Set<string>();
+        const actualOrgUnits = new Set<string>();
+        
+        filteredData.forEach((row: any) => {
+            if (row.dx) actualIndicators.add(row.dx);
+            if (row.period) actualPeriods.add(row.period);
+            if (row.org_unit) actualOrgUnits.add(row.org_unit);
+        });
 
-        // Extract traditional dimension filters
+        // Extract traditional dimension filters - ONLY include items with actual data
         if (data.dimensions?.indicators?.length > 0) {
-            options.indicators = data.dimensions.indicators;
+            options.indicators = data.dimensions.indicators.filter((ind: string) => actualIndicators.has(ind));
         }
         if (data.dimensions?.periods?.length > 0) {
-            options.periods = data.dimensions.periods;
+            options.periods = data.dimensions.periods.filter((p: string) => actualPeriods.has(p));
         }
         if (data.dimensions?.orgUnits?.length > 0) {
-            options.orgUnits = data.dimensions.orgUnits;
+            options.orgUnits = data.dimensions.orgUnits.filter((ou: string) => actualOrgUnits.has(ou));
         }
 
         // Extract disaggregation groups from dimensions.disaggregations first
@@ -118,7 +156,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
     const handleFilterChange = async (filterType: keyof ChartFilter, values: string[]) => {
 	    console.log('Filters:', filterType, values);
-        if (!chartData || !values.length) return;
+        if (!chartData) return;
 
         const newFilters = { ...filters, [filterType]: values };
         setFilters(newFilters);
@@ -127,15 +165,18 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         try {
             console.log(`📊 Applying filter: ${filterType} = [${values.join(', ')}]`);
 
-            // Apply client-side filtering to the analytics data
-            const filteredChartData = await applyClientSideFiltering(chartData, newFilters);
+            // ✅ PROPER FILTERING: Always start with full original data
+            // Filter from scratch every time - no incremental changes
+            const filteredChartData = await applyClientSideFiltering(fullChartData, newFilters);
 
-            // Update the chart options with filtered data
+            // ✅ REGENERATE CHART COMPLETELY FROM FILTERED ROWS
+            // No partial updates, no value summing - build chart from exactly what remains
             const filteredOption = await generateFilteredChartOption(filteredChartData);
 
-            // Update the ECharts instance while preserving interactivity
+            // Update the ECharts instance - replace entire option, don't merge
             if (echartsRef.current) {
-                echartsRef.current.getEchartsInstance().setOption(filteredOption, false, true);
+                // Use true for notMerge to completely replace previous chart configuration
+                echartsRef.current.getEchartsInstance().setOption(filteredOption, true, false);
             } else {
                 setEchartsOption(filteredOption);
             }
@@ -190,21 +231,38 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
         let filteredRows = [...filteredData];
 
+        // ✅ PROPER FILTERING LOGIC:
+        // - Empty filter = NO data (exclude everything)
+        // - Only rows matching ALL selected filter values are kept
+        // - No summing, no hidden values - exactly what is selected is what remains
+
         // Filter by indicators (dx column)
-        if (filters.indicators && filters.indicators.length > 0) {
-            filteredRows = filteredRows.filter(row => filters.indicators!.includes(row.dx));
+        if (filters.indicators) {
+            if (filters.indicators.length === 0) {
+                filteredRows = [];
+            } else {
+                filteredRows = filteredRows.filter(row => filters.indicators!.includes(row.dx));
+            }
             console.log(`📊 Filtered by indicators: ${filteredRows.length} points remaining`);
         }
 
         // Filter by periods (period column)
-        if (filters.periods && filters.periods.length > 0) {
-            filteredRows = filteredRows.filter(row => filters.periods!.includes(row.period));
+        if (filters.periods) {
+            if (filters.periods.length === 0) {
+                filteredRows = [];
+            } else {
+                filteredRows = filteredRows.filter(row => filters.periods!.includes(row.period));
+            }
             console.log(`📊 Filtered by periods: ${filteredRows.length} points remaining`);
         }
 
         // Filter by org units (org_unit column)
-        if (filters.orgUnits && filters.orgUnits.length > 0) {
-            filteredRows = filteredRows.filter(row => filters.orgUnits!.includes(row.org_unit));
+        if (filters.orgUnits) {
+            if (filters.orgUnits.length === 0) {
+                filteredRows = [];
+            } else {
+                filteredRows = filteredRows.filter(row => filters.orgUnits!.includes(row.org_unit));
+            }
             console.log(`📊 Filtered by org units: ${filteredRows.length} points remaining`);
         }
 

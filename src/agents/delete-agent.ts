@@ -236,10 +236,16 @@ async function handleSearchResult(state: typeof DeleteGraphAnnotation.State): Pr
 	const result = state.resourceSearchResult;
 
 	// Check if this requires user selection
-	if (result.action === 'SHOW_SELECTOR' && result.selectorOptions) {
-		console.log('⏸️ Multiple matches found, requesting user selection');
+	if ((result.action === 'SHOW_SELECTOR' && result.selectorOptions) || 
+		(result.action === 'SHOW_SIMILAR' && result.similarMatches)) {
+		
+		console.log('⏸️ Multiple/similar matches found, requesting user selection');
 
-		advanceProgress(state, 3, 'User Selection', 'Multiple resources found, waiting for your selection...', true);
+		advanceProgress(state, 3, 'User Selection', 
+			result.action === 'SHOW_SIMILAR' 
+				? 'No exact match found. Please select which resource to delete...' 
+				: 'Multiple resources found, waiting for your selection...', 
+			true);
 
 		if (!state.orchestrator) {
 			console.error('No orchestrator available for selection');
@@ -254,11 +260,14 @@ async function handleSearchResult(state: typeof DeleteGraphAnnotation.State): Pr
 		}
 
 		try {
-			// Transform selectorOptions to the format expected by requestSelection
-			const selectionOptions = result.selectorOptions?.map((option: any) => ({
+			// Get selection options from either selectorOptions or similarMatches
+			const options = result.selectorOptions || result.similarMatches;
+			
+			// Transform options to the format expected by requestSelection
+			const selectionOptions = options?.map((option: any) => ({
 				name: option.name,
 				id: option.id,
-				type: option.type
+				type: option.type || result.resourceType
 			})) || [];
 
 			// Request selection through orchestrator
@@ -287,7 +296,8 @@ async function handleSearchResult(state: typeof DeleteGraphAnnotation.State): Pr
 			console.warn('⏸️ Metadata selection failed, falling back:', selectionError.message);
 
 			// Fallback: Auto-select the first option
-			const autoSelected = result.selectorOptions[0];
+			const options = result.selectorOptions || result.similarMatches;
+			const autoSelected = options[0];
 			console.log('▶️ Auto-selected first resource due to selection failure:', autoSelected);
 
 			return {

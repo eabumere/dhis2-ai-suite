@@ -25,6 +25,7 @@ export const DataElementSchema = z.object({
   displayName: z.string().min(1),
   shortName: z.string().min(1),
   code: z.string().optional(),
+	optionSet: z.object({id: z.string()}).optional(),
   valueType: z.enum([
     'NUMBER', 'INTEGER', 'POSITIVE_INT', 'NEGATIVE_INT', 'ZERO_OR_POSITIVE_INT',
     'TEXT', 'LONG_TEXT', 'LETTER', 'PHONE_NUMBER', 'EMAIL', 'BOOLEAN', 'TRUE_ONLY',
@@ -99,7 +100,7 @@ export const CategoryComboSchema = z.object({
 
 // DataSet Schema
 export const DataSetElementSchema = z.object({
-  dataElement: z.object({ id: z.string() }),
+  dataElement: z.object({ id: z.string().optional(), name: z.string().optional() }),
   categoryCombo: z.object({ id: z.string() }).optional(),
 });
 
@@ -155,8 +156,8 @@ export const DataSetSchema = z.object({
     'FinancialApril', 'FinancialJuly', 'FinancialOct'
   ]),
   categoryCombo: z.object({ id: z.string() }).optional(),
-  dataSetElements: z.array(DataSetElementSchema),
-  organisationUnits: z.array(z.object({ id: z.string() })),
+  dataSetElements: z.array(DataSetElementSchema).optional(),
+  organisationUnits: z.array(z.object({ id: z.string() })).optional(),
   sections: z.array(SectionSchema).optional(),
   compulsoryDataElementOperands: z.array(DataElementOperandSchema).optional(),
   expiryDays: z.number().int().min(1).optional(),

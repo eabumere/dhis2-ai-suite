@@ -6,21 +6,41 @@ export interface MetadataOption {
     id: string;
     type: 'indicator' | 'dataElement' | 'organisationUnit' | 'category' | 'categoryCombo' |
           'categoryOption' | 'dataSet' | 'program' | 'trackedEntityType' | 'trackedEntityAttribute' |
-          'validationRule' | 'optionSet' | 'visualization' | 'dashboard' | 'user' | 'relationshipType';
+          'validationRule' | 'optionSet' | 'visualization' | 'dashboard' | 'user' | 'relationshipType' | 'action';
+    level?: number;
 }
+
+export type SortByOption = 'original' | 'name' | 'id' | 'type' | 'level';
+export type SortDirection = 'asc' | 'desc';
 
 export interface MetadataSelectorProps {
     selectionOptions: MetadataOption[];
     originalQuery: string;
     onSelection: (selectedItems: MetadataOption[], selectedIndices: number[]) => void;
     allowMultiple?: boolean;
+    title?: string;
+    description?: string;
+    allowCreateNew?: boolean;
+    createNewLabel?: string;
+    confirmButtonText?: string;
+    onCreateNew?: () => void;
+    sortBy?: SortByOption;
+    sortDirection?: SortDirection;
 }
 
 const MetadataSelector: React.FC<MetadataSelectorProps> = ({
     selectionOptions,
     originalQuery,
     onSelection,
-    allowMultiple = true
+    allowMultiple = true,
+    title = "Select Metadata Items",
+    description,
+    allowCreateNew = false,
+    createNewLabel = "Create New",
+    confirmButtonText,
+    onCreateNew,
+    sortBy = 'name',
+    sortDirection = 'asc'
 }) => {
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
@@ -37,25 +57,66 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
 
     // Filter and sort options based on search and type filters
     const filteredOptions = React.useMemo(() => {
-        return selectionOptions
+        let result = selectionOptions
             .map((option, originalIndex) => ({ option, originalIndex }))
-            .filter(({ option, originalIndex }) => {
+            .filter(({ option }) => {
                 // Search filter
                 const matchesSearch = !searchQuery ||
-                    option.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    option.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    option.type.toLowerCase().includes(searchQuery.toLowerCase());
+                    option.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    option.id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                    option.type?.toLowerCase().includes(searchQuery.toLowerCase());
 
                 // Type filter
                 const matchesType = selectedTypes.size === 0 || selectedTypes.has(option.type);
 
                 return matchesSearch && matchesType;
-            })
-            .sort((a, b) => {
-                // Sort alphabetically by name, case-insensitive
-                return a.option.name.toLowerCase().localeCompare(b.option.name.toLowerCase());
             });
-    }, [selectionOptions, searchQuery, selectedTypes]);
+
+        // Apply sorting based on configuration
+        if (sortBy !== 'original') {
+            result.sort((a, b) => {
+                let comparison: number;
+
+                switch (sortBy) {
+                    case 'level':
+                        // Special handling for org units: sort by level first, then name
+                        const levelA = a.option.level ?? Infinity;
+                        const levelB = b.option.level ?? Infinity;
+                        comparison = levelA - levelB;
+                        
+                        // If same level, sort by name
+                        if (comparison === 0) {
+                            comparison = a.option.name.toLowerCase().localeCompare(b.option.name.toLowerCase());
+                        }
+                        break;
+
+                    case 'id':
+                        comparison = a.option.id.toLowerCase().localeCompare(b.option.id.toLowerCase());
+                        break;
+
+                    case 'type':
+                        comparison = a.option.type.localeCompare(b.option.type);
+                        
+                        // If same type, sort by name
+                        if (comparison === 0) {
+                            comparison = a.option.name.toLowerCase().localeCompare(b.option.name.toLowerCase());
+                        }
+                        break;
+
+                    case 'name':
+                    default:
+                        // Default: sort alphabetically by name, case-insensitive
+                        comparison = a.option.name.toLowerCase().localeCompare(b.option.name.toLowerCase());
+                        break;
+                }
+
+                // Apply direction
+                return sortDirection === 'desc' ? -comparison : comparison;
+            });
+        }
+
+        return result;
+    }, [selectionOptions, searchQuery, selectedTypes, sortBy, sortDirection]);
 
     // Helper function to get human-readable type names
     const getTypeDisplayName = (type: string): string => {
@@ -160,6 +221,12 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (!containerRef.current?.contains(e.target as Node)) return;
+            
+            // Don't intercept keyboard events when search input has focus
+            const activeElement = document.activeElement;
+            if (activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA') {
+                return;
+            }
 
             switch (e.key) {
                 case 'ArrowDown':
@@ -240,15 +307,17 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                     gap: 'var(--space-2)'
                 }}>
                     <span>🎯</span>
-                    Select Metadata Items
+                    {title}
                 </h3>
-                <p style={{
-                    margin: 'var(--space-2) 0 0 0',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: 'var(--font-size-sm)'
-                }}>
-                    Found <strong>{selectionOptions.length}</strong> items for analysis of: <em>"{originalQuery}"</em>
-                </p>
+	            <div style={{
+		            margin: 'var(--space-2) 0 0 0',
+		            color: 'var(--color-text-secondary)',
+		            fontSize: 'var(--font-size-sm)'
+	            }}>
+		            <div dangerouslySetInnerHTML={{
+			            __html: description || `Found <strong>${selectionOptions.length}</strong> items for analysis of: <em>"${originalQuery}"</em>`
+		            }}></div>
+	            </div>
             </div>
 
             {/* Search and Filters */}
@@ -278,7 +347,7 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                             onChange={(e) => setSearchQuery(e.target.value)}
                             style={{
                                 width: '100%',
-                                padding: 'var(--space-3) var(--space-3) var(--space-3) var(--space-8)',
+                                padding: `var(--space-3) ${searchQuery ? 'var(--space-8)' : 'var(--space-3)'} var(--space-3) var(--space-8)`,
                                 border: '1px solid var(--color-border-light)',
                                 borderRadius: 'var(--radius-lg)',
                                 fontSize: 'var(--font-size-sm)',
@@ -289,6 +358,37 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                             onFocus={(e) => e.target.style.borderColor = 'var(--color-primary)'}
                             onBlur={(e) => e.target.style.borderColor = 'var(--color-border-light)'}
                         />
+                        {searchQuery && (
+                            <button
+                                onClick={() => setSearchQuery('')}
+                                style={{
+                                    position: 'absolute',
+                                    right: 'var(--space-2)',
+                                    background: 'transparent',
+                                    border: 'none',
+                                    borderRadius: 'var(--radius-md)',
+                                    cursor: 'pointer',
+                                    padding: 'var(--space-1) var(--space-2)',
+                                    fontSize: 'var(--font-size-md)',
+                                    color: 'var(--color-text-muted)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'var(--transition-fast)'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.color = 'var(--color-text-primary)';
+                                    e.currentTarget.style.backgroundColor = 'var(--color-gray-100)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.color = 'var(--color-text-muted)';
+                                    e.currentTarget.style.backgroundColor = 'transparent';
+                                }}
+                                title="Clear search"
+                            >
+                                ✕
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -686,6 +786,27 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                     >
                         Cancel
                     </button>
+
+                    {allowCreateNew && (
+                        <button
+                            onClick={onCreateNew}
+                            style={{
+                                padding: 'var(--space-2) var(--space-4)',
+                                backgroundColor: 'var(--color-success)',
+                                color: 'var(--color-text-inverse)',
+                                border: 'none',
+                                borderRadius: 'var(--radius-md)',
+                                cursor: 'pointer',
+                                fontSize: 'var(--font-size-sm)',
+                                fontWeight: 'var(--font-weight-medium)',
+                                transition: 'var(--transition-fast)'
+                            }}
+                            className="hover-lift"
+                        >
+                            ✨ {createNewLabel}
+                        </button>
+                    )}
+
                     <button
                         onClick={handleProceed}
                         disabled={selectedIndices.length === 0}
@@ -703,7 +824,7 @@ const MetadataSelector: React.FC<MetadataSelectorProps> = ({
                         }}
                         className={selectedIndices.length > 0 ? 'hover-lift' : ''}
                     >
-                        {allowMultiple ? `Analyze Selected (${selectedIndices.length})` : 'Select Item'}
+                        {confirmButtonText || (allowMultiple ? `Analyze Selected (${selectedIndices.length})` : 'Select Item')}
                     </button>
                 </div>
             </div>

@@ -87,26 +87,6 @@ export const searchAgent = createReactAgent({
     searchDhis2Users,
     searchDhis2RelationshipTypes,
 
-    // Get-by-ID Tools (5 core + 9 extended = 14 tools)
-    getDhis2DataElementById,
-    getDhis2OrganisationUnitById,
-    getDhis2CategoryById,
-    getDhis2DataSetById,
-    getDhis2ProgramById,
-    getDhis2CategoryOptionById,
-    getDhis2OrganisationUnitGroupById,
-    getDhis2OrganisationUnitGroupSetById,
-    getDhis2TrackedEntityTypeById,
-    getDhis2TrackedEntityAttributeById,
-    getDhis2ValidationRuleById,
-    getDhis2OptionSetById,
-    getDhis2IndicatorById,
-    getDhis2VisualizationById,
-    getDhis2DashboardById,
-    getDhis2RelationshipTypeById,
-
-    // Specialized Utility Tools (2 tools)
-    getDhis2DataValues,
     resolveResourceReference,
   ],
   prompt: `
@@ -127,70 +107,20 @@ You are a DHIS2 metadata search specialist with RECOVERY CAPABILITIES. Choose th
 For single-type searches, return: {"metadataType": [results]}
 For multi-type searches, return: {"dataElements": [...], "indicators": [...], etc.}
 
-## RECOVERY CAPABILITIES:
-
-### WHEN SEARCHES FAIL OR RETURN FEW RESULTS:
-Return a special recovery object instead of normal results:
-{
-  "recoveryNeeded": true,
-  "failedStep": "search_execution|permission_check|query_parsing",
-  "errorDetails": {
-    "reason": "No results found|Permission denied|Query too restrictive",
-    "originalQuery": "user's query",
-    "attemptedSearches": ["tool1", "tool2"]
-  },
-  "recoveryOptions": [
-    {
-      "id": "broaden_search",
-      "label": "Broaden search terms",
-      "description": "Use more general keywords or remove specific filters",
-      "action": "suggest_broader_query"
-    },
-    {
-      "id": "check_permissions",
-      "label": "Check permissions",
-      "description": "Verify you have access to view this metadata type",
-      "action": "suggest_permission_check"
-    },
-    {
-      "id": "refine_query",
-      "label": "Refine search query",
-      "description": "Try different spelling or more specific terms",
-      "action": "suggest_query_refinement"
-    }
-  ],
-  "userGuidance": "Clear instructions for user on how to proceed"
-}
-
-### WHEN SEARCHES SUCCEED BUT HAVE GAPS:
-Return normal results but include recovery context for partial results:
-{
-  "dataElements": [...],
-  "indicators": [...],
-  "partialResults": true,
-  "missingTypes": ["organisationUnits", "optionSets"],
-  "recoveryOptions": [
-    {
-      "id": "search_missing_types",
-      "label": "Search for missing metadata types",
-      "description": "Continue searching for organisation units and option sets",
-      "action": "continue_search"
-    }
-  ]
-}
-
 ## CRITICAL RULES:
-1. **Always call tools individually** - do not combine in single call
-2. **Return only results** - no wrapper text, no success/error objects
-3. **Format by metadata type**: searchDhis2OrganisationUnits → {"organisationUnits": [results]}
-4. **For multiple tools**: combine into single object with multiple keys
-5. **Tool results** have {name, id, displayName} - preserve exactly
-6. **Use recovery format** when searches fail or return inadequate results
+1. **ALWAYS CALL ALL RELEVANT TOOLS AT ONCE IN PARALLEL** - NO PARTIAL SEARCHES. NO INCREMENTAL STEPS.
+2. **SEARCH EVERYTHING IN ONE SINGLE STEP**. Do not return partial results. Do not offer to continue searching.
+3. **Return ONLY PURE RESULTS**. No wrapper text. No messages. No recovery options. No prompts.
+4. **Format by metadata type**: searchDhis2OrganisationUnits → {"organisationUnits": [results]}
+5. **For multiple tools**: combine into single object with multiple keys
+6. **Tool results** have {name, id, displayName} - preserve exactly
+7. **Use recovery format ONLY WHEN NO RESULTS AT ALL ARE FOUND**
+8. **ALWAYS search ALL relevant metadata types for every query. NO EXCEPTIONS.**
 
 ## EXAMPLES:
-✅ "find data elements about HIV" → call searchDhis2DataElements → {"dataElements": [...]}
-✅ "find clinics" → call searchDhis2OrganisationUnits → {"organisationUnits": [...]}
-✅ "find metadata about HIV" → call 5+ tools → {"dataElements": [...], "organisationUnits": [...], ...}
+✅ "find data elements about HIV" → call searchDhis2DataElements + searchDhis2Indicators + searchDhis2DataSets → {"dataElements": [...], "indicators": [...], "dataSets": [...]}
+✅ "find clinics" → call searchDhis2OrganisationUnits + searchDhis2OrganisationUnitGroups → {"organisationUnits": [...], "organisationUnitGroups": [...]}
+✅ "find metadata about HIV" → call ALL tools → {"dataElements": [...], "organisationUnits": [...], "indicators": [...], "dataSets": [...], "programs": [...], "optionSets": [...], ...}
 ❌ "find nonexistent data" → return recovery object with options to broaden search
   `,
 });

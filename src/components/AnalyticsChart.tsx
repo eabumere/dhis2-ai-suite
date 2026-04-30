@@ -42,32 +42,97 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
     const [filterOptions, setFilterOptions] = useState<any>({});
     const [filtersExpanded, setFiltersExpanded] = useState(false);
     const [chartType, setChartType] = useState<string>('bar');
+    // ✅ AUTOMATIC PIVOT TABLE FALLBACK
+    // When disaggregation combinations exceed threshold, automatically switch to table view
+    const shouldUsePivotTable = chartData?.recommendPivotTable === true;
+    const [activeView, setActiveView] = useState<'chart' | 'table'>(shouldUsePivotTable ? 'table' : 'chart');
     const echartsRef = useRef<any>(null);
 
     useEffect(() => {
         if (chartData) {
             setFullChartData(chartData);
-            setChartType(chartData.chartType || 'bar');
+            
+            // ✅ AUTO CHART TYPE SELECTION
+            // Automatic multi-series detection:
+            // - 1 series: default bar chart
+            // - 2+ series: grouped multi-series bar chart
+            if (chartData.echarts_option?.series?.length > 1) {
+                console.log(`📊 Auto-detected ${chartData.echarts_option.series.length} series - using grouped multi-series chart`);
+                setChartType('bar'); // Grouped bars is default for multiple series
+                
+                // Enable legend for multi-series charts if not already present
+                if (!chartData.echarts_option.legend) {
+                    chartData.echarts_option.legend = {
+                        show: true,
+                        top: 'top',
+                        type: 'scroll',
+                        textStyle: {
+                            fontSize: 12
+                        }
+                    };
+                }
+            } else {
+                setChartType(chartData.chartType || 'bar');
+            }
+            
             if (chartData.echarts_option) {
                 setEchartsOption(chartData.echarts_option);
                 // Extract filter options from chart data
                 extractFilterOptions(chartData);
+                
+                // ✅ ALL FILTERS SELECTED BY DEFAULT
+                // Initialize filters with ALL items selected on initial load
+                const initialFilters: ChartFilter = {};
+                
+                if (chartData.dimensions?.indicators?.length > 0) {
+                    initialFilters.indicators = [...chartData.dimensions.indicators];
+                }
+                if (chartData.dimensions?.periods?.length > 0) {
+                    initialFilters.periods = [...chartData.dimensions.periods];
+                }
+                if (chartData.dimensions?.orgUnits?.length > 0) {
+                    initialFilters.orgUnits = [...chartData.dimensions.orgUnits];
+                }
+                
+                // Initialize disaggregations if available
+                if (chartData.dimensions?.disaggregations?.length > 0) {
+                    initialFilters.disaggregations = chartData.dimensions.disaggregations.flatMap(
+                        (group: any) => group.options.map((opt: any) => opt.id)
+                    );
+                }
+                
+                setFilters(initialFilters);
             }
         }
     }, [chartData]);
 
     const extractFilterOptions = (data: any) => {
         const options: any = {};
+        const filteredData = data.filteredData || [];
+        
+        // ✅ ONLY SHOW FILTER ITEMS THAT ACTUALLY HAVE DATA
+        // First scan all data rows to find which dimension values are actually present
+        
+        // Collect all actual values present in data
+        const actualIndicators = new Set<string>();
+        const actualPeriods = new Set<string>();
+        const actualOrgUnits = new Set<string>();
+        
+        filteredData.forEach((row: any) => {
+            if (row.dx) actualIndicators.add(row.dx);
+            if (row.period) actualPeriods.add(row.period);
+            if (row.org_unit) actualOrgUnits.add(row.org_unit);
+        });
 
-        // Extract traditional dimension filters
+        // Extract traditional dimension filters - ONLY include items with actual data
         if (data.dimensions?.indicators?.length > 0) {
-            options.indicators = data.dimensions.indicators;
+            options.indicators = data.dimensions.indicators.filter((ind: string) => actualIndicators.has(ind));
         }
         if (data.dimensions?.periods?.length > 0) {
-            options.periods = data.dimensions.periods;
+            options.periods = data.dimensions.periods.filter((p: string) => actualPeriods.has(p));
         }
         if (data.dimensions?.orgUnits?.length > 0) {
-            options.orgUnits = data.dimensions.orgUnits;
+            options.orgUnits = data.dimensions.orgUnits.filter((ou: string) => actualOrgUnits.has(ou));
         }
 
         // Extract disaggregation groups from dimensions.disaggregations first
@@ -91,7 +156,7 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
     const handleFilterChange = async (filterType: keyof ChartFilter, values: string[]) => {
 	    console.log('Filters:', filterType, values);
-        if (!chartData || !values.length) return;
+        if (!chartData) return;
 
         const newFilters = { ...filters, [filterType]: values };
         setFilters(newFilters);
@@ -100,15 +165,18 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
         try {
             console.log(`📊 Applying filter: ${filterType} = [${values.join(', ')}]`);
 
-            // Apply client-side filtering to the analytics data
-            const filteredChartData = await applyClientSideFiltering(chartData, newFilters);
+            // ✅ PROPER FILTERING: Always start with full original data
+            // Filter from scratch every time - no incremental changes
+            const filteredChartData = await applyClientSideFiltering(fullChartData, newFilters);
 
-            // Update the chart options with filtered data
+            // ✅ REGENERATE CHART COMPLETELY FROM FILTERED ROWS
+            // No partial updates, no value summing - build chart from exactly what remains
             const filteredOption = await generateFilteredChartOption(filteredChartData);
 
-            // Update the ECharts instance while preserving interactivity
+            // Update the ECharts instance - replace entire option, don't merge
             if (echartsRef.current) {
-                echartsRef.current.getEchartsInstance().setOption(filteredOption, false, true);
+                // Use true for notMerge to completely replace previous chart configuration
+                echartsRef.current.getEchartsInstance().setOption(filteredOption, true, false);
             } else {
                 setEchartsOption(filteredOption);
             }
@@ -163,21 +231,38 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
 
         let filteredRows = [...filteredData];
 
+        // ✅ PROPER FILTERING LOGIC:
+        // - Empty filter = NO data (exclude everything)
+        // - Only rows matching ALL selected filter values are kept
+        // - No summing, no hidden values - exactly what is selected is what remains
+
         // Filter by indicators (dx column)
-        if (filters.indicators && filters.indicators.length > 0) {
-            filteredRows = filteredRows.filter(row => filters.indicators!.includes(row.dx));
+        if (filters.indicators) {
+            if (filters.indicators.length === 0) {
+                filteredRows = [];
+            } else {
+                filteredRows = filteredRows.filter(row => filters.indicators!.includes(row.dx));
+            }
             console.log(`📊 Filtered by indicators: ${filteredRows.length} points remaining`);
         }
 
         // Filter by periods (period column)
-        if (filters.periods && filters.periods.length > 0) {
-            filteredRows = filteredRows.filter(row => filters.periods!.includes(row.period));
+        if (filters.periods) {
+            if (filters.periods.length === 0) {
+                filteredRows = [];
+            } else {
+                filteredRows = filteredRows.filter(row => filters.periods!.includes(row.period));
+            }
             console.log(`📊 Filtered by periods: ${filteredRows.length} points remaining`);
         }
 
         // Filter by org units (org_unit column)
-        if (filters.orgUnits && filters.orgUnits.length > 0) {
-            filteredRows = filteredRows.filter(row => filters.orgUnits!.includes(row.org_unit));
+        if (filters.orgUnits) {
+            if (filters.orgUnits.length === 0) {
+                filteredRows = [];
+            } else {
+                filteredRows = filteredRows.filter(row => filters.orgUnits!.includes(row.org_unit));
+            }
             console.log(`📊 Filtered by org units: ${filteredRows.length} points remaining`);
         }
 
@@ -195,6 +280,10 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
             });
 
             if (validCOCIds.size > 0) {
+                // ✅ Disaggregations are NOT filtered out - they are KEPT as separate series
+                // ✅ Only rows matching selected disaggregations are included
+                // ✅ Each disaggregation remains as a separate series when chart is rebuilt
+                // ✅ They are NOT summed together - groupChartData will split them into separate series
                 filteredRows = filteredRows.filter(row => {
                     // Find COC ID column - could be 'co', 'co_0', etc.
                     const cocColumn = Object.keys(row).find(key => key.startsWith('co'));
@@ -203,13 +292,14 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 });
 
                 console.log(`📊 Filtered by disaggregations (${validCOCIds.size} valid COCs): ${filteredRows.length} points remaining`);
+                console.log(`📊 ✅ Remaining disaggregations will be displayed as SEPARATE series (not summed)`);
             } else {
                 console.log(`📊 No valid COCs found for disaggregation filters - keeping all rows`);
             }
         } else if (filters.disaggregations && filters.disaggregations.length > 0) {
             console.log(`📊 Disaggregations filter applied but no optionsToCocs available`);
         } else {
-            console.log(`📊 No disaggregations filter applied`);
+            console.log(`📊 No disaggregations filter applied - SHOWING ALL disaggregations as separate series`);
         }
         // Return the original data but with filtered rows
         return {
@@ -1055,6 +1145,64 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 flexWrap: 'wrap',
                 boxShadow: 'var(--shadow-sm)'
             }}>
+                {/* View Toggle */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-3)',
+                    flexShrink: 0
+                }}>
+                    <span style={{
+                        fontSize: 'var(--font-size-sm)',
+                        fontWeight: 'var(--font-weight-semibold)',
+                        color: 'var(--color-primary-700)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)'
+                    }}>
+                        <span>📊</span>
+                        View
+                    </span>
+                    <div style={{
+                        position: 'relative',
+                        display: 'flex',
+                        gap: 'var(--space-1)'
+                    }}>
+                        {[
+                            { type: 'chart', icon: '📊', label: 'Chart' },
+                            { type: 'table', icon: '📋', label: 'Table' }
+                        ].map(({ type, icon, label }) => (
+                            <button
+                                key={type}
+                                onClick={() => setActiveView(type as 'chart' | 'table')}
+                                disabled={isFiltering}
+                                style={{
+                                    padding: 'var(--space-2) var(--space-3)',
+                                    backgroundColor: activeView === type ? 'var(--color-primary)' : 'var(--color-bg-primary)',
+                                    color: activeView === type ? 'var(--color-text-inverse)' : 'var(--color-text-primary)',
+                                    border: `1px solid ${activeView === type ? 'var(--color-primary)' : 'var(--color-border-light)'}`,
+                                    borderRadius: 'var(--radius-md)',
+                                    cursor: 'pointer',
+                                    fontSize: 'var(--font-size-sm)',
+                                    fontWeight: 'var(--font-weight-medium)',
+                                    transition: 'var(--transition-fast)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 'var(--space-2)',
+                                    minWidth: '70px',
+                                    justifyContent: 'center',
+                                    boxShadow: activeView === type ? 'var(--shadow-sm)' : 'none'
+                                }}
+                                className="hover-lift"
+                                title={`Switch to ${label} view`}
+                            >
+                                <span>{icon}</span>
+                                <span>{label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 {/* Chart Type Selector */}
                 <div style={{
                     display: 'flex',
@@ -1221,20 +1369,83 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
                 display: 'flex',
                 flexDirection: 'column'
             }}>
-                <ReactECharts
-                    ref={echartsRef}
-                    option={echartsOption}
-                    style={{
-                        height: '100%',
-                        width: '100%',
-                        minHeight: '300px',
+                {activeView === 'chart' ? (
+                    <ReactECharts
+                        ref={echartsRef}
+                        option={echartsOption}
+                        style={{
+                            height: '100%',
+                            width: '100%',
+                            minHeight: '300px',
+                            flex: 1
+                        }}
+                        opts={{
+                            renderer: 'canvas',
+                            devicePixelRatio: window.devicePixelRatio || 1
+                        }}
+                    />
+                ) : (
+                    // Pivot Table View
+                    <div style={{
+                        overflowX: 'auto',
+                        maxHeight: '450px',
+                        overflowY: 'auto',
                         flex: 1
-                    }}
-                    opts={{
-                        renderer: 'canvas',
-                        devicePixelRatio: window.devicePixelRatio || 1
-                    }}
-                />
+                    }}>
+                        <table style={{
+                            width: '100%',
+                            borderCollapse: 'collapse',
+                            fontSize: 'var(--font-size-sm)'
+                        }}>
+                            <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
+                                <tr style={{ backgroundColor: 'var(--color-gray-50)' }}>
+                                    <th style={{
+                                        padding: 'var(--space-3) var(--space-4)',
+                                        textAlign: 'left',
+                                        fontWeight: 'var(--font-weight-semibold)',
+                                        borderBottom: '2px solid var(--color-border-light)'
+                                    }}>
+                                        Period
+                                    </th>
+                                    {echartsOption.series?.map((series: any) => (
+                                        <th key={series.name} style={{
+                                            padding: 'var(--space-3) var(--space-4)',
+                                            textAlign: 'right',
+                                            fontWeight: 'var(--font-weight-semibold)',
+                                            borderBottom: '2px solid var(--color-border-light)'
+                                        }}>
+                                            {series.name}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {echartsOption.xAxis?.data?.map((period: string, rowIdx: number) => (
+                                    <tr key={period} style={{
+                                        backgroundColor: rowIdx % 2 === 0 ? 'var(--color-bg-primary)' : 'var(--color-gray-50)'
+                                    }}>
+                                        <td style={{
+                                            padding: 'var(--space-2) var(--space-4)',
+                                            borderBottom: '1px solid var(--color-border-light)',
+                                            fontWeight: 'var(--font-weight-medium)'
+                                        }}>
+                                            {period}
+                                        </td>
+                                        {echartsOption.series?.map((series: any) => (
+                                            <td key={`${period}-${series.name}`} style={{
+                                                padding: 'var(--space-2) var(--space-4)',
+                                                textAlign: 'right',
+                                                borderBottom: '1px solid var(--color-border-light)'
+                                            }}>
+                                                {series.data?.[rowIdx]?.toLocaleString() || 0}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
 
             {/* Chart Info */}

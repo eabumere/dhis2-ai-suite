@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { generateDhis2Id, searchDhis2Metadata, validateResourceData, checkResourceExists } from './helpers';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
+import { getOrchestratorInstance } from "./base-tool";
 
 // Note: DHIS2 authentication now handled by app-runtime automatically
 
@@ -24,6 +25,7 @@ export interface MetadataItem {
         createParams?: Record<string, any>;
     }>;
     schema?: z.ZodSchema;
+    forceCreateAttempted?: boolean;
 }
 
 /**
@@ -56,6 +58,7 @@ export interface BatchMetadataResponse {
         apiResponse?: any;
     }>;
     apiResponse?: any;
+	skipped?: string;
     errors?: string[];
 }
 
@@ -87,15 +90,17 @@ export class UnifiedMetadataManager {
             id?: string;
             dependencies?: MetadataItem['dependencies'];
             schema?: z.ZodSchema;
+            forceCreateAttempted?: boolean;
         } = {}
     ): Promise<string> {
         // For CREATE operations, check if resource already exists
         if (operation === 'CREATE') {
             const existing = await this.checkExistingResource(type, data);
             if (existing.exists) {
-                // Resource already exists, return success without creating
+                // Resource already exists, throw error to indicate creation was skipped
                 console.log(`✓ Resource already exists: ${existing.name} (${existing.id})`);
-                return existing.id;
+                
+                throw new Error(`Resource already exists: ${existing.name} (${existing.id})`);
             }
         }
 
@@ -112,6 +117,7 @@ export class UnifiedMetadataManager {
             data: { ...data, ...(itemId ? { id: itemId } : {}) },
             dependencies: options.dependencies,
             schema: options.schema,
+            forceCreateAttempted: options.forceCreateAttempted,
         };
 
         // Validate data if schema provided
@@ -216,17 +222,37 @@ export class UnifiedMetadataManager {
             return {
                 success: true,
                 total: this.pendingOperations.length,
-                successful: this.pendingOperations.length,
-                failed: 0,
-                results: this.pendingOperations.map(item => ({
-                    type: item.type,
-                    operation: item.operation,
-                    id: item.id,
-                    success: true,
-                    data: item.data,
-                    error: undefined,
-                    apiResponse: { message: 'Resource already exists, skipped creation' }
-                })),
+                successful: this.pendingOperations.filter(item => !item.forceCreateAttempted).length,
+                failed: this.pendingOperations.filter(item => item.forceCreateAttempted).length,
+                results: this.pendingOperations.map(item => {
+                    if (item.forceCreateAttempted) {
+                        return {
+                            type: item.type,
+                            operation: item.operation,
+                            id: item.id,
+                            success: false,
+                            data: item.data,
+                            error: undefined,
+                            apiResponse: {
+                                message: 'Resource already exists, was not created',
+                                duplicate: true,
+                                warning: true,
+                                exists: true,
+                                action: 'skipped_creation'
+                            }
+                        };
+                    } else {
+                        return {
+                            type: item.type,
+                            operation: item.operation,
+                            id: item.id,
+                            success: true,
+                            data: item.data,
+                            error: undefined,
+                            apiResponse: { message: 'Resource already exists, skipped creation' }
+                        };
+                    }
+                }),
             };
         }
 
@@ -277,18 +303,47 @@ export class UnifiedMetadataManager {
 
         // Add entries for existing resources that were skipped
         for (const existing of existingResources) {
-            enhancedResults.push({
-                type: existing.type,
-                operation: 'CREATE' as MetadataOperation,
-                id: existing.id,
-                success: true,
-                data: { name: existing.name, id: existing.id },
-                error: undefined,
-                apiResponse: {
-                    message: 'Resource already exists, creation skipped',
-                    duplicate: true
-                }
-            });
+            // Find the original item to check if forceCreateAttempted was set
+            const originalItem = this.pendingOperations.find(item =>
+                item.type === existing.type &&
+                (item.data.name === existing.name || item.data.displayName === existing.name)
+            );
+
+            if (originalItem?.forceCreateAttempted) {
+                // User explicitly selected "Create New Anyway" but resource already exists
+                enhancedResults.push({
+                    type: existing.type,
+                    operation: 'CREATE' as MetadataOperation,
+                    id: existing.id,
+                    success: false,
+                    data: { name: existing.name, id: existing.id },
+                    error: undefined,
+                    apiResponse: {
+                        message: 'Resource already exists, was not created',
+                        duplicate: true,
+                        warning: true,
+                        exists: true,
+                        action: 'skipped_creation'
+                    }
+                });
+            } else {
+                // Normal case - no explicit force create requested
+                enhancedResults.push({
+                    type: existing.type,
+                    operation: 'CREATE' as MetadataOperation,
+                    id: existing.id,
+                    success: false,
+                    data: { name: existing.name, id: existing.id },
+                    error: 'Resource already exists, was not created',
+                    apiResponse: {
+                        message: 'Resource already exists, creation skipped',
+                        duplicate: true,
+                        warning: true,
+                        exists: true,
+                        action: 'skipped_creation'
+                    }
+                });
+            }
         }
 
         return enhancedResults;
@@ -436,6 +491,77 @@ export class UnifiedMetadataManager {
             // Group operations by type for the API payload
             const metadataPayload: Record<string, any[]> = {};
 
+            // DHIS2 metadata reference mapping: these are collection fields that reference other metadata types
+            const REFERENCE_COLLECTION_MAPPING: Record<string, string> = {
+                'categoryOptions': 'categoryOptions',
+                'categories': 'categories',
+                'categoryCombos': 'categoryCombos',
+                'categoryOptionCombos': 'categoryOptionCombos',
+                'dataElements': 'dataElements',
+                //'dataSetElements': 'dataSetElements',
+                'programStages': 'programStages',
+                'programRules': 'programRules',
+                'programIndicators': 'programIndicators',
+                'organisationUnits': 'organisationUnits',
+                'sections': 'sections',
+                'indicatorTypes': 'indicatorTypes',
+                'optionSets': 'optionSets',
+                'options': 'options',
+                'programStageDataElements': 'programStageDataElements',
+                'trackedEntityAttributes': 'trackedEntityAttributes',
+                'userGroups': 'userGroups',
+                'userRoles': 'userRoles',
+            };
+
+            // Recursively normalize DHIS2 payload - extract embedded objects to root level
+            const normalizePayload = async (obj: any, targetPayload: Record<string, any[]>): Promise<any> => {
+                if (!obj || typeof obj !== 'object') return obj;
+                if (Array.isArray(obj)) {
+                    return Promise.all(obj.map(item => normalizePayload(item, targetPayload)));
+                }
+
+                const result: Record<string, any> = {};
+
+                for (const [key, value] of Object.entries(obj)) {
+					console.log('Key', key, value);
+                    // Check if this is a reference collection field
+                    if (REFERENCE_COLLECTION_MAPPING[key] && Array.isArray(value)) {
+                        const targetType = REFERENCE_COLLECTION_MAPPING[key];
+                        result[key] = [];
+
+                        for (const embeddedItem of value) {
+							console.log('EmbeddedItem', embeddedItem);
+                            // Only skip if this is already just an id reference (no other properties)
+                            const isIdOnlyReference = Object.keys(embeddedItem).length === 1 && embeddedItem.id !== undefined;
+                            
+                            if (embeddedItem && typeof embeddedItem === 'object' && !isIdOnlyReference) {
+                                // Generate proper DHIS2 UID only if not already present
+                                if (!embeddedItem.id) {
+                                    embeddedItem.id = await generateDhis2Id();
+                                }
+
+                                // Add to root payload
+                                if (!targetPayload[targetType]) {
+                                    targetPayload[targetType] = [];
+                                }
+                                targetPayload[targetType].push(embeddedItem);
+
+                                // Replace with id reference
+                                result[key].push({ id: embeddedItem.id });
+                            } else {
+                                // Already an id reference, pass through
+                                result[key].push(embeddedItem);
+                            }
+                        }
+                    } else {
+                        // Regular field, process recursively
+                        result[key] = await normalizePayload(value, targetPayload);
+                    }
+                }
+
+                return result;
+            };
+
             for (const item of this.pendingOperations) {
                 if (!metadataPayload[item.type]) {
                     metadataPayload[item.type] = [];
@@ -447,7 +573,11 @@ export class UnifiedMetadataManager {
                     payloadData.id = item.id;
                 }
 
-                metadataPayload[item.type].push(payloadData);
+                // Normalize payload - extract all embedded references
+                const normalizedData = await normalizePayload(payloadData, metadataPayload);
+				console.log('NormalizedData', normalizedData);
+
+                metadataPayload[item.type].push(normalizedData);
             }
 
             if (dryRun) {
@@ -472,6 +602,7 @@ export class UnifiedMetadataManager {
 
             // Process results
             const results = this.processBatchResults(this.pendingOperations, apiResponse);
+			console.log('results', results);
 
             // Clear pending operations on success if atomic
             if (atomic && results.failed === 0) {
@@ -527,10 +658,10 @@ export class UnifiedMetadataManager {
             }
         });
 
-        if (!result.success) {
+        /*f (!result.success) {
             console.error('Unified metadata API Error:', result);
             throw new Error(`App-runtime metadata API error: ${result.error || 'Unknown error'}`);
-        }
+        }*/
 
         console.log('Unified metadata API Response:', result.data);
         return result.data;
@@ -549,7 +680,16 @@ export class UnifiedMetadataManager {
 
         // Process each operation based on API response
         for (const item of operations) {
-            const typeStats = apiResponse.typeReports?.find((report: any) => report.klass === item.type);
+            // Convert Java klass name to API type name (org.hisp.dhis.dataelement.DataElement -> dataElements)
+            const klassToType = (klass: string): string => {
+                const simpleName = klass.split('.').pop() || klass;
+                const camelCase = simpleName.charAt(0).toLowerCase() + simpleName.slice(1);
+                return camelCase + 's';
+            };
+            
+            const typeStats = apiResponse.response.typeReports?.find((report: any) => 
+                klassToType(report.klass) === item.type
+            );
 
             if (typeStats) {
                 const objectReports = typeStats.objectReports || [];
@@ -610,16 +750,32 @@ export class UnifiedMetadataManager {
                     else failed++;
                 }
             } else {
-                // No report for this type, assume failure
-                results.push({
-                    type: item.type,
-                    operation: item.operation,
-                    id: item.id,
-                    success: false,
-                    data: item.data,
-                    error: 'No response from API for this operation',
-                });
-                failed++;
+                // No specific type report found - check if overall import was successful
+                const overallSuccess = apiResponse.status === 'OK' || apiResponse.httpStatusCode === 200;
+                
+                if (overallSuccess) {
+                    // If API returned success overall, assume this item succeeded (DHIS2 sometimes omits success only reports)
+                    results.push({
+                        type: item.type,
+                        operation: item.operation,
+                        id: item.id,
+                        success: true,
+                        data: item.data,
+                        apiResponse: { message: 'Resource created successfully' },
+                    });
+                    successful++;
+                } else {
+                    // No report for this type and overall failed, assume failure
+                    results.push({
+                        type: item.type,
+                        operation: item.operation,
+                        id: item.id,
+                        success: false,
+                        data: item.data,
+                        error: 'No response from API for this operation',
+                    });
+                    failed++;
+                }
             }
         }
 
@@ -728,8 +884,9 @@ export async function batchCreateMetadata(
     manager.clear();
 
     // Add all items to the batch
+	const result = [];
     for (const item of items) {
-        await manager.addOperation(
+		result.push(await manager.addOperation(
             item.type,
             'CREATE',
             item.data,
@@ -737,11 +894,23 @@ export async function batchCreateMetadata(
                 dependencies: item.dependencies,
                 schema: item.schema,
             }
-        );
+        ));
     }
+
+	if (result.some(r => r.inclus))
 
     // Execute the batch with enhanced duplicate detection
     return manager.executeBatchWithDuplicateDetection(options);
+}
+
+/**
+ * Export checkExistingResource for direct usage from other modules
+ */
+export async function checkExistingResource(
+    type: string,
+    data: Record<string, any>
+): Promise<{ exists: boolean; id?: string; name?: string }> {
+    return UnifiedMetadataManager.getInstance()['checkExistingResource'](type, data);
 }
 
 /**

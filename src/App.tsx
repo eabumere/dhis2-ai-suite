@@ -147,7 +147,9 @@ const MyApp: FC = () => {
 		setContextRouterAgent(agent);
 
 		// Initialize new chat session (clear conversation history)
-		workflowOrchestrator.initializeNewChatSession();
+		workflowOrchestrator.initializeNewChatSession().catch(error => {
+			console.error('Failed to initialize new chat session:', error);
+		});
 	}, []);
 
 	// Handle query submission - now adds to conversation
@@ -686,10 +688,18 @@ const MyApp: FC = () => {
 									selectionOptions={uiState.selectionOptions.map(opt => ({
 										...opt,
 										type: opt.type
-									}))}
+									})) as MetadataOption[]}
 									originalQuery={uiState.queryText}
 									onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
 									allowMultiple={uiState.selectionMultiple}
+									title={uiState.selectionRequest?.title}
+									description={uiState.selectionRequest?.description}
+									allowCreateNew={uiState.selectionRequest?.allowCreateNew}
+									createNewLabel={uiState.selectionRequest?.createNewLabel}
+									confirmButtonText={uiState.selectionRequest?.confirmButtonText}
+									sortBy={uiState.selectionRequest?.sortBy}
+									sortDirection={uiState.selectionRequest?.sortDirection}
+									onCreateNew={() => handleSelectionComplete([{ id: '__create_new__', name: 'Create New', type: 'action' } as MetadataOption])}
 								/>
 							) : (
 								<div style={{
@@ -899,10 +909,18 @@ const MyApp: FC = () => {
 									selectionOptions={uiState.selectionOptions.map(opt => ({
 										...opt,
 										type: opt.type
-									}))}
+									})) as MetadataOption[]}
 									originalQuery={uiState.queryText}
 									onSelection={(selectedItems) => handleSelectionComplete(selectedItems)}
 									allowMultiple={uiState.selectionMultiple}
+									title={uiState.selectionRequest?.title}
+									description={uiState.selectionRequest?.description}
+									allowCreateNew={uiState.selectionRequest?.allowCreateNew}
+									createNewLabel={uiState.selectionRequest?.createNewLabel}
+									confirmButtonText={uiState.selectionRequest?.confirmButtonText}
+									sortBy={uiState.selectionRequest?.sortBy}
+									sortDirection={uiState.selectionRequest?.sortDirection}
+									onCreateNew={() => handleSelectionComplete([{ id: '__create_new__', name: 'Create New', type: 'action' } as MetadataOption])}
 								/>
 							</div>
 						</div>

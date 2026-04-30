@@ -2,11 +2,35 @@
 import { startNewSession } from './conversation-context';
 import { llmClassificationService } from './llm-classification-service';
 import { indexedDBStorage, FileData } from './indexeddb-storage';
+import { setOrchestratorInstance } from "./tools/metadata";
+import { updateAgent } from "../agents/update-agent";
 
 export interface SelectionOptions {
-    name: string;
     id: string;
-    type: 'indicator' | 'dataElement';
+    name: string;
+    code?: string;
+    displayName?: string;
+    type?: string;
+}
+
+/**
+ * Standardized selection request interface
+ * This matches the format that ALL call sites already use
+ */
+export interface SelectionRequest {
+    title: string;
+    description: string;
+    items: SelectionOptions[];
+    allowMultiple?: boolean;
+    allowCreateNew?: boolean;
+    createNewLabel?: string;
+    confirmButtonText?: string;
+    parentResource?: string;
+    parentName?: string;
+    workflowId?: string;
+    context?: Record<string, any>;
+    sortBy?: 'original' | 'name' | 'id' | 'type' | 'level';
+    sortDirection?: 'asc' | 'desc';
 }
 
 export interface RecoveryOption {
@@ -121,6 +145,8 @@ export interface WorkflowUIState {
     showSelection: boolean;
     selectionOptions: SelectionOptions[];
     selectionMultiple: boolean;
+    selectionRequest?: SelectionRequest;
+    confirmButtonText?: string;
 
     // General states
     currentWorkflowId?: string;
@@ -210,11 +236,12 @@ class WorkflowOrchestrator {
     }
 
     // Initialize UI state for a new chat session (clear conversation history)
-    initializeNewChatSession() {
+    async initializeNewChatSession() {
         console.log('🔄 Initializing new chat session - clearing conversation history and starting new context session');
 
-        // Start a new session in the conversation context
-        const sessionId = startNewSession();
+        // Start a new session in the conversation context (async)
+        const sessionId = await startNewSession();
+        console.log(`🔄 New session started: ${sessionId}`);
 
         this.currentUIState = {
             showQueryInput: true,
@@ -251,6 +278,8 @@ class WorkflowOrchestrator {
         input: T,
         agentFn: (input: any) => Promise<any>
     ): Promise<any> {
+		setOrchestratorInstance(this);
+
         const workflowId = input.workflowId || `workflow_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
         console.log(`🏁 Starting workflow ${workflowId} for ${flowType}`);
@@ -292,7 +321,7 @@ class WorkflowOrchestrator {
                 console.log(`🔄 Workflow ${workflowId} iteration ${iterationCount} with input:`, currentInput);
 
                 // Update progress message for agent execution
-                this.addProgressMessage(`Processing with ${flowType} agent...`);
+                //this.addProgressMessage(`Processing with ${flowType} agent...`);
 
                 const result = await agentFn(currentInput);
                 console.log(`📋 Workflow ${workflowId} iteration ${iterationCount} result:`, result);
@@ -411,9 +440,6 @@ class WorkflowOrchestrator {
                         position: 'bottom-right'
                     });
 
-                    // Add completion feedback
-                    this.addProgressMessage('✅ Operation completed successfully');
-
                     // Handle rendering based on result type - orchestrator controls all UI decisions
                     if (result?.success !== false) {
                         console.log('🎭 Workflow completion: handling successful result', result);
@@ -490,7 +516,7 @@ class WorkflowOrchestrator {
                                 (actualResult.data && Array.isArray(actualResult.data))
                             )) {
                                 console.log('🔍 Detected search result, calling requestSearchRender');
-                                this.requestSearchRender(actualResult, input?.input?.messages?.[0]?.content || 'Search query');
+                                //this.requestSearchRender(actualResult, input?.input?.messages?.[0]?.content || 'Search query');
                                 // Reset UI state for search results - they are handled through conversation
                                 this.updateUIState({
                                     showProcessing: false,
@@ -627,8 +653,28 @@ class WorkflowOrchestrator {
     }
 
     // Request user selection during workflow
-    async requestSelection(workflowId: string, options: SelectionOptions[], multiple = true): Promise<SelectionOptions[]> {
-        console.log(`⏸️ Workflow ${workflowId} requesting user selection`);
+    async requestSelection(request: SelectionRequest | string, options?: SelectionOptions[], multiple = false): Promise<SelectionOptions[]> {
+        // ✅ Full backward compatibility + new interface:
+        // ✅ Accept both new signature: requestSelection(SelectionRequest)
+        // ✅ Accept old signature: requestSelection(workflowId, options, multiple)
+
+        let selectionRequest: SelectionRequest;
+
+        if (typeof request === 'string') {
+            // Legacy signature support
+            selectionRequest = {
+                title: 'Select item',
+                description: 'Please select an item',
+                items: options || [],
+                allowMultiple: multiple,
+                workflowId: request
+            };
+            console.log(`⏸️ Workflow ${request} requesting user selection (LEGACY SIGNATURE)`);
+        } else {
+            // New standardized interface
+            selectionRequest = request;
+            console.log(`⏸️ Workflow ${selectionRequest.workflowId} requesting user selection (NEW SIGNATURE with title: ${selectionRequest.title}`);
+        }
 
         return new Promise((resolve, reject) => {
             if (!this.uiCallbacks?.onSelection) {
@@ -636,23 +682,44 @@ class WorkflowOrchestrator {
                 return;
             }
 
+        // ✅ Now actually use ALL the fields that are already being passed
+        let {
+            title,
+            description,
+            items,
+            allowMultiple,
+            allowCreateNew,
+            createNewLabel,
+            confirmButtonText,
+            parentResource,
+            parentName,
+            workflowId,
+            context
+        } = selectionRequest;
+
             // Add selection prompt to conversation
-            const selectionMessage = `Please select the relevant items from the ${options.length} available options${multiple ? ' (multiple selection allowed)' : ''}`;
-            this.addAssistantMessage(selectionMessage, 'selection', {
-                selectionOptions: options,
-                allowMultiple: multiple,
-                workflowId
+            this.addAssistantMessage(description, 'selection', {
+                selectionOptions: items,
+                allowMultiple,
+                allowCreateNew,
+                createNewLabel,
+                parentResource,
+                parentName,
+                workflowId,
+                context
             });
 
             // Update UI to show selection
             this.updateUIState({
                 showProcessing: false,
                 showSelection: true,
-                selectionOptions: options,
-                selectionMultiple: multiple
+                selectionOptions: items,
+                selectionMultiple: allowMultiple || true,
+                selectionRequest: selectionRequest,
+                confirmButtonText: confirmButtonText
             });
 
-            this.uiCallbacks.onSelection(options, (selectedItems) => {
+            this.uiCallbacks.onSelection(items, (selectedItems) => {
                 console.log(`▶️ Workflow ${workflowId} received selection:`, selectedItems);
 
                 // Hide selection UI
@@ -734,9 +801,8 @@ class WorkflowOrchestrator {
                 };
             case 'update':
                 return async (input: any) => {
-                    const { createUpdateGraphAgent } = await import('../agents/update-agent');
-                    const updateAgent = createUpdateGraphAgent(this);
-                    return updateAgent.invoke(input);
+                    const { updateAgent } = await import('../agents/update-agent');
+                    return updateAgent.invoke(input.input);
                 };
             case 'data_entry':
                 return async (input: any) => {
@@ -869,6 +935,54 @@ class WorkflowOrchestrator {
         return progressMessage;
     }
 
+    // Add completion message to conversation (hides spinner and shows completion)
+    addCompletionMessage(content: string, data?: any) {
+        // Use the current thread ID for completion messages
+        const threadId = this.getCurrentThreadId();
+
+        // Remove any existing progress messages for this thread
+        const updatedConversation = this.currentUIState.conversation.filter(
+            msg => !(msg.type === 'progress' && msg.role === 'assistant' && msg.threadId === threadId)
+        );
+
+        const completionMessage: ConversationMessage = {
+            id: `completion_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: Date.now(),
+            role: 'assistant',
+            content,
+            data,
+            type: 'success',
+            threadId
+        };
+
+        this.updateUIState({
+            conversation: [...updatedConversation, completionMessage],
+            showProcessing: false, // Hide processing spinner
+            processingMessage: '' // Clear processing message
+        });
+
+        return completionMessage;
+    }
+
+    // ✅ ACTIVITY EVENT HANDLER - called from metadata tools
+    public emitActivity(event: any) {
+        if (event.percentage) {
+            // Update progress percentage in UI
+            this.updateUIState({
+                processingMessage: event.message
+            });
+        }
+
+        // Update the live progress message in the conversation stream
+        this.addProgressMessage(event.message, {
+            type: event.type,
+            percentage: event.percentage,
+            detail: event.detail,
+            resourceType: event.resourceType,
+            resourceName: event.resourceName
+        });
+    }
+
     // Get the current thread ID (most recent user message thread)
     private getCurrentThreadId(): string | undefined {
         // Find the most recent user message and return its threadId
@@ -908,30 +1022,23 @@ class WorkflowOrchestrator {
             }
         }
 
-        // Check if we have actual search results to render
-        if (!cleanSearchResult || (!Array.isArray(cleanSearchResult) && Object.keys(cleanSearchResult).length === 0)) {
-            // No search data, just add a simple message
-            return this.addAssistantMessage(
-                'Search completed',
-                'response',
-                { searchResult, originalQuery }
-            );
-        }
+        // ✅ ALWAYS RENDER THE GRID. NO EXCEPTIONS.
+        // ✅ Show actual grid for ANY results, even partial, even 1 item
+        // ✅ No more stupid text message fallback
 
         // Create a rich search result message
-        const totalResults = this.calculateTotalResults(cleanSearchResult);
+        const totalResults = this.calculateTotalResults(searchResult);
         const content = `Found ${totalResults} metadata ${totalResults === 1 ? 'item' : 'items'} matching "${originalQuery}"`;
 
         // Preserve the original multi-type structure that MessageRenderer expects
-        // Search agent should return the correct format: { dataElements: [...], indicators: [...], etc. }
         const messageData = {
-            ...cleanSearchResult,
+            ...searchResult,
             displayType: 'search_results', // Flag for specialized rendering
             originalQuery,
             totalResults
         };
 
-        // Add the search result as a specialized message type
+        // Add the search result as a specialized message type - GRID WILL RENDER
         return this.addAssistantMessage(
             content,
             'response',
@@ -1263,18 +1370,7 @@ class WorkflowOrchestrator {
             return;
         }
 
-        // Check if this is a search result that should be rendered in conversation
-        const isSearchResult = result && (
-            result.dataElements || result.indicators || result.organisationUnits ||
-            result.dataSets || result.programs || result.categories ||
-            (result.data && Array.isArray(result.data))
-        );
-
-        if (isSearchResult) {
-            console.log('🔍 Detected search result, calling requestSearchRender');
-            this.requestSearchRender(result, input?.input?.messages?.[0]?.content || 'Search query');
-            return;
-        }
+        // ✅ SEARCH RENDER CALLED ONCE ABOVE - REMOVED DUPLICATE CALL TO PREVENT DOUBLE RENDER
 
         // Check if this is a chart result
         if (result?.data?.echarts_option || result?.chart?.echarts_option || result?.echarts_option) {

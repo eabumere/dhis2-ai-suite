@@ -5,8 +5,8 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
-"POT-Creation-Date: 2026-01-21T21:40:18.550Z\n"
-"PO-Revision-Date: 2026-01-21T21:40:18.550Z\n"
+"POT-Creation-Date: 2026-05-01T20:31:14.645Z\n"
+"PO-Revision-Date: 2026-05-01T20:31:14.645Z\n"
 
 msgid "ERROR"
 msgstr "ERROR"
@@ -28,3 +28,11 @@ msgstr "Processing..."
 
 msgid "Send"
 msgstr "Send"
+
+msgctxt "Application title"
+msgid "__MANIFEST_APP_TITLE"
+msgstr "DHIS2-AI-Suite"
+
+msgctxt "Application description"
+msgid "__MANIFEST_APP_DESCRIPTION"
+msgstr ""

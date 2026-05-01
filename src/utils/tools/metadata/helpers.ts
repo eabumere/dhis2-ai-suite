@@ -452,16 +452,17 @@ export async function createDhis2Metadata(
     payload: Record<string, any> | Record<string, any>[]
 ): Promise<any> {
     const { batchCreateMetadata } = await import('./batch-manager');
-
+    console.log(`🔄 Creating DHIS2 metadata for ${metadataType} with payload:`, payload);
     const items = Array.isArray(payload)
         ? payload.map(data => ({ type: metadataType, data }))
         : [{ type: metadataType, data: payload }];
 
+    console.log(`🔄 Creating DHIS2 metadata for ${metadataType} with items:`, items);
     const result = await batchCreateMetadata(items, {
         importStrategy: 'CREATE_UPDATE',
         atomic: false // Allow partial success for backward compatibility
     });
-
+    console.log(`🔄 Result:`, result);
     if (!result.success) {
         throw new Error(`Failed to create metadata: ${result.errors?.join(', ')}`);
     }

@@ -598,8 +598,9 @@ export class UnifiedMetadataManager {
             }
 
             // Execute the batch API call
+            console.log(`🔄 Executing metadata API with payload:`, metadataPayload);
             const apiResponse = await this.executeMetadataAPI(metadataPayload, importStrategy);
-
+            console.log(`🔄 API Response:`, apiResponse);
             // Process results
             const results = this.processBatchResults(this.pendingOperations, apiResponse);
 			console.log('results', results);
@@ -896,8 +897,9 @@ export async function batchCreateMetadata(
             }
         ));
     }
+    console.log(`🔄 Results in batchCreateMetadata:`, result);
 
-	if (result.some(r => r.inclus))
+	// if (result.some(r => r.inclus))
 
     // Execute the batch with enhanced duplicate detection
     return manager.executeBatchWithDuplicateDetection(options);

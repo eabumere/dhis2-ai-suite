@@ -1514,6 +1514,251 @@ export function validateResourceData<T extends z.ZodSchema>(
 }
 
 /**
+ * Extract detailed field information from a Zod schema for user-friendly error reporting.
+ * Returns metadata for each field: name, type, required, description, allowed enum values.
+ */
+export function getSchemaFieldInfo(schema: z.ZodSchema): Array<{
+    field: string;
+    type: string;
+    required: boolean;
+    description?: string;
+    allowedValues?: string[];
+}> {
+    const fields: Array<{
+        field: string;
+        type: string;
+        required: boolean;
+        description?: string;
+        allowedValues?: string[];
+    }> = [];
+
+    try {
+        const schemaDef = (schema as any)._def;
+        if (schemaDef?.typeName === 'ZodObject' && schemaDef?.shape) {
+            for (const [fieldName, fieldSchema] of Object.entries(schemaDef.shape)) {
+                const fieldInfo = extractFieldTypeInfo(fieldName, fieldSchema as z.ZodTypeAny);
+                fields.push(fieldInfo);
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to extract schema field info:', e);
+    }
+
+    return fields;
+}
+
+/**
+ * Extract type and metadata from a single Zod field schema.
+ */
+function extractFieldTypeInfo(
+    fieldName: string,
+    fieldSchema: z.ZodTypeAny
+): {
+    field: string;
+    type: string;
+    required: boolean;
+    description?: string;
+    allowedValues?: string[];
+} {
+    const result: {
+        field: string;
+        type: string;
+        required: boolean;
+        description?: string;
+        allowedValues?: string[];
+    } = {
+        field: fieldName,
+        type: 'unknown',
+        required: true,
+    };
+
+    let currentSchema: any = fieldSchema;
+
+    // Unwrap optional/nullable/default schemas
+    if (currentSchema._def?.typeName === 'ZodOptional' || 
+        currentSchema._def?.typeName === 'ZodNullable') {
+        result.required = false;
+        currentSchema = currentSchema._def.innerType;
+    }
+    
+    if (currentSchema._def?.typeName === 'ZodDefault') {
+        result.required = false;
+        currentSchema = currentSchema._def.innerType;
+    }
+
+    const def = currentSchema._def as any;
+    const typeName: string = def?.typeName;
+
+    // Extract description if present
+    if (def?.description) {
+        result.description = def.description;
+    }
+
+    // Determine type and allowed values
+    switch (typeName) {
+        case 'ZodString':
+            result.type = 'string';
+            break;
+        case 'ZodNumber':
+            result.type = 'number';
+            if (def?.checks?.find((c: any) => c.kind === 'int')) {
+                result.type = 'integer';
+            }
+            if (def?.checks?.find((c: any) => c.kind === 'min')) {
+                const minCheck = (def.checks as any[]).find((c: any) => c.kind === 'min');
+                result.description = result.description || `Minimum value: ${(minCheck as any).value}`;
+            }
+            break;
+        case 'ZodBoolean':
+            result.type = 'boolean';
+            break;
+        case 'ZodEnum':
+            result.type = 'enum';
+            result.allowedValues = (def as any).values || [];
+            break;
+        case 'ZodArray':
+            result.type = 'array';
+            if ((def as any).type) {
+                const elementInfo = extractFieldTypeInfo(fieldName + '[]', (def as any).type);
+                if (elementInfo.type !== 'unknown') {
+                    result.type = `array of ${elementInfo.type}`;
+                    result.allowedValues = elementInfo.allowedValues;
+                    result.description = elementInfo.description;
+                }
+            }
+            break;
+        case 'ZodObject':
+            result.type = 'object';
+            if ((def as any).shape) {
+                const shape = (def as any).shape;
+                const requiredKeys = Object.keys(shape).filter(
+                    (k: string) => {
+                        const subDef = (shape[k] as any)?._def;
+                        return subDef?.typeName !== 'ZodOptional' && 
+                               subDef?.typeName !== 'ZodNullable' &&
+                               subDef?.typeName !== 'ZodDefault';
+                    }
+                );
+                if (requiredKeys.length > 0) {
+                    result.description = result.description || 
+                        `Object with fields: ${requiredKeys.join(', ')}`;
+                }
+            }
+            break;
+        case 'ZodUnion':
+            result.type = 'union';
+            if ((def as any).options) {
+                const optionTypes = (def as any).options.map((o: any) => {
+                    const info = extractFieldTypeInfo(fieldName, o);
+                    return info.type;
+                });
+                result.description = `One of: ${optionTypes.join(' | ')}`;
+            }
+            break;
+        case 'ZodLiteral':
+            result.type = `literal "${(def as any).value}"`;
+            break;
+        default:
+            result.type = typeName?.replace('Zod', '').toLowerCase() || 'unknown';
+            break;
+    }
+
+    return result;
+}
+
+/**
+ * Validates resource data and returns detailed missing/invalid field information.
+ * Designed for LLM-to-user iterative refinement: instead of failing fast,
+ * provides rich context about what's needed.
+ */
+export function validateResourceDataDetailed<T extends z.ZodSchema>(
+    schema: T,
+    data: unknown
+): {
+    success: true;
+    data: z.infer<T>;
+} | {
+    success: false;
+    missingFields: Array<{
+        field: string;
+        type: string;
+        required: boolean;
+        description?: string;
+        allowedValues?: string[];
+        errorMessage: string;
+    }>;
+    providedData: Record<string, any>;
+    message: string;
+} {
+    try {
+        const validated = schema.parse(data);
+        return { success: true, data: validated };
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            // Get full field info from schema
+            const schemaFields = getSchemaFieldInfo(schema);
+            const schemaFieldMap = new Map(schemaFields.map(f => [f.field, f]));
+
+            // Build detailed missing field information from errors
+            const missingFields = error.issues.map(issue => {
+                const fieldPath = issue.path.join('.');
+                const baseField = fieldPath.split('.')[0]; // Top-level field
+                const schemaField = schemaFieldMap.get(baseField);
+
+                return {
+                    field: fieldPath || baseField,
+                    type: schemaField?.type || 'unknown',
+                    required: schemaField?.required ?? true,
+                    description: schemaField?.description,
+                    allowedValues: schemaField?.allowedValues,
+                    errorMessage: issue.message,
+                };
+            });
+
+            // Build a user-friendly message
+            const fieldList = missingFields
+                .map(f => {
+                    let desc = f.field;
+                    if (f.allowedValues && f.allowedValues.length > 0) {
+                        desc += ` (choose from: ${f.allowedValues.join(', ')})`;
+                    } else if (f.type !== 'unknown') {
+                        desc += ` (${f.type})`;
+                    }
+                    if (f.description && !desc.includes(':')) {
+                        desc += ` — ${f.description}`;
+                    }
+                    return desc;
+                })
+                .join('\n- ');
+
+            // Extract the data that was provided (non-empty, non-id fields)
+            const providedData: Record<string, any> = {};
+            if (data && typeof data === 'object') {
+                for (const [key, value] of Object.entries(data as Record<string, any>)) {
+                    if (value !== undefined && key !== 'id') {
+                        providedData[key] = value;
+                    }
+                }
+            }
+
+            return {
+                success: false,
+                missingFields,
+                providedData,
+                message: `The following information is needed to proceed:\n- ${fieldList}`,
+            };
+        }
+        
+        return {
+            success: false,
+            missingFields: [],
+            providedData: {},
+            message: error.message || 'Unknown validation error',
+        };
+    }
+}
+
+/**
  * Generate a short name from a given name (for DHIS2 shortName field)
  */
 export function generateShortName(name: string, maxLength: number = 50): string {

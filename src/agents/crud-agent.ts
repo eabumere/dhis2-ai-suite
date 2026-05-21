@@ -120,7 +120,14 @@ async function invoke_create_agent(state: typeof CrudAnnotation.State): Promise<
 		try {
 			parsedResponse = JSON.parse(responseContent);
 		} catch (parseError) {
-			parsedResponse = { rawResponse: responseContent };
+			// Non-JSON response — plain text from the agent (e.g., asking user for missing info)
+			// Wrap in a format the orchestrator can display to the user
+			console.log('➕ CRUD: Create agent returned non-JSON response (likely a user prompt):', responseContent);
+			parsedResponse = {
+				success: true,
+				message: responseContent,
+				requiresUserInput: true,
+			};
 		}
 
 		return { finalResult: parsedResponse };

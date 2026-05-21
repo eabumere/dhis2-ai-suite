@@ -10,6 +10,8 @@ import {
 	searchDhis2Metadata,
 	updateDhis2Metadata,
 	validateResourceData,
+	validateResourceDataDetailed,
+	getSchemaFieldInfo,
 } from './helpers';
 import { resolveNameToId } from './name-resolution';
 import { dhis2Api } from '../../app-runtime/dhis2-api';
@@ -572,14 +574,23 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 					});
 				}
 
-				// Validate against DHIS2 schema
-				const validation = validateResourceData(schemaToUse, dhis2Object);
+				// Validate against DHIS2 schema using detailed validation for rich error messages
+				const validation = validateResourceDataDetailed(schemaToUse, dhis2Object);
 				if (!validation.success) {
+					// Return structured error with actionable guidance for LLM/user
+					const schemaFields = getSchemaFieldInfo(schemaToUse);
+					
 					return JSON.stringify({
 						success: false,
-						error: `Validation failed: ${(validation as any).errors?.join(', ') || 'Unknown validation error'}`,
+						action_required: true,
+						message: (validation as any).message || 'The following information is needed to create this resource:',
+						missingFields: (validation as any).missingFields || [],
+						providedData: (validation as any).providedData || {},
+						schemaFields: schemaFields,
+						instructions: (validation as any).missingFields
+							? `Please provide all the missing fields listed above. For enum fields, choose from the allowed values. Then retry the creation.`
+							: 'Please provide all required fields and retry.',
 						provided: llmInput,
-						required: 'Depends on DHIS2 schema requirements'
 					});
 				}
 
@@ -639,10 +650,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 		},
 		{
 			name: config.name,
-			description: `${config.description}\n\nIMPORTANT: You MUST provide ALL required fields from the schema. The following fields are REQUIRED and cannot be omitted: ${getRequiredFieldsFromSchema(config.schema).join(', ')}. Do not omit any required fields - this will cause API errors.`,
+			description: `${config.description}\n\nIMPORTANT: Only include fields the user has explicitly specified or that can be clearly inferred from their request. Do NOT invent placeholder names or default values for critical fields like 'name'. If the user didn't specify a value, leave it out — safe defaults will be applied automatically for technical fields like valueType, domainType, aggregationType, dataDimensionType, etc. The system will prompt for any missing critical fields.\n\nRequired fields: ${getRequiredFieldsFromSchema(config.schema).join(', ')}, but name MUST come from the user.`,
 			schema: z.object({
 				resource: config.schema
-			}).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)} with ALL required properties specified. Required fields: ${getRequiredFieldsFromSchema(config.schema).join(', ')}`),
+			}).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)}. Only include properties the user specified. Do NOT invent values for 'name' — leave it out if the user didn't provide one. Technical fields like valueType, domainType, aggregationType get automatic defaults.`),
 		}
 	);
 }

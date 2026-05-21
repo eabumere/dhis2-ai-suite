@@ -126,9 +126,14 @@ export class UnifiedMetadataManager {
         if (options.schema) {
             const validation = validateResourceData(options.schema, item.data);
             if (!validation.success) {
-                throw new Error(`Validation failed for ${type}: ${(validation as any).errors.join(', ')}`);
+                // Don't throw - store validation errors on item for graceful handling
+                (item as any)._validationErrors = (validation as any).errors || [];
+                (item as any)._validationFailed = true;
+                console.warn(`⚠️ Validation warning for ${type}: ${(validation as any).errors?.join(', ')}`);
+                // Still try with original data - may succeed with default fill-in
+            } else {
+                item.data = validation.data;
             }
-            item.data = validation.data;
         }
 
         // Resolve dependencies if any
@@ -532,7 +537,6 @@ export class UnifiedMetadataManager {
                         result[key] = [];
 
                         for (const embeddedItem of value) {
-							console.log('EmbeddedItem', embeddedItem);
                             // Only skip if this is already just an id reference (no other properties)
                             const isIdOnlyReference = Object.keys(embeddedItem).length === 1 && embeddedItem.id !== undefined;
                             
@@ -577,7 +581,6 @@ export class UnifiedMetadataManager {
 
                 // Normalize payload - extract all embedded references
                 const normalizedData = await normalizePayload(payloadData, metadataPayload);
-				console.log('NormalizedData', normalizedData);
 
                 metadataPayload[item.type].push(normalizedData);
             }
@@ -604,7 +607,6 @@ export class UnifiedMetadataManager {
 
             // Process results
             const results = this.processBatchResults(this.pendingOperations, apiResponse);
-			console.log('results', results);
 
             // Clear pending operations on success if atomic
             if (atomic && results.failed === 0) {
@@ -665,7 +667,6 @@ export class UnifiedMetadataManager {
             throw new Error(`App-runtime metadata API error: ${result.error || 'Unknown error'}`);
         }*/
 
-        console.log('Unified metadata API Response:', result.data);
         return result.data;
     }
 

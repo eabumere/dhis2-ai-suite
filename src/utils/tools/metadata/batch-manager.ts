@@ -91,10 +91,12 @@ export class UnifiedMetadataManager {
             dependencies?: MetadataItem['dependencies'];
             schema?: z.ZodSchema;
             forceCreateAttempted?: boolean;
+            skipExistingCheck?: boolean; // Skip existence check when executeBatchWithDuplicateDetection will handle it
         } = {}
     ): Promise<string> {
         // For CREATE operations, check if resource already exists
-        if (operation === 'CREATE') {
+        // (skip if caller passes skipExistingCheck, since the batch duplicate detection handles it)
+        if (operation === 'CREATE' && !options.skipExistingCheck) {
             const existing = await this.checkExistingResource(type, data);
             if (existing.exists) {
                 // Resource already exists, throw error to indicate creation was skipped
@@ -884,20 +886,19 @@ export async function batchCreateMetadata(
     manager.clear();
 
     // Add all items to the batch
-	const result = [];
+    // Note: skipExistingCheck=true because executeBatchWithDuplicateDetection handles duplicate detection
     for (const item of items) {
-		result.push(await manager.addOperation(
+        await manager.addOperation(
             item.type,
             'CREATE',
             item.data,
             {
                 dependencies: item.dependencies,
                 schema: item.schema,
+                skipExistingCheck: true, // Skip duplicate check here — batch detection handles it
             }
-        ));
+        );
     }
-
-	if (result.some(r => r.inclus))
 
     // Execute the batch with enhanced duplicate detection
     return manager.executeBatchWithDuplicateDetection(options);

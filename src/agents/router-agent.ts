@@ -267,8 +267,37 @@ async function invoke_crud_agent(state: typeof RouterAnnotation.State): Promise<
 	console.log('🔧 Router: Invoking CRUD agent directly');
 
 	try {
+		// Build enriched messages with conversation context for follow-up pronoun resolution
+		const enrichedMessages: any[] = [];
+
+		// Get recent conversation context from current session
+		const sessionContext = findCurrentSessionContext(state.originalQuery);
+
+		if (sessionContext.recentConversations.length > 0) {
+			// Inject previous conversation entries as context so the LLM can resolve
+			// references like "it", "this", "that" in ANY language.
+			// Each context entry shows the previous query and its result.
+			const contextEntries = sessionContext.recentConversations
+				.filter(entry => entry.query !== state.originalQuery)
+				.slice(-2); // Last 2 relevant entries for context
+
+			for (const entry of contextEntries) {
+				enrichedMessages.push({ role: 'user', content: entry.query });
+				if (entry.response) {
+					const responseSummary = typeof entry.response === 'object'
+						? JSON.stringify(entry.response)
+						: String(entry.response);
+					enrichedMessages.push({ role: 'assistant', content: responseSummary });
+				}
+			}
+		}
+
+		// Add the current query as the final user message
+		enrichedMessages.push({ role: 'user', content: state.originalQuery });
+
 		const result = await crudAgent.invoke({
-			messages: [{ role: 'user', content: state.originalQuery }],
+			messages: enrichedMessages,
+			originalQuery: state.originalQuery, // Pass original query explicitly for classification
 			orchestrator: state.orchestrator // Pass orchestrator for UI feedback
 		});
 

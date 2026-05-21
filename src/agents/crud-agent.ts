@@ -37,8 +37,15 @@ const model = ChatModels.createAgentModelWithRetry();
 async function classify_operation(state: typeof CrudAnnotation.State): Promise<Partial<typeof CrudAnnotation.State>> {
 	console.log('🔄 CRUD: Classifying operation type for query:', state.originalQuery);
 
+	// Build conversation context from messages (excluding the current query)
+	const conversationContext = state.messages
+		.filter((msg: any) => msg.content !== state.originalQuery)
+		.map((msg: any) => `${msg.role}: ${msg.content}`)
+		.join('\n');
+
 	const classificationPrompt = `
 Analyze this DHIS2 CRUD request and classify it as CREATE, UPDATE, or DELETE operation.
+Use the full conversation history to resolve any references or pronouns in the user's query.
 
 IMPORTANT: This system supports MULTIPLE LANGUAGES. Users may query in English, French, Spanish, Arabic, Portuguese, or any other language. Focus on INTENT and MEANING, not specific keywords.
 
@@ -61,7 +68,10 @@ EXAMPLES (Multilingual):
 - "Delete the Monthly Summary dataset" → DELETE
 - "Supprimer le jeu de données Résumé Mensuel" (French) → DELETE
 
-QUERY: "${state.originalQuery}"
+Conversation history (for context):
+${conversationContext || 'No previous context'}
+
+Current query: "${state.originalQuery}"
 
 Return ONLY a JSON object:
 {
@@ -237,8 +247,11 @@ export function createCrudAgent() {
 
 			// Extract messages and original query with proper fallback logic
 			const messages = input.input?.messages || input.messages || [];
-			const originalQuery = input.input?.messages?.[0]?.content ||
-			                      input.messages?.[0]?.content ||
+			// Prefer explicitly passed originalQuery (for follow-up context), fall back to last user message
+			const originalQuery = input.originalQuery ||
+			                      (input.messages && input.messages.length > 0
+			                        ? input.messages[input.messages.length - 1]?.content
+			                        : '') ||
 			                      '';
 
 			const initialState: Partial<typeof CrudAnnotation.State> = {

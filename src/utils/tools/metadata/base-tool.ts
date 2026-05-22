@@ -181,6 +181,76 @@ export function getOrchestratorInstance(): any | null {
 }
 
 /**
+ * Build a human-readable summary of a metadata payload for confirmation display.
+ * Formats field values nicely — shortens long strings, formats objects as IDs, etc.
+ */
+function buildConfirmationSummary(
+    data: Record<string, any>,
+    metadataType: string,
+    dhis2SchemaName?: string
+): string {
+    const lines: string[] = [];
+
+    // Key fields to always show (in order)
+    const priorityFields = ['name', 'displayName', 'shortName', 'code', 'description'];
+    const skipFields = ['id', 'confirmed', '_exists', '_existingId', '_validationErrors', '_validationFailed'];
+
+    // Show priority fields first
+    for (const field of priorityFields) {
+        const value = data[field];
+        if (value !== undefined && value !== null && value !== '') {
+            lines.push(`- ${field}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+        }
+    }
+
+    // Show schema-specific fields based on type
+    if (dhis2SchemaName === 'DataElement') {
+        if (data.valueType) lines.push(`- valueType: ${data.valueType}`);
+        if (data.domainType) lines.push(`- domainType: ${data.domainType}`);
+        if (data.aggregationType) lines.push(`- aggregationType: ${data.aggregationType}`);
+        if (data.zeroIsSignificant !== undefined) lines.push(`- zeroIsSignificant: ${data.zeroIsSignificant}`);
+        if (data.url) lines.push(`- url: ${data.url}`);
+    } else if (dhis2SchemaName === 'Category') {
+        if (data.dataDimensionType) lines.push(`- dataDimensionType: ${data.dataDimensionType}`);
+        if (data.dataDimension !== undefined) lines.push(`- dataDimension: ${data.dataDimension}`);
+    }
+
+    // Show reference fields (objects with id)
+    const referenceFields = ['categoryCombo', 'optionSet', 'indicatorType', 'trackedEntityType', 'program', 'organisationUnit'];
+    for (const field of referenceFields) {
+        const value = data[field];
+        if (value && typeof value === 'object' && value.id) {
+            lines.push(`- ${field}: ${value.name || value.id}`);
+        }
+    }
+
+    // Show remaining non-skipped fields
+    const shown = new Set(priorityFields.concat(referenceFields).concat(['valueType', 'domainType', 'aggregationType', 'zeroIsSignificant', 'url', 'dataDimensionType', 'dataDimension']));
+    for (const [key, value] of Object.entries(data)) {
+        if (shown.has(key) || skipFields.includes(key)) continue;
+        if (value === undefined || value === null) continue;
+        
+        if (typeof value === 'string' && value.length > 80) {
+            lines.push(`- ${key}: ${value.substring(0, 77)}...`);
+        } else if (typeof value === 'object' && !Array.isArray(value) && value !== null) {
+            if (value.id) {
+                lines.push(`- ${key}: ${value.name || value.displayName || value.id}`);
+            } else {
+                lines.push(`- ${key}: (object with ${Object.keys(value).length} fields)`);
+            }
+        } else if (Array.isArray(value)) {
+            lines.push(`- ${key}: [${value.length} items]`);
+        } else if (typeof value === 'boolean') {
+            lines.push(`- ${key}: ${value}`);
+        } else {
+            lines.push(`- ${key}: ${value}`);
+        }
+    }
+
+    return lines.join('\n') || '(no additional fields)';
+}
+
+/**
  * Extract required field names from a Zod schema for LLM prompting
  */
 function getRequiredFieldsFromSchema(schema: z.ZodSchema): string[] {
@@ -267,10 +337,16 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 	config: LLMToolConfig<T> & { dhis2SchemaName?: keyof typeof import('./schemas').Dhis2Schemas }
 ): DynamicStructuredTool {
 	return tool(
-		async ({resource}: { resource: z.infer<T> }) => {
+		async ({resource, confirmed}: { resource: z.infer<T>; confirmed?: boolean }) => {
 			try {
 				// LLM provides structured parameters directly
 				const llmInput = resource as any;
+
+				// ✅ CAPTURE confirmed flag from top-level schema input
+				// It lives alongside `resource`, not inside it
+				if (confirmed !== undefined) {
+					llmInput._confirmed = confirmed;
+				}
 
 				// ✅ FIRST: Run tool-specific payload transformation if provided
 				// This may resolve references, fetch dependencies, apply defaults
@@ -608,6 +684,31 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 					};
 				}
 
+				// 3.5. CONFIRMATION GATE — require user approval before API call
+				// Use _confirmed from llmInput (captured from schema params, before preparePayload)
+				// First call without confirmed flag → return summary for user review
+				if (!(llmInput as any)._confirmed) {
+					// Build a human-readable summary of what will be created
+					const fieldSummary = buildConfirmationSummary(
+						validation.data,
+						config.metadataType,
+						config.dhis2SchemaName as string | undefined
+					);
+					
+					emitProgress(`Awaiting user confirmation before creating...`, 80);
+					
+					return JSON.stringify({
+						success: false,
+						confirmation_required: true,
+						operation: 'create',
+						resource_type: config.metadataType,
+						message: `I'm ready to create this ${getSingularResourceName(config.metadataType)}:\n${fieldSummary}\n\nShould I proceed? You can confirm, cancel, or ask me to change specific fields.`,
+						summary: fieldSummary,
+						payload: validation.data,
+					});
+				}
+				// confirmed: true → proceed with actual API call below
+
 				// 4. Create in DHIS2
 				emitApiCall(`Sending request to DHIS2 API to create resource...`);
 				
@@ -650,9 +751,10 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 		},
 		{
 			name: config.name,
-			description: `${config.description}\n\nIMPORTANT: Only include fields the user has explicitly specified or that can be clearly inferred from their request. Do NOT invent placeholder names or default values for critical fields like 'name'. If the user didn't specify a value, leave it out — safe defaults will be applied automatically for technical fields like valueType, domainType, aggregationType, dataDimensionType, etc. The system will prompt for any missing critical fields.\n\nRequired fields: ${getRequiredFieldsFromSchema(config.schema).join(', ')}, but name MUST come from the user.`,
+			description: `${config.description}\n\nIMPORTANT: Only include fields the user has explicitly specified or that can be clearly inferred from their request. Do NOT invent placeholder names or default values for critical fields like 'name'. If the user didn't specify a value, leave it out — safe defaults will be applied automatically for technical fields like valueType, domainType, aggregationType, dataDimensionType, etc. The system will prompt for any missing critical fields.\n\nRequired fields: ${getRequiredFieldsFromSchema(config.schema).join(', ')}, but name MUST come from the user.\n\nCONFIRMATION FLOW: Before executing, the tool will ask for user confirmation. The first call returns a summary of what will be created. The user must confirm before the actual API call happens. After user confirms, call the tool again with the same payload plus confirmed: true.`,
 			schema: z.object({
-				resource: config.schema
+				resource: config.schema,
+				confirmed: z.boolean().optional().describe("Set to true ONLY when the user has explicitly confirmed they want to proceed with creation. Leave undefined/false for the initial call.")
 			}).describe(`Create a DHIS2 ${config.metadataType.slice(0, -1)}. Only include properties the user specified. Do NOT invent values for 'name' — leave it out if the user didn't provide one. Technical fields like valueType, domainType, aggregationType get automatic defaults.`),
 		}
 	);

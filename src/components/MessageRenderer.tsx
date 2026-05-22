@@ -322,6 +322,58 @@ interface ProgressMessageProps {
     message: ConversationMessage;
 }
 
+/**
+ * Format a plain-text confirmation summary into styled HTML.
+ * Converts lines starting with "- field: value" into rows with bold field names,
+ * and regular text into paragraphs.
+ */
+function formatSummaryHtml(text: string): string {
+    if (!text) return '<p>Ready to execute the planned operations.</p>';
+
+    const lines = text.split('\n');
+    const htmlParts: string[] = [];
+    let plainLines: string[] = [];
+
+    const flushPlain = () => {
+        if (plainLines.length > 0) {
+            htmlParts.push(`<p>${plainLines.join('<br/>')}</p>`);
+            plainLines = [];
+        }
+    };
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            flushPlain();
+            htmlParts.push('<br/>');
+        } else if (trimmed.startsWith('- ')) {
+            flushPlain();
+            // Parse "- field: value" or "- field: value (extra info)"
+            const content = trimmed.substring(2);
+            const colonIdx = content.indexOf(': ');
+            if (colonIdx > 0) {
+                const field = content.substring(0, colonIdx);
+                const value = content.substring(colonIdx + 2);
+                htmlParts.push(
+                    `<div style="margin: 4px 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline">` +
+                    `<span style="font-weight: 700; color: #1565c0; min-width: 160px; text-align: right">${field}</span>` +
+                    `<span style="color: #333">${value}</span>` +
+                    `</div>`
+                );
+            } else {
+                htmlParts.push(
+                    `<div style="margin: 4px 0; font-size: 14px; color: #333; padding-left: 12px">${content}</div>`
+                );
+            }
+        } else {
+            plainLines.push(trimmed);
+        }
+    }
+    flushPlain();
+
+    return htmlParts.join('\n') || '<p>Ready to execute the planned operations.</p>';
+}
+
 const CrudConfirmation: FC<CrudConfirmationProps> = ({ message }) => {
     const [showDetails, setShowDetails] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -485,20 +537,17 @@ const CrudConfirmation: FC<CrudConfirmationProps> = ({ message }) => {
                     </div>
                 </div>
 
-                <div style={{ fontSize: '14px', color: '#666' }}>
-                    <p style={{ margin: '0 0 8px 0' }}>
-                        {message.data?.message || 'Ready to execute the planned operations.'}
-                    </p>
-                    {existingCount > 0 && (
-                        <p style={{
-                            margin: '8px 0 0 0',
-                            color: '#ef6c00',
-                            fontWeight: '500'
-                        }}>
-                            ⚠️ {existingCount} resource(s) already exist and will be updated if you proceed.
-                        </p>
-                    )}
-                </div>
+                <div 
+                    dangerouslySetInnerHTML={{ 
+                        __html: formatSummaryHtml(message.data?.message || '') 
+                    }}
+                    style={{ fontSize: '14px', color: '#333', lineHeight: '1.6' }}
+                />
+                {existingCount > 0 && (
+                    <div style={{ fontSize: '14px', color: '#ef6c00', marginTop: '12px', fontWeight: '500' }}>
+                        ⚠️ {existingCount} resource(s) already exist and will be updated if you proceed.
+                    </div>
+                )}
             </div>
 
             {/* Operations List */}

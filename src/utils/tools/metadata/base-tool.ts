@@ -506,26 +506,31 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 					const searchLimit = config.searchLimit || 20;
 					const searchResults = await searchDhis2Metadata(config.metadataType, transformedInput.name, searchLimit);
 
-					if (searchResults.length > 0) {
-						console.log(`⚠️ Found ${searchResults.length} existing ${config.metadataType} matching "${transformedInput.name}"`);
+					// Check for exact name match (case-insensitive) - only exact matches trigger the selection dialog
+					const exactMatch = searchResults.find(r => 
+						r.name.toLowerCase().trim() === (transformedInput.name || '').toLowerCase().trim()
+					);
+
+					if (exactMatch) {
+						console.log(`⚠️ Found exact match for ${config.metadataType} "${transformedInput.name}": ${exactMatch.id}`);
 
 						const orchestrator = getOrchestratorInstance();
 
 						if (orchestrator && orchestrator.requestSelection) {
-							emitWaiting(`Waiting for user selection: ${searchResults.length} existing matches found`);
+							emitWaiting(`Existing exact match found for "${transformedInput.name}"`);
 
 							const humanizedSingular = getSingularResourceName(config.metadataType);
-							const humanizedPlural = getPluralResourceName(config.metadataType);
 
+							// Only show the exact match, not partial matches
 							const selections = await orchestrator.requestSelection({
 								title: `Existing ${humanizedSingular} found`,
-								description: `${searchResults.length} existing ${humanizedPlural} match "${transformedInput.name}". Select one to use it, or create new:`,
-								items: searchResults.map(r => ({
-									id: r.id,
-									name: r.name,
-									code: r.code || '',
-									displayName: r.displayName
-								})),
+								description: `An existing ${humanizedSingular} named "${exactMatch.name}" already exists. Select it to use the existing one, or create new:`,
+								items: [{
+									id: exactMatch.id,
+									name: exactMatch.name,
+									code: exactMatch.code || '',
+									displayName: exactMatch.displayName
+								}],
 								allowCreateNew: true,
 								createNewLabel: "Create New Anyway",
 								confirmButtonText: "Use Existing",
@@ -570,8 +575,11 @@ export function createLLMFirstTool<T extends z.ZodSchema>(
 							}
 						} else {
 							// No UI available - log warning and proceed
-							console.log(`⚠️ ${searchResults.length} existing matches found, but no selection UI available. Proceeding with creation.`);
+							console.log(`⚠️ Exact match found for "${transformedInput.name}", but no selection UI available. Proceeding with creation.`);
 						}
+					} else if (searchResults.length > 0) {
+						// Partial matches only — log and proceed silently, no dialog
+						console.log(`ℹ️ Found ${searchResults.length} partial matches for ${config.metadataType} "${transformedInput.name}" — no exact match, proceeding without dialog`);
 					}
 				}
 
